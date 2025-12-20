@@ -1,0 +1,2 @@
+"""Konfigurationsmodul für Master Data"""
+
