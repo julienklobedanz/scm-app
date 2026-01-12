@@ -38,31 +38,6 @@ if 'yearly_volume' not in st.session_state:
 st.title("📊 Dashboard")
 st.markdown("Übersicht der wichtigsten KPIs und Szenarien-Management")
 
-# Sidebar für Parameter und Szenarien
-with st.sidebar:
-    st.header("⚙️ Simulation Parameter")
-    
-    yearly_volume = st.number_input(
-        "Jährliches Volumen",
-        min_value=100000,
-        max_value=1000000,
-        value=st.session_state.yearly_volume,
-        step=10000,
-        key="yearly_volume"
-    )
-    # yearly_volume wird automatisch im session_state gespeichert durch key="yearly_volume"
-    
-    st.divider()
-    st.header("📦 Initialer Lagerbestand")
-    st.info(f"""
-    **Standard-Werte (festgelegt):**
-    - Rahmen Alu: {MasterData.DEFAULT_INITIAL_STOCK['frames_alu']:,}
-    - Rahmen Carbon: {MasterData.DEFAULT_INITIAL_STOCK['frames_carbon']:,}
-    - Sättel: {MasterData.DEFAULT_INITIAL_STOCK['saddles']:,}
-    """)
-    
-    st.divider()
-
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
 

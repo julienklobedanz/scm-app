@@ -29,7 +29,7 @@ render_scenario_sidebar()
 
 # Berechne Planung basierend auf jährlichem Volumen
 yearly_volume = st.session_state.get('yearly_volume', 370000)
-workday_calc = WorkdayCalculator(year=2027)
+workday_calc = WorkdayCalculator(year=2026)
 # Zwei separate DemandCalculator-Instanzen: eine für geplant, eine für tatsächlich
 # (um Carry-Over-Logik nicht zu beeinflussen)
 demand_calculator_planned = DemandCalculator(yearly_volume, workday_calc)
@@ -119,8 +119,8 @@ with tab1:
     st.header("Wöchentliche Volumenplanung")
     
     # Erstelle wöchentliche Planung
-    start_date = date(2027, 1, 1)
-    end_date = date(2027, 12, 31)
+    start_date = date(2026, 1, 1)
+    end_date = date(2026, 12, 31)
     
     # Berechne letzte Kalenderwoche des Jahres
     last_week = get_week_number(end_date)
@@ -130,7 +130,7 @@ with tab1:
     for week_num in range(1, last_week + 1):  # Alle Wochen des Jahres
         # Finde ersten Tag der Woche (ISO-Woche)
         # ISO-Woche 1 beginnt am ersten Montag des Jahres oder früher
-        jan_1 = date(2027, 1, 1)
+        jan_1 = date(2026, 1, 1)
         jan_1_weekday = jan_1.weekday()  # 0=Montag, 6=Sonntag
         
         # Berechne Start der ersten ISO-Woche
@@ -143,7 +143,7 @@ with tab1:
         week_start = first_monday + timedelta(weeks=week_num - 1)
         
         # Berechne Nachfrage für alle Tage der Woche (geplant und tatsächlich)
-        # WICHTIG: Nur Tage berücksichtigen, die tatsächlich im Jahr 2027 liegen
+        # WICHTIG: Nur Tage berücksichtigen, die tatsächlich im Jahr 2026 liegen
         week_demand_planned = {}
         week_demand_actual = {}
         total_week_demand_planned = 0.0
@@ -152,8 +152,8 @@ with tab1:
         
         for day_offset in range(7):
             current_date = week_start + timedelta(days=day_offset)
-            # Nur Tage im Jahr 2027 berücksichtigen
-            if current_date.year == 2027:
+            # Nur Tage im Jahr 2026 berücksichtigen
+            if current_date.year == 2026:
                 day_of_year = (current_date - start_date).days
                 if 0 <= day_of_year < 365:
                     day_total_planned = 0.0
@@ -373,27 +373,27 @@ with tab2:
     with col1:
         start_date_filter = st.date_input(
             "Start-Datum",
-            value=date(2027, 1, 1),
-            min_value=date(2027, 1, 1),
-            max_value=date(2027, 12, 31),
+            value=date(2026, 1, 1),
+            min_value=date(2026, 1, 1),
+            max_value=date(2026, 12, 31),
             key="daily_start_date"
         )
     with col2:
         end_date_filter = st.date_input(
             "End-Datum",
-            value=date(2027, 12, 31),
-            min_value=date(2027, 1, 1),
-            max_value=date(2027, 12, 31),
+            value=date(2026, 12, 31),
+            min_value=date(2026, 1, 1),
+            max_value=date(2026, 12, 31),
             key="daily_end_date"
         )
     
     # Konvertiere Datum zu Tag
-    start_day = (start_date_filter - date(2027, 1, 1)).days
-    end_day = (end_date_filter - date(2027, 1, 1)).days
+    start_day = (start_date_filter - date(2026, 1, 1)).days
+    end_day = (end_date_filter - date(2026, 1, 1)).days
     
     # Erstelle tägliche Planung
     daily_data = []
-    start_date = date(2027, 1, 1)
+    start_date = date(2026, 1, 1)
     
     for day in range(start_day, min(end_day + 1, 365)):
         current_date = start_date + timedelta(days=day)
@@ -440,6 +440,21 @@ with tab2:
         daily_data.append(row)
     
     daily_df = pd.DataFrame(daily_data)
+    
+    # Speichere Nachfrage-Daten in session_state für andere Seiten (z.B. Lieferant China)
+    # Berechne für alle 365 Tage, nicht nur für gefilterten Bereich
+    if 'daily_demand_data' not in st.session_state:
+        st.session_state.daily_demand_data = {}
+    
+    # Berechne und speichere Nachfrage für alle Tage des Jahres
+    for day in range(365):
+        if day not in st.session_state.daily_demand_data:
+            product_demands_actual = {}
+            for product in MasterData.BOM.keys():
+                # Tatsächlicher Bedarf (mit Marketing) - genau wie in der Tabelle
+                actual_demand = calculate_product_demand(day, product, include_marketing=True)
+                product_demands_actual[product] = actual_demand
+            st.session_state.daily_demand_data[day] = product_demands_actual
     
     # Erstelle Multi-Index Spalten
     # Basis-Spalten

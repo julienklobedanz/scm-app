@@ -193,7 +193,7 @@ class MasterData:
     # Tage pro Monat (für präzise Berechnung)
     DAYS_PER_MONTH: Dict[int, int] = {
         1: 31,   # Jan
-        2: 28,   # Feb (2027 ist kein Schaltjahr)
+        2: 28,   # Feb (2026 ist kein Schaltjahr)
         3: 31,   # Mar
         4: 30,   # Apr
         5: 31,   # May

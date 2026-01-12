@@ -41,7 +41,7 @@ class Simulator:
         self.backlog.initialize_markets(self.master_data.MARKETS)
         
         # Initialisiere Services
-        self.workday_calculator = WorkdayCalculator(year=2027)
+        self.workday_calculator = WorkdayCalculator(year=2026)
         self.demand_calculator = DemandCalculator(yearly_volume, self.workday_calculator)
         self.production_planner = ProductionPlanner(self.inventory)
         self.china_transport_manager = ChinaTransportManager(self.inventory, self.workday_calculator, self.scenario_manager)
@@ -72,7 +72,7 @@ class Simulator:
         Platziert initiale Bestellungen vor Simulationsbeginn.
         Bestellt täglich basierend auf dem täglichen Bedarf, 49 Tage vor dem jeweiligen Bedarfstag.
         
-        Beispiel: Für Bedarf am 04.01.2027 (Tag 3) wird am 16.11.2026 (Tag -46) bestellt.
+        Beispiel: Für Bedarf am 04.01.2026 (Tag 3) wird am 16.11.2025 (Tag -46) bestellt.
         """
         # Berechne tägliche Bestellungen für die ersten ~30 Tage
         # (danach übernimmt der Procurement Manager die täglichen Bestellungen)
@@ -158,11 +158,23 @@ class Simulator:
                                 marketing_add_ons[product] = 0.0
                             marketing_add_ons[product] += add_on
             
+            # Prüfe, ob es der letzte Arbeitstag des Jahres ist (für Rest-Aufsummierung)
+            is_last_workday_of_year = False
+            if self.workday_calculator.is_workday(day):
+                # Prüfe, ob es nach diesem Tag noch Arbeitstage gibt
+                has_future_workdays = False
+                for future_day in range(day + 1, days):
+                    if self.workday_calculator.is_workday(future_day):
+                        has_future_workdays = True
+                        break
+                is_last_workday_of_year = not has_future_workdays
+            
             # Berechne Nachfrage mit Carry-Over-Logik (inkl. Marketing-Add-ons)
             # Diese Methode führt die Rundung durch und aktualisiert Remainders
             product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
                 day, 
-                marketing_add_ons
+                marketing_add_ons,
+                is_last_workday_of_year
             )
             
             # Gesamtnachfrage (ganzzahlig)

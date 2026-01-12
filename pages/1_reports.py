@@ -152,7 +152,7 @@ if 'Date' in results_df.columns:
     results_df['KW'] = results_df['Date'].apply(get_week_number)
 else:
     # Fallback: Berechne KW aus Day
-    start_date = date(2027, 1, 1)
+    start_date = date(2026, 1, 1)
     results_df['KW'] = results_df.apply(
         lambda row: get_week_number(start_date + pd.Timedelta(days=int(row['Day']) - 1)),
         axis=1

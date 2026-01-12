@@ -54,12 +54,12 @@ if not st.session_state.happy_path_run and st.session_state.results_df is None:
             initial_stock_saddles=MasterData.DEFAULT_INITIAL_STOCK['saddles'],
             scenario_manager=st.session_state.scenario_manager
         )
-            results_df, kpis = simulator.run()
-            st.session_state.results_df = results_df
-            st.session_state.kpis = kpis
+        results_df, kpis = simulator.run()
+        st.session_state.results_df = results_df
+        st.session_state.kpis = kpis
             # Speichere auch den Simulator für Zugriff auf ChinaTransportManager
             st.session_state.simulator = simulator
-            st.session_state.happy_path_run = True
+        st.session_state.happy_path_run = True
     except Exception as e:
         st.error(f"❌ Fehler bei der Simulation: {str(e)}")
         st.exception(e)
@@ -78,14 +78,14 @@ if st.session_state.get('run_simulation', False) and st.session_state.happy_path
                 initial_stock_saddles=MasterData.DEFAULT_INITIAL_STOCK['saddles'],
                 scenario_manager=st.session_state.scenario_manager
             )
-                results_df, kpis = simulator.run()
-                st.session_state.results_df = results_df
-                st.session_state.kpis = kpis
+            results_df, kpis = simulator.run()
+            st.session_state.results_df = results_df
+            st.session_state.kpis = kpis
                 # Speichere auch den Simulator für Zugriff auf ChinaTransportManager
                 st.session_state.simulator = simulator
-                st.session_state.run_simulation = False
-                st.success("✅ Simulation erfolgreich abgeschlossen!")
-                st.rerun()
+            st.session_state.run_simulation = False
+            st.success("✅ Simulation erfolgreich abgeschlossen!")
+            st.rerun()
     except Exception as e:
         st.error(f"❌ Fehler bei der Simulation: {str(e)}")
         st.exception(e)

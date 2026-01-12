@@ -40,7 +40,7 @@ class DemandCalculator:
         
         # Zähle Arbeitstage im Monat
         num_workdays = 0
-        start_date = date(2027, 1, 1)
+        start_date = date(2026, 1, 1)
         days_in_month = self.master_data.DAYS_PER_MONTH[month]
         
         # Finde ersten Tag des Monats
@@ -75,10 +75,17 @@ class DemandCalculator:
         self, 
         day: int, 
         product: str,
-        marketing_add_on: float = 0.0
+        marketing_add_on: float = 0.0,
+        is_last_workday_of_year: bool = False
     ) -> int:
         """
         Berechnet tägliche Nachfrage für ein spezifisches Produkt mit Carry-Over-Logik
+        
+        Args:
+            day: Tag (0-basiert)
+            product: Produktname
+            marketing_add_on: Marketing-Add-on (Float)
+            is_last_workday_of_year: Wenn True, werden Reste am Jahresende aufsummiert
         
         Returns:
             Ganzzahlige Nachfrage (int)
@@ -98,19 +105,34 @@ class DemandCalculator:
         # Hole Base_Daily_Float für dieses Produkt
         base_daily_float = self.monthly_base_daily_float[month].get(product, 0.0)
         
-        # Base Calculation
-        target_float = base_daily_float
-        
-        # Marketing Add-on (Optional)
-        target_float += marketing_add_on
-        
         # Apply Carry-Over: Add remainder from previous day
         remainder = self.product_remainders.get(product, 0.0)
-        target_float += remainder
         
-        # Rounding
-        daily_target_int = int(target_float)  # Round down to nearest integer
-        new_remainder = target_float - daily_target_int  # Save the 0.x decimal for tomorrow
+        # Excel-Formel: Marketing-Add-on + ABRUNDEN(Base + Rest; 0)
+        # 1. Base + Rest zusammenfassen
+        base_with_remainder = base_daily_float + remainder
+        
+        # 2. Abrunden (wie Excel ABRUNDEN(..., 0))
+        rounded_base = int(base_with_remainder)  # Round down to nearest integer
+        
+        # 3. Marketing-Add-on addieren (NACH der Rundung, wie in Excel)
+        # Marketing-Add-on wird als Float addiert (kann auch Float sein in Excel)
+        daily_target_float = rounded_base + marketing_add_on
+        
+        # 4. Am letzten Arbeitstag des Jahres: Reste aufsummieren
+        if is_last_workday_of_year:
+            # Addiere den Rest vom Base+Rest (wird normalerweise verworfen)
+            daily_target_float += (base_with_remainder - rounded_base)
+        
+        # 5. Ergebnis abrunden (da wir Integer zurückgeben müssen)
+        daily_target_int = int(daily_target_float)
+        
+        # 6. Berechne neuen Rest (nur aus Base + Rest, Marketing-Add-on wird nicht in Rest übernommen)
+        # Am letzten Tag: Rest wird auf 0 gesetzt, da er bereits produziert wurde
+        if is_last_workday_of_year:
+            new_remainder = 0.0
+        else:
+            new_remainder = base_with_remainder - rounded_base
         
         # Update remainder
         self.product_remainders[product] = new_remainder
@@ -139,10 +161,16 @@ class DemandCalculator:
     def calculate_daily_demand_per_product_dict(
         self, 
         day: int,
-        marketing_add_ons: Dict[str, float] = None
+        marketing_add_ons: Dict[str, float] = None,
+        is_last_workday_of_year: bool = False
     ) -> Dict[str, int]:
         """
         Berechnet tägliche Nachfrage für alle Produkte als Dictionary
+        
+        Args:
+            day: Tag (0-basiert)
+            marketing_add_ons: Optional dict mit Marketing-Add-ons pro Produkt
+            is_last_workday_of_year: Wenn True, werden Reste am Jahresende aufsummiert
         
         Returns:
             Dict mit Produktname -> Ganzzahlige Nachfrage
@@ -153,7 +181,9 @@ class DemandCalculator:
         product_demands = {}
         for product in self.master_data.BOM.keys():
             add_on = marketing_add_ons.get(product, 0.0)
-            product_demands[product] = self.calculate_daily_demand_per_product(day, product, add_on)
+            product_demands[product] = self.calculate_daily_demand_per_product(
+                day, product, add_on, is_last_workday_of_year
+            )
         
         return product_demands
     

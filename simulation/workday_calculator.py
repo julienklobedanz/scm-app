@@ -12,7 +12,7 @@ from config.holidays_config import HolidaysConfig
 class WorkdayCalculator:
     """Berechnet ob ein Tag ein Arbeitstag ist"""
     
-    def __init__(self, year: int = 2027):
+    def __init__(self, year: int = 2026):
         self.year = year
         self.master_data = MasterData
         self.holidays_config = HolidaysConfig

@@ -59,9 +59,17 @@ class ChinaTransportManager:
         # Status initialisieren
         order_date = self.workday_calculator.get_date_from_day(order_day)
         
-        # Schritt 1: Produktion in China (5 AT, Tag der Bestellung zählt NICHT)
-        production_start_day = order_day
-        production_end_day = self._add_workdays(production_start_day, 5, exclude_start=True)
+        # Freigabedatum: Nächster Arbeitstag nach Bestellung (wie in Excel "Freigegeben")
+        # Das Produktionsdatum bezieht sich auf das Freigabedatum, nicht auf das Bestelldatum!
+        released_day = self._get_next_workday(order_day)
+        
+        # Schritt 1: Produktion in China (5 AT - 1 = 4 AT, wie Excel ARBEITSTAG)
+        # Excel: ARBEITSTAG(F16; Produktionszeit-1; Feiertage) = ARBEITSTAG(F16; 5-1; Feiertage) = 4 AT
+        # F16 ist das Freigabedatum, nicht das Bestelldatum!
+        # ARBEITSTAG bedeutet: Start-Tag + 4 Arbeitstage (Start-Tag zählt nicht mit)
+        # WICHTIG: Für Produktion in China werden chinesische Feiertage verwendet!
+        production_start_day = released_day
+        production_end_day = self._add_workdays(production_start_day, 4, exclude_start=True, use_chinese_holidays=True)
         
         # Schritt 2: LKW zum Hafen (China) - 2 AT
         # HINWEIS: Verspätungen werden erst beim Versand (in process_shipments) angewendet
@@ -90,6 +98,7 @@ class ChinaTransportManager:
         self.transport_status[(order_day, order_id)] = {
             'order_day': order_day,
             'order_id': order_id,
+            'released_day': released_day,  # Freigabedatum (nächster Arbeitstag nach Bestellung)
             'quantity': quantity,  # Ursprüngliche Menge
             'actual_quantity': actual_quantity,  # Menge nach Produktionsverlusten (vor Transportverlusten)
             'production_loss_percentage': production_loss_percentage,
@@ -269,7 +278,40 @@ class ChinaTransportManager:
         
         return total_received
     
-    def _add_workdays(self, start_day: int, num_workdays: int, exclude_start: bool = False) -> int:
+    def _get_next_workday(self, start_day: int, use_chinese_holidays: bool = True) -> int:
+        """
+        Findet den nächsten Arbeitstag nach dem Start-Tag
+        Berücksichtigt chinesische Feiertage für Freigabe in China
+        
+        Args:
+            start_day: Start-Tag (0-basiert)
+            use_chinese_holidays: Wenn True, verwendet chinesische Feiertage (Standard: True für China)
+            
+        Returns:
+            Nächster Arbeitstag (0-basiert)
+        """
+        # Lade chinesische Feiertage falls benötigt
+        chinese_holidays = None
+        if use_chinese_holidays:
+            from config.holidays_config import HolidaysConfig
+            chinese_holidays = HolidaysConfig.get_holidays_for_year(self.workday_calculator.year, 'CN')
+        
+        current_day = start_day + 1
+        while True:
+            # Prüfe ob Arbeitstag (mit entsprechenden Feiertagen)
+            is_workday = self.workday_calculator.is_workday(current_day)
+            
+            # Wenn chinesische Feiertage verwendet werden sollen, prüfe zusätzlich chinesische Feiertage
+            if use_chinese_holidays and chinese_holidays:
+                current_date = self.workday_calculator.get_date_from_day(current_day)
+                if current_date in chinese_holidays:
+                    is_workday = False
+            
+            if is_workday:
+                return current_day
+            current_day += 1
+    
+    def _add_workdays(self, start_day: int, num_workdays: int, exclude_start: bool = False, use_chinese_holidays: bool = False) -> int:
         """
         Fügt Arbeitstage hinzu (Mo-Fr)
         
@@ -277,6 +319,7 @@ class ChinaTransportManager:
             start_day: Start-Tag (0-basiert)
             num_workdays: Anzahl Arbeitstage
             exclude_start: Wenn True, zählt der Start-Tag nicht mit
+            use_chinese_holidays: Wenn True, verwendet chinesische Feiertage (für Produktion in China)
             
         Returns:
             End-Tag (0-basiert)
@@ -287,8 +330,23 @@ class ChinaTransportManager:
         
         workdays_added = 0
         
+        # Lade chinesische Feiertage falls benötigt
+        chinese_holidays = None
+        if use_chinese_holidays:
+            from config.holidays_config import HolidaysConfig
+            chinese_holidays = HolidaysConfig.get_holidays_for_year(self.workday_calculator.year, 'CN')
+        
         while workdays_added < num_workdays:
-            if self.workday_calculator.is_workday(current_day):
+            # Prüfe ob Arbeitstag (mit entsprechenden Feiertagen)
+            is_workday = self.workday_calculator.is_workday(current_day)
+            
+            # Wenn chinesische Feiertage verwendet werden sollen, prüfe zusätzlich chinesische Feiertage
+            if use_chinese_holidays and chinese_holidays:
+                current_date = self.workday_calculator.get_date_from_day(current_day)
+                if current_date in chinese_holidays:
+                    is_workday = False
+            
+            if is_workday:
                 workdays_added += 1
             current_day += 1
         
@@ -321,7 +379,7 @@ class ChinaTransportManager:
                 days_until_next_wednesday = 7
             departure_date = arrival_date + timedelta(days=days_until_next_wednesday)
         
-        departure_day = (departure_date - date(2027, 1, 1)).days
+        departure_day = (departure_date - date(2026, 1, 1)).days
         return departure_day
     
     def get_transport_status_for_day(self, day: int) -> List[Dict]:
