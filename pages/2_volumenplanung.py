@@ -424,7 +424,7 @@ with tab2:
         
         # Erstelle Basis-Row
         row = {
-            'Datum': current_date.strftime('%d.%m.%Y'),
+            'Datum': current_date.strftime(MasterData.DATE_FORMAT),
             'Kalenderwoche': week_num,
             '_is_non_workday': is_non_workday  # Für Styling
         }

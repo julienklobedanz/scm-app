@@ -91,15 +91,16 @@ class DemandCalculator:
             Ganzzahlige Nachfrage (int)
         """
         month = self.master_data.get_month_from_day(day)
-        is_workday = self.workday_calculator.is_workday(day)
+        is_weekend = self.workday_calculator.is_weekend(day)
         
         # Wenn Monat gewechselt, berechne neue Base_Daily_Float
         if self.current_month != month:
             self._calculate_monthly_base_daily_float(month)
             self.current_month = month
         
-        # Wenn kein Arbeitstag: Daily_Target = 0, Remainder bleibt unverändert
-        if not is_workday:
+        # KORREKTUR: Bedarf wird auch an deutschen Feiertagen berechnet, wenn es ein Wochentag ist
+        # Nur Wochenende (Sa/So) führt zu 0 Bedarf
+        if is_weekend:
             return 0
         
         # Hole Base_Daily_Float für dieses Produkt
@@ -157,6 +158,27 @@ class DemandCalculator:
             total_demand += product_demand
         
         return total_demand
+    
+    def get_demand_for_future_day(self, day_index: int, marketing_add_ons: Dict[str, float] = None) -> Dict[str, int]:
+        """
+        Berechnet die Nachfrage für einen zukünftigen Tag.
+        STRENGE LOGIK: Nur für Jahr 2026 (0 <= day_index <= 364).
+        Für Tag > 364 (Jahr 2027): Gib 0 zurück (keine Bestellung für nächstes Jahr).
+        
+        Args:
+            day_index: Tag-Index (0-basiert, 0 = 01.01.2026)
+            marketing_add_ons: Optional dict mit Marketing-Add-ons pro Produkt
+        
+        Returns:
+            Dict mit Produktname -> Ganzzahlige Nachfrage (0 wenn außerhalb 2026)
+        """
+        # KORREKTUR: Keine Zyklik am Ende - nur für Jahr 2026 bestellen
+        if day_index < 0 or day_index > 364:
+            # Außerhalb des Jahres 2026: Kein Bedarf
+            return {product: 0 for product in self.master_data.BOM.keys()}
+        
+        # Innerhalb des Jahres 2026: Normaler Bedarf
+        return self.calculate_daily_demand_per_product_dict(day_index, marketing_add_ons)
     
     def calculate_daily_demand_per_product_dict(
         self, 

@@ -50,7 +50,7 @@ def render_scenario_sidebar():
                 start_day = (start_date - start_of_year).days
                 end_day = (end_date - start_of_year).days
                 scenario = MarketingCampaignScenario(
-                    name=f"Marketingaktion ({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})",
+                    name=f"Marketingaktion ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
                     start_day=start_day,
                     end_day=end_day,
                     demand_increase_factor=demand_factor
@@ -69,7 +69,7 @@ def render_scenario_sidebar():
                 start_day = (start_date - start_of_year).days
                 end_day = (end_date - start_of_year).days
                 scenario = WarehouseDamageScenario(
-                    name=f"Wasserschaden im Lager ({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})",
+                    name=f"Wasserschaden im Lager ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
                     start_day=start_day,
                     end_day=end_day,
                     stock_loss_percentage=stock_loss,
@@ -89,7 +89,7 @@ def render_scenario_sidebar():
                 start_day = (start_date - start_of_year).days
                 end_day = (end_date - start_of_year).days
                 scenario = SupplierBreakdownScenario(
-                    name=f"Lieferantenausfall Sättel ({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})",
+                    name=f"Lieferantenausfall Sättel ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
                     start_day=start_day,
                     end_day=end_day,
                     component_type="saddles"  # Immer Sättel
@@ -110,7 +110,7 @@ def render_scenario_sidebar():
                 start_day = (start_date - start_of_year).days
                 end_day = (end_date - start_of_year).days
                 scenario = DeliveryProblemScenario(
-                    name=f"Lieferproblem Sättel ({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})",
+                    name=f"Lieferproblem Sättel ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
                     start_day=start_day,
                     end_day=end_day,
                     component_type="saddles",  # Immer Sättel

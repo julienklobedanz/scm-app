@@ -9,6 +9,10 @@ from typing import Dict, Any
 class MasterData:
     """Zentraler Container für alle Master Data"""
     
+    # Datumsformat-Konstante
+    DATE_FORMAT = '%d.%m.%Y'
+    """Zentraler Container für alle Master Data"""
+    
     # Saisonalität (Prozentanteil pro Monat)
     SEASONALITY: Dict[int, float] = {
         1: 0.04,   # Jan
@@ -246,4 +250,32 @@ class MasterData:
         'frames_carbon': 2000,
         'saddles': 7000  # Zusammenführung von Standard + Premium
     }
+    
+    # Datumsformat-Konstante
+    DATE_FORMAT = '%d.%m.%Y'
+    
+    @staticmethod
+    def calculate_saddle_shares() -> Dict[str, float]:
+        """
+        Berechnet die Anteile jedes Sattel-Typs basierend auf BOM und Produktanteilen.
+        
+        Returns:
+            Dictionary mit Sattel-Typ als Key und Anteil (0.0-1.0) als Value
+        """
+        saddle_totals = {}
+        total_volume = 0.0
+        
+        for product, product_share in MasterData.PRODUCT_SALES_SHARES.items():
+            saddle_type = MasterData.BOM[product]['saddle']
+            if saddle_type not in saddle_totals:
+                saddle_totals[saddle_type] = 0.0
+            saddle_totals[saddle_type] += product_share
+            total_volume += product_share
+        
+        # Normalisiere zu Anteilen
+        saddle_shares = {}
+        for saddle_type, volume in saddle_totals.items():
+            saddle_shares[saddle_type] = volume / total_volume if total_volume > 0 else 0.0
+        
+        return saddle_shares
 

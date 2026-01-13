@@ -24,15 +24,13 @@ st.title("📋 Stammdaten")
 st.markdown("Alle Stammdaten der Supply Chain Simulation")
 
 # Tabs für verschiedene Stammdaten-Gruppen
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "📦 Produkt-BOM", 
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📦 Stückliste", 
     "📊 Planung", 
     "🌍 Märkte & Kunden", 
-    "🏭 Lieferanten", 
-    "🚚 Logistik (Auslieferung)",
-    "📥 Logistik (Beschaffung)",
-    "📅 Feiertage",
-    "⚙️ System-Parameter"
+    "🚚 Auslieferung",
+    "📥 Beschaffung",
+    "📅 Feiertage"
 ])
 
 with tab1:
@@ -50,35 +48,6 @@ with tab1:
         })
     bom_df = pd.DataFrame(bom_data)
     st.dataframe(bom_df, use_container_width=True, hide_index=True)
-    
-    # BOM-Statistiken
-    st.subheader("BOM-Statistiken")
-    frame_counts = {}
-    saddle_counts = {}
-    fork_counts = {}
-    
-    for product, components in MasterData.BOM.items():
-        frame = components['frame']
-        saddle = components['saddle']
-        fork = components['fork']
-        
-        frame_counts[frame] = frame_counts.get(frame, 0) + 1
-        saddle_counts[saddle] = saddle_counts.get(saddle, 0) + 1
-        fork_counts[fork] = fork_counts.get(fork, 0) + 1
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.write("**Rahmen-Verteilung:**")
-        for frame, count in sorted(frame_counts.items()):
-            st.write(f"- {frame}: {count} Produkte")
-    with col2:
-        st.write("**Sattel-Verteilung:**")
-        for saddle, count in sorted(saddle_counts.items()):
-            st.write(f"- {saddle}: {count} Produkte")
-    with col3:
-        st.write("**Gabel-Verteilung:**")
-        for fork, count in sorted(fork_counts.items()):
-            st.write(f"- {fork}: {count} Produkte")
 
 with tab2:
     st.header("Planungs-Parameter")
@@ -165,42 +134,48 @@ with tab3:
     st.header("Märkte & Kunden")
     st.markdown("Zielmärkte und Marktverteilung")
     
-    # Zielmärkte
-    st.subheader("Zielmärkte")
-    markets_data = []
-    for market, params in MasterData.MARKETS.items():
-        market_names = {
-            'DE': 'Deutschland',
-            'USA': 'USA',
-            'FR': 'Frankreich',
-            'CN': 'China',
-            'CH': 'Schweiz',
-            'AT': 'Österreich'
-        }
-        markets_data.append({
-            'Land': market_names.get(market, market),
-            'Code': market,
-            'Anteil (%)': f"{params['share'] * 100:.1f}%",
-            'Anteil (dezimal)': params['share'],
-            'Transitzeit (Tage)': params['transit_days']
-        })
-    markets_df = pd.DataFrame(markets_data)
-    st.dataframe(markets_df[['Land', 'Code', 'Anteil (%)', 'Transitzeit (Tage)']], use_container_width=True, hide_index=True)
+    col1, col2 = st.columns(2)
     
-    # Visualisierung Marktverteilung
-    st.subheader("Marktverteilung")
-    fig_markets = go.Figure(data=[go.Pie(
-        labels=markets_df['Land'],
-        values=markets_df['Anteil (dezimal)'] * 100,
-        hole=0.3
-    )])
-    fig_markets.update_traces(textposition='inside', textinfo='percent+label')
-    st.plotly_chart(fig_markets, use_container_width=True)
+    with col1:
+        # Zielmärkte
+        st.subheader("Zielmärkte")
+        markets_data = []
+        for market, params in MasterData.MARKETS.items():
+            market_names = {
+                'DE': 'Deutschland',
+                'USA': 'USA',
+                'FR': 'Frankreich',
+                'CN': 'China',
+                'CH': 'Schweiz',
+                'AT': 'Österreich'
+            }
+            markets_data.append({
+                'Land': market_names.get(market, market),
+                'Code': market,
+                'Anteil (%)': f"{params['share'] * 100:.1f}%",
+                'Anteil (dezimal)': params['share'],
+                'Transitzeit (Tage)': params['transit_days']
+            })
+        markets_df = pd.DataFrame(markets_data)
+        st.dataframe(markets_df[['Land', 'Code', 'Anteil (%)', 'Transitzeit (Tage)']], use_container_width=True, hide_index=True)
+    
+    with col2:
+        # Visualisierung Marktverteilung
+        st.subheader("Marktverteilung")
+        fig_markets = go.Figure(data=[go.Pie(
+            labels=markets_df['Land'],
+            values=markets_df['Anteil (dezimal)'] * 100,
+            hole=0.3
+        )])
+        fig_markets.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_markets, use_container_width=True)
 
 with tab4:
-    st.header("Lieferanten")
-    st.markdown("Lieferanten-Parameter und Standorte")
+    st.header("Auslieferung")
+    st.markdown("Routen und Transportmittel für die Auslieferung")
     
+    # Lieferanten-Parameter
+    st.subheader("Lieferanten-Parameter und Standorte")
     suppliers_data = []
     for supplier, params in MasterData.SUPPLIERS.items():
         suppliers_data.append({
@@ -213,10 +188,11 @@ with tab4:
         })
     suppliers_df = pd.DataFrame(suppliers_data)
     st.dataframe(suppliers_df, use_container_width=True, hide_index=True)
-
-with tab5:
-    st.header("Logistik - Auslieferung")
-    st.markdown("Routen und Transportmittel für die Auslieferung")
+    
+    st.divider()
+    
+    # Auslieferungs-Routen
+    st.subheader("Auslieferungs-Routen")
     
     delivery_data = []
     for route in MasterData.DELIVERY_ROUTES:
@@ -238,8 +214,8 @@ with tab5:
             dest_routes = delivery_df[delivery_df['Ziel'] == destination]
             st.dataframe(dest_routes, use_container_width=True, hide_index=True)
 
-with tab6:
-    st.header("Logistik - Beschaffung")
+with tab5:
+    st.header("Beschaffung")
     st.markdown("Routen und Transportmittel für die Beschaffung")
     
     procurement_data = []
@@ -264,7 +240,7 @@ with tab6:
             supp_routes = procurement_df[procurement_df['Lieferant'] == supplier]
             st.dataframe(supp_routes, use_container_width=True, hide_index=True)
 
-with tab7:
+with tab6:
     st.header("Feiertage")
     st.markdown("Relevante Feiertage für alle betroffenen Länder (2026)")
     
@@ -308,49 +284,3 @@ with tab7:
     except Exception as e:
         st.error(f"Fehler beim Laden der Feiertage: {str(e)}")
         st.info("💡 Bitte installieren Sie die holidays-Library: `pip install holidays`")
-
-with tab8:
-    st.header("System-Parameter")
-    st.markdown("Allgemeine System-Parameter")
-    
-    st.subheader("Simulations-Parameter")
-    system_params = pd.DataFrame({
-        'Parameter': ['Simulationsdauer', 'Tage pro Jahr'],
-        'Wert': ['365 Tage', '365']
-    })
-    st.dataframe(system_params, use_container_width=True, hide_index=True)
-    
-    st.subheader("Komponenten-Kategorien")
-    # Gruppiere Rahmen nach Typ
-    frame_types = {}
-    for product, components in MasterData.BOM.items():
-        frame = components['frame']
-        if 'Aluminium' in frame:
-            frame_type = 'Aluminium'
-        elif 'Carbon' in frame:
-            frame_type = 'Carbon'
-        else:
-            frame_type = 'Sonstige'
-        frame_types[frame_type] = frame_types.get(frame_type, 0) + 1
-    
-    components_data = []
-    for frame_type, count in frame_types.items():
-        components_data.append({
-            'Kategorie': f'Rahmen - {frame_type}',
-            'Anzahl Produkte': count
-        })
-    
-    # Sattel-Kategorien
-    saddle_types = {}
-    for product, components in MasterData.BOM.items():
-        saddle = components['saddle']
-        saddle_types[saddle] = saddle_types.get(saddle, 0) + 1
-    
-    for saddle, count in saddle_types.items():
-        components_data.append({
-            'Kategorie': f'Sattel - {saddle}',
-            'Anzahl Produkte': count
-        })
-    
-    components_df = pd.DataFrame(components_data)
-    st.dataframe(components_df, use_container_width=True, hide_index=True)

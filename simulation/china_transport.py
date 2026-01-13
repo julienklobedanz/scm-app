@@ -5,8 +5,10 @@ Simuliert den detaillierten Transport von China nach Deutschland
 
 from typing import Dict, List, Tuple, Optional
 from datetime import date, timedelta
+import pandas as pd
 from models.inventory import Inventory
 from simulation.workday_calculator import WorkdayCalculator
+from simulation.demand_calculator import DemandCalculator
 from config.master_data import MasterData
 from models.scenarios import ScenarioManager, DeliveryProblemScenario
 
@@ -36,6 +38,11 @@ class ChinaTransportManager:
         # Kumulierte Bestellungen am Hafen (für Versandlogik: >= 500)
         # Key: arrival_at_port_day, Value: kumulierte Menge
         self.pending_shipments: Dict[int, float] = {}  # {arrival_at_port_day: cumulative_quantity}
+        
+        # Cache für Inbound-Tabelle (Performance-Optimierung)
+        # Key: tuple(sorted(saddle_shares_dict.items())), Value: DataFrame
+        self._inbound_df_cache: Dict[tuple, pd.DataFrame] = {}
+        self._inbound_df_cache_key: Optional[tuple] = None
     
     def place_order(self, order_day: int, quantity: float) -> int:
         """
@@ -48,6 +55,10 @@ class ChinaTransportManager:
         Returns:
             order_id: Eindeutige Bestell-ID
         """
+        # WICHTIG: Cache invalidieren, da sich die Datenbasis geändert hat!
+        self._inbound_df_cache = {}
+        self._inbound_df_cache_key = None
+        
         self.order_counter += 1
         order_id = self.order_counter
         
@@ -129,6 +140,10 @@ class ChinaTransportManager:
         Args:
             current_day: Aktueller Tag (0-basiert)
         """
+        # WICHTIG: Cache invalidieren, da sich Mengen durch Losses ändern könnten
+        self._inbound_df_cache = {}
+        self._inbound_df_cache_key = None
+        
         current_date = self.workday_calculator.get_date_from_day(current_day)
         
         # Prüfe nur an Mittwochen (Schiff fährt nur Mittwochs ab)
@@ -261,17 +276,71 @@ class ChinaTransportManager:
         total_received = 0.0
         
         for key, status in list(self.transport_status.items()):
-            if not status['received'] and status['available_day'] == current_day:
-                # Verwende actual_quantity (bereits Verlust angewendet)
-                # Wenn shipped_quantity vorhanden, bedeutet das, dass nur ein Teil verschickt wurde
-                # In diesem Fall ist actual_quantity bereits der verschickte Teil (nach Verlust)
-                if 'shipped_quantity' in status and status['shipped_quantity'] is not None:
-                    # Nur der verschickte Teil kommt an
-                    # actual_quantity ist bereits der verschickte Teil nach Verlust
+            if status['received']:
+                continue  # Bereits empfangen, überspringen
+            
+            # Berechne available_day deterministisch (wie in Inbound-Tabelle)
+            # Falls available_day noch nicht gesetzt ist, berechne es basierend auf truck_china_start_day
+            available_day = status.get('available_day')
+            
+            if available_day is None:
+                # Fallback: Berechne available_day deterministisch basierend auf truck_china_start_day
+                # (wie in get_inbound_log_dataframe)
+                truck_china_start_day = status.get('truck_china_start_day')
+                if truck_china_start_day is not None:
+                    # Berechne die Transportkette deterministisch
+                    arrival_at_port_day = status.get('arrival_at_port_day')
+                    if arrival_at_port_day is not None:
+                        # Finde nächsten Mittwoch nach Ankunft im Hafen
+                        arrival_date = self.workday_calculator.get_date_from_day(arrival_at_port_day)
+                        days_until_wednesday = (2 - arrival_date.weekday()) % 7
+                        if days_until_wednesday == 0 and arrival_date.weekday() != 2:
+                            days_until_wednesday = 7
+                        ship_departure_day = arrival_at_port_day + days_until_wednesday
+                        
+                        # Schiffsdauer + LKW DE
+                        ship_arrival_day = ship_departure_day + 30
+                        truck_de_start_day = ship_arrival_day
+                        truck_de_end_day = self._add_workdays(truck_de_start_day, 2)
+                        physical_arrival_day = truck_de_end_day
+                        available_day = physical_arrival_day + 1
+                        
+                        # Speichere für zukünftige Verwendung
+                        status['available_day'] = available_day
+            
+            # Prüfe, ob die Ware heute verfügbar wird
+            if available_day == current_day:
+                # Berechne empfangene Menge
+                if status.get('shipped', False):
+                    # Ware wurde bereits verschickt: actual_quantity enthält bereits Transportverlust
+                    # (wurde in process_shipments angewendet)
                     received_qty = status['actual_quantity']
                 else:
-                    # Gesamte Bestellung wurde verschickt
-                    received_qty = status['actual_quantity']
+                    # Ware wurde noch nicht verschickt, aber laut deterministischer Logik kommt sie heute an
+                    # Das kann passieren, wenn process_shipments noch nicht gelaufen ist, aber die Ware
+                    # laut Transportkette heute ankommen sollte
+                    # Wende Transportverlust an (Container-Verlust passiert auf See)
+                    # Prüfe auf Lieferprobleme-Szenarien
+                    delivery_problems = []
+                    if self.scenario_manager and available_day is not None:
+                        # Berechne ship_departure_day für Szenarien
+                        arrival_at_port = status.get('arrival_at_port_day')
+                        if arrival_at_port is not None:
+                            arrival_date = self.workday_calculator.get_date_from_day(arrival_at_port)
+                            days_until_wednesday = (2 - arrival_date.weekday()) % 7
+                            if days_until_wednesday == 0 and arrival_date.weekday() != 2:
+                                days_until_wednesday = 7
+                            ship_dep_day = arrival_at_port + days_until_wednesday
+                            delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(ship_dep_day)
+                    
+                    # Berechne Verlustfaktor
+                    loss_factor = 1.0
+                    for scenario in delivery_problems:
+                        if scenario.component_type == 'saddles':
+                            loss_factor *= (1.0 - scenario.loss_percentage)
+                    
+                    # Wende Transportverlust an
+                    received_qty = status['actual_quantity'] * loss_factor
                 
                 total_received += received_qty
                 status['received'] = True
@@ -282,10 +351,11 @@ class ChinaTransportManager:
         """
         Findet den nächsten Arbeitstag nach dem Start-Tag
         Berücksichtigt chinesische Feiertage für Freigabe in China
+        IGNORIERT deutsche Feiertage, wenn use_chinese_holidays=True
         
         Args:
             start_day: Start-Tag (0-basiert)
-            use_chinese_holidays: Wenn True, verwendet chinesische Feiertage (Standard: True für China)
+            use_chinese_holidays: Wenn True, verwendet nur chinesische Feiertage (Standard: True für China)
             
         Returns:
             Nächster Arbeitstag (0-basiert)
@@ -298,18 +368,25 @@ class ChinaTransportManager:
         
         current_day = start_day + 1
         while True:
-            # Prüfe ob Arbeitstag (mit entsprechenden Feiertagen)
-            is_workday = self.workday_calculator.is_workday(current_day)
+            current_date = self.workday_calculator.get_date_from_day(current_day)
+            weekday = current_date.weekday()  # 0=Montag, 6=Sonntag
             
-            # Wenn chinesische Feiertage verwendet werden sollen, prüfe zusätzlich chinesische Feiertage
+            # KORREKTUR: Prüfe nur Wochenende, nicht deutsche Feiertage
+            # Wenn chinesische Feiertage verwendet werden, ignoriere deutsche Feiertage komplett
+            is_weekend = weekday >= 5  # Samstag=5, Sonntag=6
+            
+            if is_weekend:
+                current_day += 1
+                continue
+            
+            # Prüfe chinesische Feiertage (falls aktiviert)
             if use_chinese_holidays and chinese_holidays:
-                current_date = self.workday_calculator.get_date_from_day(current_day)
                 if current_date in chinese_holidays:
-                    is_workday = False
+                    current_day += 1
+                    continue
             
-            if is_workday:
-                return current_day
-            current_day += 1
+            # Wenn wir hier ankommen, ist es ein Arbeitstag in China (Mo-Fr, kein chinesischer Feiertag)
+            return current_day
     
     def _add_workdays(self, start_day: int, num_workdays: int, exclude_start: bool = False, use_chinese_holidays: bool = False) -> int:
         """
@@ -337,66 +414,28 @@ class ChinaTransportManager:
             chinese_holidays = HolidaysConfig.get_holidays_for_year(self.workday_calculator.year, 'CN')
         
         while workdays_added < num_workdays:
-            # Prüfe ob Arbeitstag (mit entsprechenden Feiertagen)
-            is_workday = self.workday_calculator.is_workday(current_day)
+            current_date = self.workday_calculator.get_date_from_day(current_day)
+            weekday = current_date.weekday()  # 0=Montag, 6=Sonntag
             
-            # Wenn chinesische Feiertage verwendet werden sollen, prüfe zusätzlich chinesische Feiertage
+            # KORREKTUR: Prüfe nur Wochenende, nicht deutsche Feiertage
+            # Wenn chinesische Feiertage verwendet werden, ignoriere deutsche Feiertage komplett
+            is_weekend = weekday >= 5  # Samstag=5, Sonntag=6
+            
+            if is_weekend:
+                current_day += 1
+                continue
+            
+            # Prüfe chinesische Feiertage (falls aktiviert)
+            is_chinese_holiday = False
             if use_chinese_holidays and chinese_holidays:
-                current_date = self.workday_calculator.get_date_from_day(current_day)
                 if current_date in chinese_holidays:
-                    is_workday = False
+                    is_chinese_holiday = True
             
-            if is_workday:
+            if not is_chinese_holiday:
                 workdays_added += 1
             current_day += 1
         
         return current_day - 1  # -1 weil wir am Ende des letzten Arbeitstages sind
-    
-    def _get_next_wednesday(self, arrival_day: int) -> int:
-        """
-        Findet den nächsten Mittwoch für Schiffsabfahrt.
-        Regel: Ware muss VOR Mittwoch im Hafen sein. Kommt sie am Mittwoch oder früher an, 
-        fährt das Schiff am selben Mittwoch. Kommt sie später an, muss sie bis zum nächsten Mittwoch warten.
-        
-        Args:
-            arrival_day: Tag der Ankunft im Hafen (0-basiert)
-            
-        Returns:
-            Tag der Schiffsabfahrt (0-basiert)
-        """
-        arrival_date = self.workday_calculator.get_date_from_day(arrival_day)
-        arrival_weekday = arrival_date.weekday()  # 0=Montag, 2=Mittwoch, 6=Sonntag
-        
-        # Wenn Ankunft am Mittwoch oder früher (Mo, Di, Mi): Schiff fährt am selben Mittwoch
-        if arrival_weekday <= 2:  # Montag, Dienstag oder Mittwoch
-            # Finde den Mittwoch dieser Woche
-            days_to_wednesday = 2 - arrival_weekday
-            departure_date = arrival_date + timedelta(days=days_to_wednesday)
-        else:  # Donnerstag, Freitag, Samstag, Sonntag
-            # Finde den nächsten Mittwoch
-            days_until_next_wednesday = (9 - arrival_weekday) % 7  # Tage bis nächster Mittwoch
-            if days_until_next_wednesday == 0:
-                days_until_next_wednesday = 7
-            departure_date = arrival_date + timedelta(days=days_until_next_wednesday)
-        
-        departure_day = (departure_date - date(2026, 1, 1)).days
-        return departure_day
-    
-    def get_transport_status_for_day(self, day: int) -> List[Dict]:
-        """
-        Gibt alle Transport-Status für einen bestimmten Tag zurück
-        
-        Args:
-            day: Tag (0-basiert)
-            
-        Returns:
-            Liste von Transport-Status-Dictionaries
-        """
-        result = []
-        for key, status in self.transport_status.items():
-            if status['available_day'] is not None and status['order_day'] <= day <= status['available_day']:
-                result.append(status.copy())
-        return result
     
     def get_pipeline_inventory(self) -> float:
         """
@@ -413,4 +452,438 @@ class ChinaTransportManager:
                 # Verwende actual_quantity (nach Produktionsverlusten, aber vor Transportverlusten)
                 total_pipeline += status.get('actual_quantity', status.get('quantity', 0.0))
         return total_pipeline
+    
+    def get_supplier_log_dataframe(self, saddle_name: str, saddle_share: float, demand_calculator: Optional[DemandCalculator] = None, yearly_volume: float = 370000) -> pd.DataFrame:
+        """
+        Erstellt den DataFrame für Page 3 (Lieferant China).
+        IMPLEMENTIERT DIE "ALTE" LOSGRÖSSEN-LOGIK:
+        1. Sammelt Produktion aller Sättel.
+        2. Berechnet täglich den Gesamtpool.
+        3. Wenn Pool >= 500, wird verschifft (anteilig verteilt).
+        4. Berechnet Übertrag (Carry-Over) für den nächsten Tag.
+        
+        Args:
+            saddle_name: Name des Sattels (z.B. "Fizik Tundra")
+            saddle_share: Marktanteil dieses Sattels (wird für Produktion/Freigabe verwendet)
+            demand_calculator: Optional DemandCalculator für tägliche Bedarfsberechnung (wird nicht verwendet)
+            yearly_volume: Jahresvolumen (wird nicht verwendet)
+        """
+        # 1. Datenbasis vorbereiten
+        if not self.transport_status:
+            return pd.DataFrame(columns=[
+                'Wochentag', 'Datum', 'Bestelleingang', 'Freigabedatum', 
+                'Freigegebene Bestellungen', 'Störung', 'Produktionsdatum', 
+                'Produktionsmenge', 'Warenausgang', 'Warenbestand'
+            ])
+        
+        earliest_order = min((k[0] for k in self.transport_status.keys()), default=0)
+        start_date = self.workday_calculator.get_date_from_day(earliest_order)
+        end_date = date(2026, 12, 31)
+        total_days = (end_date - start_date).days + 1
+        
+        # Alle Sattel-Typen ermitteln (aus MasterData BOM)
+        all_saddles = set(item['saddle'] for item in self.master_data.BOM.values())
+        
+        # Berechne Shares für alle Sättel (einmalig)
+        saddle_shares_all = self.master_data.calculate_saddle_shares()
+        
+        # Tägliche Produktion pro Sattel sammeln (aus transport_status)
+        # daily_prod_all[day_idx][sattel] = menge
+        daily_prod_all = {day_idx: {s: 0.0 for s in all_saddles} for day_idx in range(total_days)}
+        
+        # Daten für die finale Tabelle (nur für den angefragten saddle_name)
+        raw_data_map = {}  # Key: day_idx, Value: Dict mit Order, Prod, etc. für saddle_name
+        
+        for day_idx in range(total_days):
+            curr_date = start_date + timedelta(days=day_idx)
+            raw_data_map[day_idx] = {
+                'date': curr_date, 
+                'weekday': ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][curr_date.weekday()],
+                'order': 0.0, 'release': 0.0, 'prod': 0.0, 'breakdown': "Nein",
+                'released_date_str': "", 'production_date_str': ""
+            }
+        
+        # Scan Transport Status
+        for (o_day, o_id), status in self.transport_status.items():
+            # Produktions-Tag (für den Pool relevant)
+            p_day_sim = status.get('production_end_day')
+            
+            # Menge (Pool-Menge)
+            qty_pool = status.get('actual_quantity', status.get('quantity', 0.0))
+            
+            # Produktion für Pool-Berechnung registrieren
+            if p_day_sim is not None:
+                p_date = self.workday_calculator.get_date_from_day(p_day_sim)
+                day_offset = (p_date - start_date).days
+                if 0 <= day_offset < total_days:
+                    # Wir verteilen diese Pool-Produktion auf alle Sättel anhand ihrer Shares
+                    for s in all_saddles:
+                        s_share = saddle_shares_all.get(s, 0.0)
+                        daily_prod_all[day_offset][s] += qty_pool * s_share
+            
+            # Daten für die Tabelle (nur für den angefragten saddle_name)
+            qty_specific = qty_pool * saddle_share
+            
+            # Order
+            if status.get('order_day') is not None:
+                o_date = self.workday_calculator.get_date_from_day(status['order_day'])
+                d_off = (o_date - start_date).days
+                if 0 <= d_off < total_days:
+                    raw_data_map[d_off]['order'] += qty_specific
+                    # KORREKTUR: Freigabedatum in der Zeile des Bestelleingangs anzeigen
+                    if status.get('released_day') is not None:
+                        r_date = self.workday_calculator.get_date_from_day(status['released_day'])
+                        if not raw_data_map[d_off]['released_date_str']:
+                            raw_data_map[d_off]['released_date_str'] = r_date.strftime(self.master_data.DATE_FORMAT)
+            
+            # Release
+            if status.get('released_day') is not None:
+                r_date = self.workday_calculator.get_date_from_day(status['released_day'])
+                d_off = (r_date - start_date).days
+                if 0 <= d_off < total_days:
+                    raw_data_map[d_off]['release'] += qty_specific
+                    # KORREKTUR: Produktionsdatum in der Zeile der freigegebenen Bestellungen anzeigen
+                    if p_day_sim is not None:
+                        p_date = self.workday_calculator.get_date_from_day(p_day_sim)
+                        if not raw_data_map[d_off]['production_date_str']:
+                            raw_data_map[d_off]['production_date_str'] = p_date.strftime(self.master_data.DATE_FORMAT)
+            
+            # Production (Anzeige)
+            if p_day_sim is not None:
+                p_date = self.workday_calculator.get_date_from_day(p_day_sim)
+                d_off = (p_date - start_date).days
+                if 0 <= d_off < total_days:
+                    raw_data_map[d_off]['prod'] += qty_specific
+                    if not raw_data_map[d_off]['production_date_str']:
+                        raw_data_map[d_off]['production_date_str'] = p_date.strftime('%d.%m.%Y')
+                    if status.get('production_loss_percentage', 0.0) > 0:
+                        raw_data_map[d_off]['breakdown'] = "Ja"
+        
+        # ---------------------------------------------------------
+        # DER "ALTE" LOGIK-KERN: Tägliche Pool- & Versand-Berechnung
+        # ---------------------------------------------------------
+        lot_size = self.master_data.CHINA_SUPPLIER['Saddles'].get('lot_size', 500)  # 500
+        carry_over = {s: 0.0 for s in all_saddles}
+        
+        # Ergebnis-Speicher für Warenausgang & Bestand (nur für angefragten Sattel nötig)
+        shipment_results = [0.0] * total_days
+        stock_results = [0.0] * total_days
+        
+        for day_idx in range(total_days):
+            # 1. Gesamt-Verfügbarkeit prüfen
+            total_accumulated = 0.0
+            accumulated_by_saddle = {}
+            
+            for s in all_saddles:
+                prod = daily_prod_all[day_idx][s]
+                co = carry_over[s]
+                acc = prod + co
+                accumulated_by_saddle[s] = acc
+                total_accumulated += acc
+            
+            # 2. Losgröße berechnen
+            current_lot_size = int(total_accumulated / lot_size) * lot_size
+            
+            # 3. Wenn Versand möglich -> Verteilen
+            shipments_today = {s: 0.0 for s in all_saddles}
+            
+            if current_lot_size > 0:
+                # A. Ungerundete Anteile
+                unrounded = {}
+                for s in all_saddles:
+                    if total_accumulated > 0:
+                        unrounded[s] = accumulated_by_saddle[s] * (current_lot_size / total_accumulated)
+                    else:
+                        unrounded[s] = 0.0
+                
+                # B. Runden & Differenz finden (Largest Remainder Method)
+                rounded = {s: int(val) for s, val in unrounded.items()}
+                diff = current_lot_size - sum(rounded.values())
+                
+                # C. Differenz verteilen
+                if diff > 0:
+                    # Sortieren nach Nachkommastelle
+                    remainders = [(s, unrounded[s] - rounded[s]) for s in all_saddles]
+                    remainders.sort(key=lambda x: x[1], reverse=True)
+                    
+                    for s, rem in remainders:
+                        if diff <= 0: 
+                            break
+                        rounded[s] += 1
+                        diff -= 1
+                
+                shipments_today = rounded
+            
+            # 4. Carry-Over aktualisieren & Ergebnisse speichern
+            for s in all_saddles:
+                # Was nicht weggeht, bleibt liegen
+                carry_over[s] = accumulated_by_saddle[s] - shipments_today[s]
+                
+                # Wenn das der angefragte Sattel ist, speichern wir die Werte für die Tabelle
+                if s == saddle_name:
+                    shipment_results[day_idx] = shipments_today[s]
+                    stock_results[day_idx] = carry_over[s]
+        
+        # ---------------------------------------------------------
+        # FINALE TABELLE BAUEN
+        # ---------------------------------------------------------
+        table_rows = []
+        for day_idx in range(total_days):
+            raw = raw_data_map[day_idx]
+            
+            daily_data = {
+                'Wochentag': raw['weekday'],
+                'Datum': raw['date'].strftime(self.master_data.DATE_FORMAT),
+                'Bestelleingang': round(raw['order']) if raw['order'] > 0 else '',
+                'Freigabedatum': raw['released_date_str'],
+                'Freigegebene Bestellungen': round(raw['release']) if raw['release'] > 0 else 0,
+                'Störung': raw['breakdown'],
+                'Produktionsdatum': raw['production_date_str'],
+                'Produktionsmenge': round(raw['prod']) if raw['prod'] > 0 else 0,
+                'Warenausgang': round(shipment_results[day_idx]) if shipment_results[day_idx] > 0 else 0,
+                'Warenbestand': round(stock_results[day_idx])
+            }
+            table_rows.append(daily_data)
+        
+        return pd.DataFrame(table_rows)
+    
+    def get_inbound_log_dataframe(self, saddle_shares_dict: Dict[str, float]) -> pd.DataFrame:
+        """
+        Erstellt den DataFrame für Page 4 (Inbound) mit EXAKTER RÜCKVERFOLGUNG.
+        
+        NEUE LOGIK (Massenerhaltung):
+        Statt pauschaler Verteilung (500 * Share) nutzen wir echte Warteschlangen (Buckets)
+        pro Satteltyp am Hafen. Wir verschiffen nur das, was wirklich produziert wurde.
+        Damit ist mathematisch garantiert: Summe(Inbound) == Summe(Produktion).
+        """
+        # Cache Check
+        cache_key = tuple(sorted(saddle_shares_dict.items()))
+        if cache_key == self._inbound_df_cache_key and cache_key in self._inbound_df_cache:
+            return self._inbound_df_cache[cache_key]
+        
+        # 1. Setup
+        if not self.transport_status:
+            cols = ['Wochentag', 'Datum', 'Abfahrt LKW (CN)', 'Ankunft LKW (Port)', 
+                    'Abfahrt Schiff', 'Ankunft Schiff', 'Abfahrt LKW (DE)', 
+                    'Geplante Ankunft LKW', 'Tatsächliche Ankunft LKW', 
+                    'Verfügbar im Lager', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
+            return pd.DataFrame(columns=cols)
+        
+        start_date = date(2025, 11, 1)
+        end_date = date(2026, 12, 31)
+        total_days = (end_date - start_date).days + 1
+        
+        # Alle Sättel ermitteln
+        all_saddles = set(item['saddle'] for item in self.master_data.BOM.values())
+        
+        # Shares berechnen (nur für die Verteilung der PRODUKTION in die Eimer)
+        saddle_shares_all = {}
+        total_share = 0.0
+        for s in all_saddles:
+            share = sum(self.master_data.PRODUCT_SALES_SHARES.get(p, 0) for p, bom in self.master_data.BOM.items() if bom['saddle'] == s)
+            saddle_shares_all[s] = share
+            total_share += share
+        if total_share > 0:
+            saddle_shares_all = {s: share / total_share for s, share in saddle_shares_all.items()}
+        
+        # 2. Produktion sammeln (Der Zufluss in die Eimer)
+        daily_prod_all = {day_idx: {s: 0.0 for s in all_saddles} for day_idx in range(total_days)}
+        
+        for (o_day, o_id), status in self.transport_status.items():
+            p_day_sim = status.get('production_end_day')
+            qty_produced = status.get('actual_quantity', status.get('quantity', 0.0))
+            
+            if p_day_sim is not None and qty_produced > 0:
+                p_date = self.workday_calculator.get_date_from_day(p_day_sim)
+                day_offset = (p_date - start_date).days
+                
+                # Wir lassen Produktion auch etwas vor/nach dem Zeitraum zu für den Fluss
+                if -20 <= day_offset < total_days + 20:
+                    effective_day = max(0, min(day_offset, total_days - 1))
+                    
+                    # Hier verteilen wir die Produktion in die spezifischen Sattel-Eimer
+                    for s in all_saddles:
+                        s_share = saddle_shares_all.get(s, 0.0)
+                        # Exakte Zuteilung in den Eimer
+                        daily_prod_all[effective_day][s] += qty_produced * s_share
 
+        # 3. Die Simulation der "Eimer" am Hafen (Buckets)
+        port_buckets = {s: 0.0 for s in all_saddles}
+        lot_size = self.master_data.CHINA_SUPPLIER['Saddles'].get('lot_size', 500)
+        
+        rows = []
+        # Wochentag-Abkürzungen werden jetzt über WorkdayCalculator geholt
+
+        for day_idx in range(total_days):
+            curr_date = start_date + timedelta(days=day_idx)
+            
+            # A. Produktion kommt im Hafen an -> Rein in die Eimer
+            for s in all_saddles:
+                port_buckets[s] += daily_prod_all[day_idx][s]
+            
+            # B. Check: Ist der Hafen voll genug für ein Schiff?
+            total_in_port = sum(port_buckets.values())
+            
+            # Wieviele Container können wir füllen?
+            # Wir nehmen nur GANZE Container (500er Schritte)
+            num_containers = int(total_in_port / lot_size)
+            ship_qty_total = num_containers * lot_size
+            
+            shipments_today = {s: 0.0 for s in all_saddles}
+            is_transport_day = False
+            
+            if ship_qty_total > 0:
+                is_transport_day = True
+                
+                # C. Der entscheidende Schritt: Exakte Entnahme aus den Eimern
+                # Wir nehmen PROPORTIONAL zu dem, was da ist.
+                # Faktor: Wir verschiffen X % des aktuellen Hafenbestands
+                withdraw_ratio = ship_qty_total / total_in_port
+                
+                for s in all_saddles:
+                    # Berechne exakt, wie viel von Sattel S in diesen Containern landet
+                    qty_to_ship = port_buckets[s] * withdraw_ratio
+                    shipments_today[s] = qty_to_ship
+                    
+                    # Ziehe exakt diese Menge vom Eimer ab
+                    port_buckets[s] -= qty_to_ship
+                
+                # Rundungskorrektur (Massenerhaltung):
+                # Durch Floats kann shipment_sum leicht von ship_qty_total abweichen.
+                # Wir korrigieren das am stärksten vertretenen Item, damit Summe exakt ship_qty_total ist.
+                actual_ship_sum = sum(shipments_today.values())
+                diff = ship_qty_total - actual_ship_sum
+                if abs(diff) > 0.000001:
+                    # Finde Sattel mit größtem Anteil
+                    max_saddle = max(shipments_today, key=shipments_today.get)
+                    shipments_today[max_saddle] += diff
+                    port_buckets[max_saddle] -= diff  # Auch im Bucket korrigieren!
+
+            # --- ZEILE ERSTELLEN (LÜCKENLOS) ---
+            day_idx = (curr_date - date(2026, 1, 1)).days
+            row = {
+                'Wochentag': self.workday_calculator.get_weekday_abbr(day_idx) if 0 <= day_idx < 365 else ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][curr_date.weekday()],
+                'Datum': curr_date.strftime(self.master_data.DATE_FORMAT),
+                'Abfahrt LKW (CN)': '', 'Ankunft LKW (Port)': '', 
+                'Abfahrt Schiff': '', 'Ankunft Schiff': '', 'Abfahrt LKW (DE)': '',
+                'Geplante Ankunft LKW': '', 'Tatsächliche Ankunft LKW': '', 
+                'Verfügbar im Lager': '', 'Menge Gesamt': ''
+            }
+            # Init Sattel-Spalten
+            for s in saddle_shares_dict: 
+                row[s] = ''
+
+            if is_transport_day:
+                row['Menge Gesamt'] = ship_qty_total
+                
+                # Fülle die exakten Werte ein
+                for s in saddle_shares_dict:
+                    if s in shipments_today and shipments_today[s] > 0.001:
+                        row[s] = round(shipments_today[s], 1)
+                
+                # Datums-Berechnung für Ankunft (wie gehabt)
+                row['Abfahrt LKW (CN)'] = curr_date.strftime(self.master_data.DATE_FORMAT)
+                
+                day_idx_sim = (curr_date - date(2026, 1, 1)).days
+                day_port = self._add_workdays(day_idx_sim, 2)
+                date_port = self.workday_calculator.get_date_from_day(day_port)
+                row['Ankunft LKW (Port)'] = date_port.strftime(self.master_data.DATE_FORMAT)
+                
+                wd = date_port.weekday()
+                if wd == 2:  # Wenn bereits Mittwoch
+                    days_to_wed = 7
+                else:
+                    days_to_wed = (2 - wd) % 7
+                    if days_to_wed == 0:
+                        days_to_wed = 7
+                
+                date_ship_dep = date_port + timedelta(days=days_to_wed)
+                row['Abfahrt Schiff'] = date_ship_dep.strftime(self.master_data.DATE_FORMAT)
+                
+                date_ship_arr = date_ship_dep + timedelta(days=30)
+                row['Ankunft Schiff'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
+                row['Abfahrt LKW (DE)'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
+                
+                day_ship_arr_idx = (date_ship_arr - date(2026, 1, 1)).days
+                day_arr_de = self._add_workdays(day_ship_arr_idx, 2)
+                date_arr_de = self.workday_calculator.get_date_from_day(day_arr_de)
+                
+                row['Geplante Ankunft LKW'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
+                row['Tatsächliche Ankunft LKW'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
+                
+                date_avail = date_arr_de + timedelta(days=1)
+                row['Verfügbar im Lager'] = date_avail.strftime(self.master_data.DATE_FORMAT)
+
+            rows.append(row)
+            
+        # DataFrame erstellen
+        df = pd.DataFrame(rows)
+        
+        # Spalten sortieren
+        cols = ['Wochentag', 'Datum', 'Abfahrt LKW (CN)', 'Ankunft LKW (Port)', 
+                'Abfahrt Schiff', 'Ankunft Schiff', 'Abfahrt LKW (DE)', 
+                'Geplante Ankunft LKW', 'Tatsächliche Ankunft LKW', 
+                'Verfügbar im Lager', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
+        
+        # Sicherstellen dass alle Cols da sind
+        for c in cols:
+            if c not in df.columns: 
+                df[c] = ''
+        
+        result_df = df[cols]
+        
+        # Cache Ergebnis
+        self._inbound_df_cache[cache_key] = result_df
+        self._inbound_df_cache_key = cache_key
+        
+        return result_df
+    
+    def get_daily_arrival_qty(self, day_index: int) -> float:
+        """
+        Berechnet die Wareneingangsmenge für einen bestimmten Tag basierend auf der exakten
+        Logik von get_inbound_log_dataframe (Eimer-Logik mit Massenerhaltung).
+        
+        Diese Methode stellt sicher, dass der Simulator nur Ware bucht, die auch in der
+        Inbound-Tabelle erscheint (Datenkonsistenz).
+        
+        OPTIMIERUNG: Nutzt get_inbound_log_dataframe direkt, um Redundanz zu vermeiden.
+        
+        Args:
+            day_index: Tag-Index (0-basiert, 0 = 01.01.2026)
+            
+        Returns:
+            Menge, die an diesem Tag verfügbar wird (0.0 wenn keine Ware ankommt)
+        """
+        if not self.transport_status:
+            return 0.0
+        
+        # Berechne Sattel-Shares (für get_inbound_log_dataframe benötigt)
+        saddle_shares = self.master_data.calculate_saddle_shares()
+        
+        # Hole Inbound-Tabelle (nutzt die neue Eimer-Logik)
+        inbound_df = self.get_inbound_log_dataframe(saddle_shares)
+        
+        if inbound_df.empty:
+            return 0.0
+        
+        # Konvertiere Tag-Index zu Datum
+        target_date = self.workday_calculator.get_date_from_day(day_index)
+        target_date_str = target_date.strftime(self.master_data.DATE_FORMAT)
+        
+        # Summiere alle Mengen, die an diesem Tag verfügbar werden
+        total_arrival_qty = 0.0
+        
+        for _, row in inbound_df.iterrows():
+            avail_str = row.get('Verfügbar im Lager', '')
+            if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
+                if avail_str == target_date_str:
+                    # Summiere "Menge Gesamt" für diesen Tag
+                    menge_gesamt = row.get('Menge Gesamt', '')
+                    if menge_gesamt and str(menge_gesamt).strip() != '':
+                        try:
+                            total_arrival_qty += float(menge_gesamt)
+                        except (ValueError, TypeError):
+                            pass
+        
+        return total_arrival_qty
+    

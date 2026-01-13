@@ -3,19 +3,34 @@ Procurement Manager
 Verwaltet Bestellungen basierend auf Reorder Points
 """
 
-from typing import Deque
+from typing import Deque, Optional
 from collections import deque
 from models.inventory import Inventory
 from config.master_data import MasterData
 from simulation.china_transport import ChinaTransportManager
+from simulation.workday_calculator import WorkdayCalculator
 
 
 class ProcurementManager:
     """Verwaltet Bestellungen beim chinesischen Lieferanten"""
     
-    def __init__(self, inventory: Inventory, china_transport_manager: ChinaTransportManager, window_size: int = 30):
+    # Feiertage 2026 (Deutschland)
+    HOLIDAYS_2026 = [
+        "01.01.2026", "03.04.2026", "06.04.2026", "01.05.2026",
+        "14.05.2026", "25.05.2026", "04.06.2026", "03.10.2026",
+        "01.11.2026", "25.12.2026", "26.12.2026"
+    ]
+    
+    def __init__(
+        self, 
+        inventory: Inventory, 
+        china_transport_manager: ChinaTransportManager,
+        workday_calculator: Optional[WorkdayCalculator] = None,
+        window_size: int = 30
+    ):
         self.inventory = inventory
         self.china_transport_manager = china_transport_manager
+        self.workday_calculator = workday_calculator
         self.master_data = MasterData
         self.window_size = window_size
         
@@ -64,6 +79,17 @@ class ProcurementManager:
         # PROAKTIVE LOGIK: Wenn expected_demand übergeben wurde (Look-Ahead vom Simulator)
         # expected_demand ist der tägliche Bedarf für den Tag (day + 49)
         if expected_demand is not None and expected_demand > 0:
+            # Prüfe, ob das Ankunftsdatum ein Feiertag ist
+            if self.workday_calculator:
+                lead_time = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time_days', 49)
+                target_day = day + lead_time
+                target_date = self.workday_calculator.get_date_from_day(target_day)
+                target_date_str = target_date.strftime(self.master_data.DATE_FORMAT)
+                
+                # Wenn Ankunft an Feiertag -> keine Bestellung
+                if target_date_str in self.HOLIDAYS_2026:
+                    return  # Bestellung abbrechen
+            
             # Bestelle genau den täglichen Bedarf für den Zukunftstag
             # Analog zur Excel-Formel: Bestelle heute für den Bedarf in 49 Tagen
             # Der Simulator ruft diese Methode täglich auf, daher bestellen wir täglich

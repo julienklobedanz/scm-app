@@ -32,10 +32,13 @@ class Simulator:
         self.scenario_manager = scenario_manager or ScenarioManager()
         
         # Initialisiere Modelle
+        # WICHTIG: Für Sättel setzen wir den Initialbestand auf 0, damit alles über die
+        # Inbound-Logik (get_daily_arrival_qty) läuft und Datenkonsistenz gewährleistet ist.
+        # Der Bestand baut sich durch die Vorlauf-Bestellungen (_place_initial_orders) auf.
         self.inventory = Inventory(
             stock_alu=initial_stock_frames_alu,
             stock_carbon=initial_stock_frames_carbon,
-            stock_saddles=initial_stock_saddles
+            stock_saddles=0.0  # Start mit 0, Bestand baut sich über Inbound-Logik auf
         )
         self.backlog = MarketBacklog()
         self.backlog.initialize_markets(self.master_data.MARKETS)
@@ -43,9 +46,20 @@ class Simulator:
         # Initialisiere Services
         self.workday_calculator = WorkdayCalculator(year=2026)
         self.demand_calculator = DemandCalculator(yearly_volume, self.workday_calculator)
-        self.production_planner = ProductionPlanner(self.inventory)
+        # WICHTIG: china_transport_manager muss VOR production_planner erstellt werden,
+        # damit production_planner Zugriff darauf hat
         self.china_transport_manager = ChinaTransportManager(self.inventory, self.workday_calculator, self.scenario_manager)
-        self.procurement_manager = ProcurementManager(self.inventory, self.china_transport_manager)
+        self.production_planner = ProductionPlanner(
+            self.inventory,
+            demand_calculator=self.demand_calculator,
+            workday_calculator=self.workday_calculator,
+            china_transport_manager=self.china_transport_manager
+        )
+        self.procurement_manager = ProcurementManager(
+            self.inventory, 
+            self.china_transport_manager,
+            workday_calculator=self.workday_calculator
+        )
         
         # Platziere initiale Bestellungen vor Simulationsbeginn (49 Tage vor dem ersten Bedarf)
         self._place_initial_orders()
@@ -53,6 +67,62 @@ class Simulator:
         # Warm-Up Phase: Simuliere Logistik für Tage vor Simulationsbeginn
         # Damit Schiffe bereits im Dezember abfahren können
         self._warmup_logistics()
+        
+        # Initial-Betankung: Setze Initialbestand aus Inbound-Tabelle
+        # WICHTIG: Dies muss NACH _place_initial_orders() und _warmup_logistics() erfolgen,
+        # damit die Inbound-Tabelle bereits alle Vorlauf-Lieferungen enthält
+        self._initialize_stock_from_inbound()
+    
+    def _initialize_stock_from_inbound(self) -> None:
+        """
+        Initialisiert den Sattel-Bestand aus der Inbound-Tabelle.
+        
+        OPTIMIERUNG: Baut die Inbound-Tabelle nur einmal und filtert dann.
+        Das ist schneller als get_daily_arrival_qty für jeden Tag aufzurufen (O(n²) Problem).
+        
+        Diese Methode stellt sicher, dass der Simulator am 01.01.2026 mit dem exakt
+        gleichen Bestand startet, den auch die Materiallager-Seite anzeigt.
+        """
+        from datetime import date
+        
+        # Berechne Sattel-Shares (für get_inbound_log_dataframe benötigt)
+        saddle_shares = self.master_data.calculate_saddle_shares()
+        
+        # Hole Inbound-Tabelle (einmalig, wird gecacht)
+        try:
+            inbound_df = self.china_transport_manager.get_inbound_log_dataframe(saddle_shares)
+        except Exception:
+            # Bei Fehler: behalte stock_saddles = 0.0
+            return
+        
+        if inbound_df.empty:
+            # Keine Daten verfügbar, behalte stock_saddles = 0.0
+            return
+        
+        # Filtere alle Zeilen mit "Verfügbar im Lager" <= 31.12.2025
+        cutoff_date = date(2025, 12, 31)
+        initial_stock = 0.0
+        
+        for _, row in inbound_df.iterrows():
+            avail_str = row.get('Verfügbar im Lager', '')
+            if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
+                try:
+                    from datetime import datetime
+                    avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()
+                    
+                    if avail_date <= cutoff_date:
+                        # Summiere "Menge Gesamt" (Pool-Menge aller Sättel)
+                        menge_gesamt = row.get('Menge Gesamt', 0)
+                        if menge_gesamt and str(menge_gesamt).strip() != '':
+                            try:
+                                initial_stock += float(menge_gesamt)
+                            except (ValueError, TypeError):
+                                pass
+                except (ValueError, TypeError):
+                    continue
+        
+        # Setze inventory.stock_saddles auf den berechneten Initialbestand
+        self.inventory.stock_saddles = initial_stock
     
     def _warmup_logistics(self) -> None:
         """
@@ -74,12 +144,14 @@ class Simulator:
         
         Beispiel: Für Bedarf am 04.01.2026 (Tag 3) wird am 16.11.2025 (Tag -46) bestellt.
         """
-        # Berechne tägliche Bestellungen für die ersten ~30 Tage
-        # (danach übernimmt der Procurement Manager die täglichen Bestellungen)
+        # WICHTIG: Wir müssen den Bedarf für die gesamte Lead-Time vorbestellen,
+        # damit am Tag 0 (Start der run-Schleife) nahtlos weitergemacht wird.
+        # Die Schleife muss mindestens lead_time_days lang sein, um alle Bedarfstage 0-48 abzudecken.
         lead_time_days = 49
         
-        for day in range(30):  # Erste 30 Tage
-            if self.workday_calculator.is_workday(day):
+        for day in range(lead_time_days):  # KORREKTUR: lead_time_days statt 30
+            # KORREKTUR: Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen
+            if not self.workday_calculator.is_weekend(day):
                 # Berechne täglichen Bedarf (ohne Carry-Over, da wir nur Base_Daily_Float brauchen)
                 month = self.master_data.get_month_from_day(day)
                 base_daily_floats = self.demand_calculator._calculate_monthly_base_daily_float(month)
@@ -118,20 +190,29 @@ class Simulator:
             # 1. China Inbound: Empfange Bestellungen (mit detaillierter Transport-Logik)
             # WICHTIG: Rahmen sind unbegrenzt verfügbar, daher keine Bestellungen mehr
             
-            # Prüfe Lieferantenausfall (muss vor Bestellempfang geprüft werden)
+            # 1. Wareneingang verarbeiten (Inbound -> Inventory)
+            # WICHTIG: Wareneingänge müssen IMMER verarbeitet werden, auch wenn der Lieferant blockiert ist
+            # (Blockierung betrifft nur neue Bestellungen, nicht bereits unterwegs befindliche Ware)
+            # NEU: Verwende get_daily_arrival_qty für Datenkonsistenz mit Inbound-Tabelle
+            # Diese Methode verwendet exakt dieselbe Logik wie get_inbound_log_dataframe
+            arrived_qty = self.china_transport_manager.get_daily_arrival_qty(day)
+            
+            if arrived_qty > 0:
+                # Buche den Zugang in den globalen Sattel-Bestand
+                # WICHTIG: Der ProductionPlanner verteilt diesen Pool später virtuell auf die Typen.
+                # Wir müssen hier nur sicherstellen, dass 'stock_saddles' erhöht wird.
+                self.inventory.add_stock('saddles', arrived_qty)
+            
+            # WICHTIG: Speichere den verfügbaren Bestand VOR der Produktion (aber NACH Inbound)
+            # Das entspricht dem "Bestand morgens" (inkl. Zugang) im Materiallager
+            stock_saddles_morning = self.inventory.stock_saddles
+            received_quantity = arrived_qty  # Für Reporting
+            
+            # Prüfe Lieferantenausfall (für neue Bestellungen)
             supplier_breakdowns = self.scenario_manager.get_supplier_breakdown_scenarios(day)
             supplier_blocked_saddles = any(
                 s.component_type in ['saddles', 'all'] for s in supplier_breakdowns
             )
-            
-            # Empfange nur Sattel-Bestellungen (nur wenn Lieferant nicht ausgefallen ist)
-            if not supplier_blocked_saddles:
-                # Verwende detaillierte Transport-Logik (Verspätung und Verlust sind bereits berücksichtigt)
-                received_quantity = self.china_transport_manager.receive_orders(day)
-                
-                # Füge zum Lagerbestand hinzu
-                if received_quantity > 0:
-                    self.inventory.stock_saddles += received_quantity
             
             # 2. Berechne tägliche Nachfrage mit Carry-Over-Logik
             # Marketing-Add-ons berechnen (pro Produkt) - auf Float-Basis
@@ -141,9 +222,10 @@ class Simulator:
             if marketing_scenarios:
                 # Berechne Marketing-Add-ons auf Float-Basis (vor Rundung)
                 month = self.master_data.get_month_from_day(day)
-                is_workday = self.workday_calculator.is_workday(day)
+                # KORREKTUR: Marketing wird auch an deutschen Feiertagen berücksichtigt, wenn es ein Wochentag ist
+                is_weekend = self.workday_calculator.is_weekend(day)
                 
-                if is_workday:
+                if not is_weekend:
                     # Hole Base_Daily_Float für Add-on-Berechnung
                     base_daily_floats = self.demand_calculator._calculate_monthly_base_daily_float(month)
                     
@@ -181,31 +263,24 @@ class Simulator:
             daily_target = sum(product_demands.values())
             total_demand += daily_target
             
-            # 3. Aggregiere BOM-Anforderungen
+            # 3. Aggregiere BOM-Anforderungen (für Stoppage-Tracking)
             frame_demand, saddle_demand = self.demand_calculator.aggregate_bom_demand(product_demands)
             
-            # 4. Produktionsplanung
-            # Prüfe ob Arbeitstag
-            is_workday = self.workday_calculator.is_workday(day)
+            # 4. Produktionsplanung (NEU: Intelligenter Planer)
+            # Der ProductionPlanner plant jetzt die Produktion pro Produkt mit Priorisierung
+            production_by_product = self.production_planner.plan_daily_production(
+                day,
+                marketing_add_ons=marketing_add_ons,
+                scenario_manager=self.scenario_manager
+            )
             
-            if is_workday:
-                # Produktion nur an Arbeitstagen
-                # WICHTIG: Nachfrage bleibt gleich (Kunden bestellen auch an Wochenenden)
-                # Die Produktionskapazität wird durch verfügbare Komponenten und Schicht-Kapazität begrenzt
-                actual_build, consumed, actual_shifts, max_daily_capacity = self.production_planner.calculate_production_capacity(
-                    daily_target, frame_demand, saddle_demand
-                )
-            else:
-                # Keine Produktion an Wochenenden/Feiertagen
-                actual_build = 0.0
-                consumed = {
-                    'frames_alu': 0.0,
-                    'frames_carbon': 0.0,
-                    'saddles': 0.0
-                }
-                actual_shifts = 0
-                max_daily_capacity = 0.0
+            # Berechne Gesamtproduktion
+            actual_build = sum(production_by_product.values())
             
+            # Hole Materialverbrauch aus dem Plan
+            consumed = self.production_planner.get_consumed_components(production_by_product)
+            
+            # Verbrauche Material
             self.production_planner.consume_components(consumed)
             total_produced += actual_build
             
@@ -236,15 +311,18 @@ class Simulator:
                 future_day = day + lead_time
                 
                 # Berechne erwartete Nachfrage für den Zukunftstag
+                # KORREKTUR: Keine Zyklik - nur für Jahr 2026 (0 <= future_day <= 364)
+                # Für future_day > 364 (Jahr 2027): Bedarf = 0 (keine Bestellung für nächstes Jahr)
                 expected_future_demand = 0.0
                 
-                # Prüfe, ob der Zukunftstag noch im Jahr liegt
-                if future_day < days:
+                # Prüfe, ob der Zukunftstag noch im Jahr 2026 liegt
+                if 0 <= future_day <= 364:
                     # 1. Prüfe, ob Marketing an diesem Zukunftstag aktiv ist
                     future_marketing_add_ons = {}
                     future_marketing_scenarios = self.scenario_manager.get_marketing_scenarios(future_day)
                     
-                    if future_marketing_scenarios and self.workday_calculator.is_workday(future_day):
+                    # KORREKTUR: Marketing wird auch an deutschen Feiertagen berücksichtigt, wenn es ein Wochentag ist
+                    if future_marketing_scenarios and not self.workday_calculator.is_weekend(future_day):
                         month = self.master_data.get_month_from_day(future_day)
                         base_daily_floats = self.demand_calculator._calculate_monthly_base_daily_float(month)
                         
@@ -258,7 +336,8 @@ class Simulator:
                                 future_marketing_add_ons[product] += add_on
                     
                     # 2. Berechne den EXAKTEN Bedarf für diesen Zukunftstag (inkl. Marketing)
-                    future_product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
+                    # Methode gibt 0 zurück, wenn future_day außerhalb 2026 liegt
+                    future_product_demands = self.demand_calculator.get_demand_for_future_day(
                         future_day, future_marketing_add_ons
                     )
                     
@@ -270,8 +349,11 @@ class Simulator:
                     # Analog zur Excel-Formel: Wir schauen auf den Bedarf in 49 Tagen und bestellen heute dafür
                     expected_future_demand = future_saddle_demand
                 
+                # KORREKTUR: Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen
+                # WICHTIG: Auch im Vorlauf (2025, negative Tage) wird bestellt, damit Start 2026 volle Lager hat
                 # Übergebe den proaktiven Bedarf an den Procurement Manager
-                self.procurement_manager.check_and_order(day, expected_future_demand)
+                if not self.workday_calculator.is_weekend(day):
+                    self.procurement_manager.check_and_order(day, expected_future_demand)
             
             # 6. Customer Distribution
             shipped_qty = actual_build
@@ -282,6 +364,8 @@ class Simulator:
             current_date = self.workday_calculator.get_date_from_day(day)
             month = self.master_data.get_month_from_day(day)
             weekday_name = self.workday_calculator.get_weekday_name(day)
+            # KORREKTUR: is_workday für Reporting (echter Arbeitstag in DE, nicht nur Wochentag)
+            is_workday = self.workday_calculator.is_workday(day)
             results.append({
                 'Day': day + 1,
                 'Date': current_date,
@@ -292,7 +376,9 @@ class Simulator:
                 'Actual_Build': actual_build,
                 'Stock_Frames_Alu': self.inventory.stock_alu,
                 'Stock_Frames_Carbon': self.inventory.stock_carbon,
-                'Stock_Saddles': self.inventory.stock_saddles,
+                'Stock_Saddles': self.inventory.stock_saddles,  # Bestand Abend (nach Produktion)
+                'Stock_Saddles_Morning': stock_saddles_morning,  # Bestand Morgen (inkl. Zugang)
+                'Inbound_Saddles': received_quantity,  # Zugang heute (für Materiallager-Seite)
                 'Backlog_DE': self.backlog.backlog['DE'],
                 'Backlog_USA': self.backlog.backlog['USA'],
                 'Backlog_FR': self.backlog.backlog['FR'],

@@ -8,23 +8,6 @@ import plotly.graph_objects as go
 from typing import Dict
 
 
-def render_bom_view() -> None:
-    """Zeigt die BOM-Tabelle an"""
-    from config.master_data import MasterData
-    
-    st.header("📋 Bill of Materials (BOM)")
-    bom_data = []
-    for product, components in MasterData.BOM.items():
-        bom_data.append({
-            'Produkt': product,
-            'Rahmen': components['frame'],
-            'Sattel': components['saddle'],
-            'Gabel': components['fork']
-        })
-    bom_df = pd.DataFrame(bom_data)
-    st.dataframe(bom_df, use_container_width=True, hide_index=True)
-
-
 def render_kpis(kpis: Dict[str, float]) -> None:
     """Zeigt die KPIs an"""
     st.header("📊 Key Performance Indicators (KPIs)")

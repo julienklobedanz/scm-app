@@ -36,6 +36,17 @@ class WorkdayCalculator:
         start_date = date(self.year, 1, 1)
         return start_date + timedelta(days=day)
     
+    def is_weekend(self, day: int) -> bool:
+        """
+        Prüft ob ein Tag ein Wochenende ist (Samstag oder Sonntag)
+        
+        Returns:
+            True wenn Samstag oder Sonntag, sonst False
+        """
+        day_date = self.get_date_from_day(day)
+        weekday = day_date.weekday()  # 0=Montag, 6=Sonntag
+        return weekday >= 5  # Samstag=5, Sonntag=6
+    
     def is_workday(self, day: int) -> bool:
         """
         Prüft ob ein Tag ein Arbeitstag ist
@@ -76,4 +87,56 @@ class WorkdayCalculator:
         day_date = self.get_date_from_day(day)
         weekday = day_date.weekday()
         return self.weekday_names[weekday]
+    
+    def get_weekday_abbr(self, day: int) -> str:
+        """
+        Gibt die Wochentag-Abkürzung zurück (Mo, Di, Mi, Do, Fr, Sa, So)
+        
+        Args:
+            day: Tag (0-basiert)
+            
+        Returns:
+            Wochentag-Abkürzung (2 Zeichen)
+        """
+        weekday_abbrs = {
+            0: 'Mo',
+            1: 'Di',
+            2: 'Mi',
+            3: 'Do',
+            4: 'Fr',
+            5: 'Sa',
+            6: 'So'
+        }
+        day_date = self.get_date_from_day(day)
+        weekday = day_date.weekday()
+        return weekday_abbrs[weekday]
+    
+    def get_day_info(self, day: int) -> Dict[str, any]:
+        """
+        Gibt alle Informationen zu einem Tag zurück (Wochentag, Is_Workday, Is_Weekend, Is_Holiday)
+        
+        Args:
+            day: Tag (0-basiert)
+            
+        Returns:
+            Dictionary mit:
+            - 'weekday_name': Vollständiger Wochentag-Name (z.B. 'Montag')
+            - 'weekday_abbr': Wochentag-Abkürzung (z.B. 'Mo')
+            - 'is_workday': True wenn Arbeitstag
+            - 'is_weekend': True wenn Wochenende
+            - 'is_holiday': True wenn Feiertag (aber nicht Wochenende)
+        """
+        weekday_name = self.get_weekday_name(day)
+        weekday_abbr = self.get_weekday_abbr(day)
+        is_workday = self.is_workday(day)
+        is_weekend = self.is_weekend(day)
+        is_holiday = not is_workday and not is_weekend
+        
+        return {
+            'weekday_name': weekday_name,
+            'weekday_abbr': weekday_abbr,
+            'is_workday': is_workday,
+            'is_weekend': is_weekend,
+            'is_holiday': is_holiday
+        }
 

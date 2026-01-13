@@ -12,50 +12,21 @@ from simulation.simulator import Simulator
 from models.scenarios import ScenarioManager
 from simulation.workday_calculator import WorkdayCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
+from ui.utils import initialize_session_state, run_happy_path_simulation
 
 st.set_page_config(page_title="Fertigproduktelager - Supply Chain Simulation", layout="wide", page_icon="✅")
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
 
-# Initialisiere Session State falls nicht vorhanden
-if 'scenario_manager' not in st.session_state:
-    st.session_state.scenario_manager = ScenarioManager()
-if 'results_df' not in st.session_state:
-    st.session_state.results_df = None
-if 'kpis' not in st.session_state:
-    st.session_state.kpis = None
-if 'happy_path_run' not in st.session_state:
-    st.session_state.happy_path_run = False
-if 'yearly_volume' not in st.session_state:
-    st.session_state.yearly_volume = 370000
+# Initialisiere Session State
+initialize_session_state()
 
 st.title("✅ Fertigproduktelager")
 st.markdown("Übersicht über Fertigproduktbestände nach Produkten")
 
 # Happy Path: Automatische Simulation wenn noch keine Ergebnisse vorhanden
-if not st.session_state.happy_path_run and st.session_state.results_df is None:
-    try:
-        with st.spinner("🔄 Happy Path Simulation wird ausgeführt..."):
-            vol = st.session_state.get('yearly_volume', 370000)
-            simulator = Simulator(
-                yearly_volume=vol,
-                initial_stock_frames_alu=MasterData.DEFAULT_INITIAL_STOCK['frames_alu'],
-                initial_stock_frames_carbon=MasterData.DEFAULT_INITIAL_STOCK['frames_carbon'],
-                initial_stock_saddles=MasterData.DEFAULT_INITIAL_STOCK['saddles'],
-                scenario_manager=st.session_state.scenario_manager
-            )
-            results_df, kpis = simulator.run()
-            st.session_state.results_df = results_df
-            st.session_state.kpis = kpis
-            # Speichere auch den Simulator für Zugriff auf ChinaTransportManager
-            st.session_state.simulator = simulator
-            st.session_state.happy_path_run = True
-            st.rerun()
-    except Exception as e:
-        st.error(f"❌ Fehler bei der Simulation: {str(e)}")
-        st.exception(e)
-        st.session_state.happy_path_run = True
+run_happy_path_simulation()
 
 if st.session_state.results_df is None:
     st.warning("⚠️ Keine Simulationsergebnisse verfügbar.")
@@ -74,10 +45,11 @@ def create_finished_goods_log():
     
     for day in range(365):
         current_date = workday_calc.get_date_from_day(day)
-        weekday_name = workday_calc.get_weekday_name(day)
-        is_workday = workday_calc.is_workday(day)
-        is_holiday = not is_workday and weekday_name not in ['Samstag', 'Sonntag']
-        is_weekend = weekday_name in ['Samstag', 'Sonntag']
+        day_info = workday_calc.get_day_info(day)
+        weekday_name = day_info['weekday_name']
+        is_workday = day_info['is_workday']
+        is_holiday = day_info['is_holiday']
+        is_weekend = day_info['is_weekend']
         
         # Produktion und Versand
         actual_build = results_df.iloc[day]['Actual_Build']
@@ -110,7 +82,7 @@ def create_finished_goods_log():
             
             fg_logs[product].append({
                 'Wochentag': weekday_abbr,
-                'Datum': current_date.strftime('%d.%m.%Y'),
+                'Datum': current_date.strftime(MasterData.DATE_FORMAT),
                 'Lagerzugang': round(total_receipt, 1),
                 'Bestand (morgens)': round(stock_morning, 1),
                 'Lagerabgang': round(total_dispatch, 1),
@@ -125,25 +97,16 @@ def create_finished_goods_log():
 with st.spinner("🔄 Berechne Fertigproduktelager..."):
     fg_logs = create_finished_goods_log()
 
-# Zeit-Filter
-date_range_fg = st.date_input(
-    "Zeitraum",
-    value=(start_date, end_date),
-    min_value=start_date,
-    max_value=end_date,
-    key="fg_date_range"
-)
-
 # Zeige Tabelle für jedes Produkt
 for product in sorted(fg_logs.keys()):
     st.subheader(f"📋 {product}")
     
     df_fg = fg_logs[product]
     
-    # Filtere nach Zeitraum
+    # Filtere auf den Standard-Zeitraum (2026)
     df_fg_filtered = df_fg[
-        (pd.to_datetime(df_fg['Datum'], format='%d.%m.%Y') >= pd.to_datetime(date_range_fg[0])) &
-        (pd.to_datetime(df_fg['Datum'], format='%d.%m.%Y') <= pd.to_datetime(date_range_fg[1]))
+        (pd.to_datetime(df_fg['Datum'], format='%d.%m.%Y') >= pd.to_datetime(start_date)) &
+        (pd.to_datetime(df_fg['Datum'], format='%d.%m.%Y') <= pd.to_datetime(end_date))
     ]
     
     # Speichere Flags für Wochenende und Feiertage
@@ -183,29 +146,6 @@ for product in sorted(fg_logs.keys()):
     
     styled_df = df_display.style.apply(style_row, axis=1)
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
-    
-    # Chart: Bestand über Zeit für dieses Produkt
-    st.write("**Bestand über Zeit**")
-    fig_stock = go.Figure()
-    
-    # Bestand abends über Zeit
-    fig_stock.add_trace(go.Scatter(
-        x=pd.to_datetime(df_fg_filtered['Datum'], format='%d.%m.%Y'),
-        y=df_fg_filtered['Bestand (abends)'],
-        name='Bestand (abends)',
-        mode='lines',
-        line=dict(color='#1f77b4', width=2),
-        fill='tozeroy'
-    ))
-    
-    fig_stock.update_layout(
-        xaxis_title="Datum",
-        yaxis_title="Bestand (Einheiten)",
-        height=300,
-        hovermode='x unified',
-        showlegend=True
-    )
-    st.plotly_chart(fig_stock, use_container_width=True, key=f"fg_stock_{product}")
     
     st.divider()
 

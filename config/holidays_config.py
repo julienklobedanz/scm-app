@@ -6,6 +6,7 @@ Verwaltet Feiertage für alle relevanten Länder
 import holidays
 from typing import Dict, List
 from datetime import date
+from config.master_data import MasterData
 
 
 class HolidaysConfig:
@@ -46,7 +47,7 @@ class HolidaysConfig:
             
             for holiday_date, holiday_name in sorted(country_holidays.items()):
                 holiday_list.append({
-                    'Datum': holiday_date.strftime('%d.%m.%Y'),
+                    'Datum': holiday_date.strftime(MasterData.DATE_FORMAT),
                     'Feiertag': holiday_name,
                     'Wochentag': holiday_date.strftime('%A')
                 })
