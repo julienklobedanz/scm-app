@@ -152,4 +152,3 @@ except Exception:
 3. **Wenn keine Fehler:** Warten Sie 5-10 Minuten
 4. **Wenn es immer noch hängt:** Fügen Sie Debug-Ausgaben hinzu (siehe oben)
 
-
