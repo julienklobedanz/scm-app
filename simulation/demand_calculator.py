@@ -81,6 +81,12 @@ class DemandCalculator:
         """
         Berechnet tägliche Nachfrage für ein spezifisches Produkt mit Carry-Over-Logik
         
+        Excel-Formel-Logik:
+        - Wenn Wochenende oder Feiertag: 0 (Rest bleibt unverändert vom letzten Arbeitstag)
+        - Sonst: ABRUNDEN((Base * Share / AT) + Rest; 0) + Marketing-Add-on
+        - Rest für nächsten Tag: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
+        - Wenn vorheriger Tag 0 war: Rest vom Vortag übernommen (nicht neu berechnet)
+        
         Args:
             day: Tag (0-basiert)
             product: Produktname
@@ -91,25 +97,28 @@ class DemandCalculator:
             Ganzzahlige Nachfrage (int)
         """
         month = self.master_data.get_month_from_day(day)
-        is_weekend = self.workday_calculator.is_weekend(day)
+        is_workday = self.workday_calculator.is_workday(day)
         
         # Wenn Monat gewechselt, berechne neue Base_Daily_Float
         if self.current_month != month:
             self._calculate_monthly_base_daily_float(month)
             self.current_month = month
         
-        # KORREKTUR: Bedarf wird auch an deutschen Feiertagen berechnet, wenn es ein Wochentag ist
-        # Nur Wochenende (Sa/So) führt zu 0 Bedarf
-        if is_weekend:
+        # Excel-Formel: WENN(ODER(L$81="Sa.";L$81="So.";L$83<>"");0;...)
+        # Wenn Wochenende oder Feiertag: 0 (Rest bleibt unverändert)
+        if not is_workday:
+            # Rest bleibt unverändert vom letzten Arbeitstag (wird nicht aktualisiert)
             return 0
         
         # Hole Base_Daily_Float für dieses Produkt
         base_daily_float = self.monthly_base_daily_float[month].get(product, 0.0)
         
-        # Apply Carry-Over: Add remainder from previous day
+        # Apply Carry-Over: Add remainder from previous workday
+        # Excel-Formel: Rest wird vom VORHERIGEN Arbeitstag übernommen
+        # Wenn der vorherige Tag ein Feiertag/Wochenende war, bleibt der Rest unverändert
         remainder = self.product_remainders.get(product, 0.0)
         
-        # Excel-Formel: Marketing-Add-on + ABRUNDEN(Base + Rest; 0)
+        # Excel-Formel: ABRUNDEN((Base * Share / AT) + Rest; 0)
         # 1. Base + Rest zusammenfassen
         base_with_remainder = base_daily_float + remainder
         
@@ -129,35 +138,19 @@ class DemandCalculator:
         daily_target_int = int(daily_target_float)
         
         # 6. Berechne neuen Rest (nur aus Base + Rest, Marketing-Add-on wird nicht in Rest übernommen)
-        # Am letzten Tag: Rest wird auf 0 gesetzt, da er bereits produziert wurde
+        # Excel-Formel: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
+        # Wenn Ergebnis < 0, dann 0 (sollte nicht vorkommen, aber sicherheitshalber)
         if is_last_workday_of_year:
             new_remainder = 0.0
         else:
             new_remainder = base_with_remainder - rounded_base
+            if new_remainder < 0:
+                new_remainder = 0.0
         
-        # Update remainder
+        # Update remainder (nur an Arbeitstagen)
         self.product_remainders[product] = new_remainder
         
         return daily_target_int
-    
-    def calculate_daily_demand(self, day: int, marketing_add_ons: Dict[str, float] = None) -> float:
-        """
-        Berechnet die gesamte tägliche Nachfrage (Summe aller Produkte)
-        
-        Args:
-            day: Tag (0-basiert)
-            marketing_add_ons: Optional dict mit Marketing-Add-ons pro Produkt
-        """
-        if marketing_add_ons is None:
-            marketing_add_ons = {}
-        
-        total_demand = 0.0
-        for product in self.master_data.BOM.keys():
-            add_on = marketing_add_ons.get(product, 0.0)
-            product_demand = self.calculate_daily_demand_per_product(day, product, add_on)
-            total_demand += product_demand
-        
-        return total_demand
     
     def get_demand_for_future_day(self, day_index: int, marketing_add_ons: Dict[str, float] = None) -> Dict[str, int]:
         """

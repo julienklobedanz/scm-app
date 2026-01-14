@@ -11,7 +11,18 @@ from config.holidays_config import HolidaysConfig
 from models.scenarios import ScenarioManager
 from ui.scenario_sidebar import render_scenario_sidebar
 
-st.set_page_config(page_title="Stammdaten - Supply Chain Simulation", layout="wide", page_icon="📋")
+st.set_page_config(page_title="Stammdaten", layout="wide", page_icon="📋")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
@@ -47,7 +58,7 @@ with tab1:
             'Gabel': components['fork']
         })
     bom_df = pd.DataFrame(bom_data)
-    st.dataframe(bom_df, use_container_width=True, hide_index=True)
+    st.dataframe(bom_df, width='stretch', hide_index=True)
 
 with tab2:
     st.header("Planungs-Parameter")
@@ -62,7 +73,7 @@ with tab2:
             'Wert': value
         })
     config_df = pd.DataFrame(config_data)
-    st.dataframe(config_df, use_container_width=True, hide_index=True)
+    st.dataframe(config_df, width='stretch', hide_index=True)
     
     # Tägliche Arbeitslast
     st.subheader("Tägliche Arbeitslast")
@@ -73,7 +84,7 @@ with tab2:
             'Arbeitslast': workload
         })
     workload_df = pd.DataFrame(workload_data)
-    st.dataframe(workload_df, use_container_width=True, hide_index=True)
+    st.dataframe(workload_df, width='stretch', hide_index=True)
     
     # Verkaufsanteile
     st.subheader("Verkaufsanteile pro Produkt")
@@ -85,7 +96,7 @@ with tab2:
             'Anteil (dezimal)': share
         })
     sales_df = pd.DataFrame(sales_data)
-    st.dataframe(sales_df, use_container_width=True, hide_index=True)
+    st.dataframe(sales_df, width='stretch', hide_index=True)
     
     # Visualisierung Verkaufsanteile
     fig_sales = go.Figure(data=[go.Pie(
@@ -94,7 +105,7 @@ with tab2:
         hole=0.3
     )])
     fig_sales.update_traces(textposition='inside', textinfo='percent+label')
-    st.plotly_chart(fig_sales, use_container_width=True)
+    st.plotly_chart(fig_sales, width='stretch')
     
     # Saisonalität
     st.subheader("Saisonaler Produktionsverlauf")
@@ -112,7 +123,7 @@ with tab2:
             'Tage': MasterData.DAYS_PER_MONTH[month]
         })
     seasonality_df = pd.DataFrame(seasonality_data)
-    st.dataframe(seasonality_df[['Monat', 'Produktionsanteil', 'Tage']], use_container_width=True, hide_index=True)
+    st.dataframe(seasonality_df[['Monat', 'Produktionsanteil', 'Tage']], width='stretch', hide_index=True)
     
     # Visualisierung Saisonalität
     fig_seasonality = go.Figure()
@@ -128,7 +139,7 @@ with tab2:
         yaxis_title="Produktionsanteil (%)",
         height=400
     )
-    st.plotly_chart(fig_seasonality, use_container_width=True)
+    st.plotly_chart(fig_seasonality, width='stretch')
 
 with tab3:
     st.header("Märkte & Kunden")
@@ -157,7 +168,7 @@ with tab3:
                 'Transitzeit (Tage)': params['transit_days']
             })
         markets_df = pd.DataFrame(markets_data)
-        st.dataframe(markets_df[['Land', 'Code', 'Anteil (%)', 'Transitzeit (Tage)']], use_container_width=True, hide_index=True)
+        st.dataframe(markets_df[['Land', 'Code', 'Anteil (%)', 'Transitzeit (Tage)']], width='stretch', hide_index=True)
     
     with col2:
         # Visualisierung Marktverteilung
@@ -168,7 +179,7 @@ with tab3:
             hole=0.3
         )])
         fig_markets.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig_markets, use_container_width=True)
+        st.plotly_chart(fig_markets, width='stretch')
 
 with tab4:
     st.header("Auslieferung")
@@ -187,7 +198,7 @@ with tab4:
             'Losgröße': params['lot_size']
         })
     suppliers_df = pd.DataFrame(suppliers_data)
-    st.dataframe(suppliers_df, use_container_width=True, hide_index=True)
+    st.dataframe(suppliers_df, width='stretch', hide_index=True)
     
     st.divider()
     
@@ -205,14 +216,14 @@ with tab4:
             'Art': route['type']
         })
     delivery_df = pd.DataFrame(delivery_data)
-    st.dataframe(delivery_df, use_container_width=True, hide_index=True)
+    st.dataframe(delivery_df, width='stretch', hide_index=True)
     
     # Gruppierung nach Ziel
     st.subheader("Auslieferung nach Ziel")
     for destination in delivery_df['Ziel'].unique():
         with st.expander(f"📦 {destination}"):
             dest_routes = delivery_df[delivery_df['Ziel'] == destination]
-            st.dataframe(dest_routes, use_container_width=True, hide_index=True)
+            st.dataframe(dest_routes, width='stretch', hide_index=True)
 
 with tab5:
     st.header("Beschaffung")
@@ -231,14 +242,14 @@ with tab5:
             'Dauer Standard': route.get('standard_duration', route['duration'])
         })
     procurement_df = pd.DataFrame(procurement_data)
-    st.dataframe(procurement_df, use_container_width=True, hide_index=True)
+    st.dataframe(procurement_df, width='stretch', hide_index=True)
     
     # Gruppierung nach Lieferant
     st.subheader("Beschaffung nach Lieferant")
     for supplier in procurement_df['Lieferant'].unique():
         with st.expander(f"🏭 {supplier}"):
             supp_routes = procurement_df[procurement_df['Lieferant'] == supplier]
-            st.dataframe(supp_routes, use_container_width=True, hide_index=True)
+            st.dataframe(supp_routes, width='stretch', hide_index=True)
 
 with tab6:
     st.header("Feiertage")
@@ -265,7 +276,7 @@ with tab6:
             
             if holidays_list:
                 holidays_df = pd.DataFrame(holidays_list)
-                st.dataframe(holidays_df, use_container_width=True, hide_index=True)
+                st.dataframe(holidays_df, width='stretch', hide_index=True)
             else:
                 st.info(f"Keine Feiertagsdaten verfügbar für {country_name}")
         
@@ -279,7 +290,7 @@ with tab6:
                 'Anzahl Feiertage': len(holidays_list)
             })
         summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        st.dataframe(summary_df, width='stretch', hide_index=True)
         
     except Exception as e:
         st.error(f"Fehler beim Laden der Feiertage: {str(e)}")

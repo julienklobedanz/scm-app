@@ -14,7 +14,18 @@ from models.scenarios import ScenarioManager
 from simulation.workday_calculator import WorkdayCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
 
-st.set_page_config(page_title="Materiallager - Supply Chain Simulation", layout="wide", page_icon="📦")
+st.set_page_config(page_title="Materiallager", layout="wide", page_icon="📦")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 render_scenario_sidebar()
 
@@ -225,11 +236,11 @@ def create_saddle_inventory_log():
             saddle_logs[s].append({
                 'Wochentag': weekday_abbr,
                 'Datum': current_date.strftime(MasterData.DATE_FORMAT),
-                'Lagerzugang': round(receipt_by_saddle.get(s, 0.0), 1) if receipt_by_saddle.get(s, 0.0) > 0 else 0,
-                'Bestand morgens': round(stock_morning[s], 1),
-                'Lagerabgang': round(actual_issue, 1),  # Begrenzt auf verfügbaren Bestand
+                'Lagerzugang': int(round(receipt_by_saddle.get(s, 0.0))) if receipt_by_saddle.get(s, 0.0) > 0 else 0,
+                'Bestand morgens': int(round(stock_morning[s])),
+                'Lagerabgang': int(round(actual_issue)),  # Begrenzt auf verfügbaren Bestand
                 'Verlustmenge': 0,
-                'Bestand abends': round(stock_evening[s], 1),
+                'Bestand abends': int(round(stock_evening[s])),
                 'Is_Weekend': is_weekend,
                 'Is_Holiday': is_holiday
             })
@@ -276,5 +287,5 @@ for saddle_type in sorted(saddle_logs.keys()):
         </div>
         """, unsafe_allow_html=True)
     
-    st.dataframe(df_filt[cols].style.apply(style_row_safe, axis=1), use_container_width=True, hide_index=True)
+    st.dataframe(df_filt[cols].style.apply(style_row_safe, axis=1), width='stretch', hide_index=True)
     st.divider()

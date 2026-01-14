@@ -12,7 +12,18 @@ from config.master_data import MasterData
 from ui.scenario_sidebar import render_scenario_sidebar
 from ui.utils import initialize_session_state, create_simulator
 
-st.set_page_config(page_title="SCM App", layout="wide", page_icon="📊")
+st.set_page_config(page_title="App", layout="wide", page_icon="📊")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Initialisiere Session State
 initialize_session_state()
@@ -154,8 +165,13 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     
     inbound_metrics = calculate_inbound_metrics()
     inbound_df = pd.DataFrame(inbound_metrics).T
-    inbound_df = inbound_df.round(2)
-    st.dataframe(inbound_df, use_container_width=True)
+    # Formatierung: Ganze Zahlen für Zählungen, 2 Dezimalstellen für % und Durchschnitt
+    for col in inbound_df.columns:
+        if '%' not in col and 'durchschnittliche' not in col:
+            inbound_df[col] = inbound_df[col].astype(int)
+        else:
+            inbound_df[col] = inbound_df[col].round(2)
+    st.dataframe(inbound_df, width='stretch')
     
     st.divider()
     
@@ -216,8 +232,13 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     
     outbound_metrics = calculate_outbound_metrics()
     outbound_df = pd.DataFrame(outbound_metrics).T
-    outbound_df = outbound_df.round(2)
-    st.dataframe(outbound_df, use_container_width=True)
+    # Formatierung: Ganze Zahlen für Zählungen, 2 Dezimalstellen für %
+    for col in outbound_df.columns:
+        if '%' not in col:
+            outbound_df[col] = outbound_df[col].astype(int)
+        else:
+            outbound_df[col] = outbound_df[col].round(2)
+    st.dataframe(outbound_df, width='stretch')
     
     st.divider()
     
@@ -272,7 +293,13 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     
     source_metrics = calculate_source_cycle_time()
     source_df = pd.DataFrame(source_metrics).T
-    st.dataframe(source_df, use_container_width=True)
+    # Formatierung: Ganze Zahlen für Tage, 2 Dezimalstellen für Durchschnitt
+    for col in source_df.columns:
+        if 'durchschnittliche' in col.lower():
+            source_df[col] = source_df[col].round(2)
+        else:
+            source_df[col] = source_df[col].astype(int)
+    st.dataframe(source_df, width='stretch')
     
     st.divider()
     
@@ -325,7 +352,13 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     
     delivery_metrics = calculate_delivery_cycle_time()
     delivery_df = pd.DataFrame(delivery_metrics).T
-    st.dataframe(delivery_df, use_container_width=True)
+    # Formatierung: Ganze Zahlen für Tage, 2 Dezimalstellen für Durchschnitt
+    for col in delivery_df.columns:
+        if 'durchschnittliche' in col.lower():
+            delivery_df[col] = delivery_df[col].round(2)
+        else:
+            delivery_df[col] = delivery_df[col].astype(int)
+    st.dataframe(delivery_df, width='stretch')
     
     st.divider()
     
@@ -374,7 +407,13 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     
     fulfillment_metrics = calculate_order_fulfillment_cycle_time()
     fulfillment_df = pd.DataFrame(fulfillment_metrics).T
-    st.dataframe(fulfillment_df, use_container_width=True)
+    # Formatierung: Ganze Zahlen für Tage, 2 Dezimalstellen für Durchschnitt
+    for col in fulfillment_df.columns:
+        if 'durchschnittliche' in col.lower():
+            fulfillment_df[col] = fulfillment_df[col].round(2)
+        else:
+            fulfillment_df[col] = fulfillment_df[col].astype(int)
+    st.dataframe(fulfillment_df, width='stretch')
 
 else:
     st.info("🔄 Die Simulation wird automatisch gestartet...")

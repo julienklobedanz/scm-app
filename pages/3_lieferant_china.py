@@ -18,6 +18,17 @@ from ui.utils import initialize_session_state, run_happy_path_simulation, ensure
 
 st.set_page_config(page_title="Lieferant China", page_icon="🇨🇳", layout="wide")
 
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
 
@@ -47,7 +58,7 @@ for saddle_type in all_saddle_types:
     
     # Rufe die neue Methode aus dem ChinaTransportManager auf
     # Übergebe demand_calculator für korrekte Bestelleingang-Berechnung
-    df = manager.get_supplier_log_dataframe(saddle_type, saddle_shares[saddle_type], demand_calculator)
+    df = manager.get_supplier_log_dataframe(saddle_type, saddle_shares[saddle_type])
     
     if not df.empty:
         # Spaltenreihenfolge sicherstellen
@@ -74,7 +85,7 @@ for saddle_type in all_saddle_types:
             return styles
         
         styled_df = df_display.style.apply(style_row, axis=1)
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(styled_df, width='stretch', hide_index=True)
     else:
         st.info(f"Keine Daten für {saddle_type} vorhanden.")
     

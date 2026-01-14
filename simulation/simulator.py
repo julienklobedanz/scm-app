@@ -128,14 +128,15 @@ class Simulator:
         """
         Warm-Up Phase: Simuliert die Logistik für Tage vor Simulationsbeginn (-49 bis -1).
         Damit werden Schiffe bereits im Dezember abfahren, wenn >= 500 erreicht sind.
+        OPTIMIERT: Nur Mittwoche verarbeiten (Schiffe fahren nur Mittwochs).
         """
         warmup_start = -49  # 49 Tage vor Tag 0
         
-        # Simuliere jeden Tag von -49 bis -1
+        # OPTIMIERUNG: Nur Mittwoche verarbeiten (Schiffe fahren nur Mittwochs)
         for sim_day in range(warmup_start, 0):
-            # Prüfe, ob an diesem Tag ein Schiff fahren würde (nur Mittwochs)
-            # Das triggert process_shipments an Mittwochen im Dez 2026
-            self.china_transport_manager.process_shipments(sim_day)
+            date_obj = self.workday_calculator.get_date_from_day(sim_day)
+            if date_obj.weekday() == 2:  # Mittwoch
+                self.china_transport_manager.process_shipments(sim_day)
     
     def _place_initial_orders(self) -> None:
         """

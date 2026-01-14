@@ -55,7 +55,7 @@ def render_inventory_chart(results_df: pd.DataFrame) -> None:
         hovermode='x unified',
         height=400
     )
-    st.plotly_chart(fig_inventory, use_container_width=True)
+    st.plotly_chart(fig_inventory, width='stretch')
 
 
 def render_backlog_chart_de(results_df: pd.DataFrame) -> None:
@@ -78,7 +78,7 @@ def render_backlog_chart_de(results_df: pd.DataFrame) -> None:
         hovermode='x unified',
         height=400
     )
-    st.plotly_chart(fig_backlog, use_container_width=True)
+    st.plotly_chart(fig_backlog, width='stretch')
 
 
 def render_backlog_chart_all(results_df: pd.DataFrame) -> None:
@@ -103,7 +103,7 @@ def render_backlog_chart_all(results_df: pd.DataFrame) -> None:
         hovermode='x unified',
         height=400
     )
-    st.plotly_chart(fig_backlog_all, use_container_width=True)
+    st.plotly_chart(fig_backlog_all, width='stretch')
 
 
 def render_production_chart(results_df: pd.DataFrame) -> None:
@@ -131,5 +131,5 @@ def render_production_chart(results_df: pd.DataFrame) -> None:
         hovermode='x unified',
         height=400
     )
-    st.plotly_chart(fig_production, use_container_width=True)
+    st.plotly_chart(fig_production, width='stretch')
 

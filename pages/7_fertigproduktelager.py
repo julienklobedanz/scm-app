@@ -14,7 +14,18 @@ from simulation.workday_calculator import WorkdayCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
 from ui.utils import initialize_session_state, run_happy_path_simulation
 
-st.set_page_config(page_title="Fertigproduktelager - Supply Chain Simulation", layout="wide", page_icon="✅")
+st.set_page_config(page_title="Fertigproduktelager", layout="wide", page_icon="✅")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
@@ -145,7 +156,7 @@ for product in sorted(fg_logs.keys()):
         return [''] * len(row)
     
     styled_df = df_display.style.apply(style_row, axis=1)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    st.dataframe(styled_df, width='stretch', hide_index=True)
     
     st.divider()
 

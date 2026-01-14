@@ -14,7 +14,18 @@ from simulation.workday_calculator import WorkdayCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
 from ui.utils import initialize_session_state, run_happy_path_simulation
 
-st.set_page_config(page_title="Produktion - Supply Chain Simulation", layout="wide", page_icon="🏭")
+st.set_page_config(page_title="Produktion", layout="wide", page_icon="🏭")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
@@ -145,7 +156,7 @@ for product in sorted(production_logs.keys()):
     # Zeige Tabelle
     st.dataframe(
         df_display.style.apply(style_row_safe, axis=1),
-        use_container_width=True,
+        width='stretch',
         hide_index=True
     )
     

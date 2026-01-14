@@ -15,7 +15,18 @@ from simulation.workday_calculator import WorkdayCalculator
 from simulation.demand_calculator import DemandCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
 
-st.set_page_config(page_title="Volumenplanung - Supply Chain Simulation", layout="wide", page_icon="📅")
+st.set_page_config(page_title="Volumenplanung", layout="wide", page_icon="📅")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Initialisiere ScenarioManager falls nicht vorhanden
 if 'scenario_manager' not in st.session_state:
@@ -122,6 +133,53 @@ with tab1:
     start_date = date(2026, 1, 1)
     end_date = date(2026, 12, 31)
     
+    # KRITISCH: Berechne Nachfrage für ALLE Tage sequenziell (für korrekte Carry-Over-Logik)
+    # Die DemandCalculator-Instanzen haben einen Zustand (product_remainders), der sequenziell aktualisiert werden muss
+    # WICHTIG: Berechne für alle Produkte gleichzeitig, damit der Rest korrekt weitergegeben wird
+    daily_demands_planned = {}  # day -> {product -> demand}
+    daily_demands_actual = {}   # day -> {product -> demand}
+    
+    # Berechne Nachfrage für alle 365 Tage sequenziell
+    for day in range(365):
+        daily_demands_planned[day] = {}
+        daily_demands_actual[day] = {}
+        
+        is_workday = workday_calc.is_workday(day)
+        
+        if is_workday:
+            # Berechne Marketing-Add-ons (wenn vorhanden)
+            marketing_add_ons = {}
+            scenario_manager = st.session_state.get('scenario_manager', ScenarioManager())
+            marketing_scenarios = scenario_manager.get_marketing_scenarios(day)
+            
+            if marketing_scenarios:
+                month = MasterData.get_month_from_day(day)
+                base_daily_floats = demand_calculator_actual._calculate_monthly_base_daily_float(month)
+                
+                for scenario in marketing_scenarios:
+                    factor = scenario.demand_increase_factor
+                    for product in MasterData.BOM.keys():
+                        base_float = base_daily_floats.get(product, 0.0)
+                        add_on = base_float * (factor - 1.0)
+                        if product not in marketing_add_ons:
+                            marketing_add_ons[product] = 0.0
+                        marketing_add_ons[product] += add_on
+            
+            # Berechne Nachfrage für alle Produkte gleichzeitig (wichtig für korrekte Carry-Over-Logik)
+            # Geplante Nachfrage (ohne Marketing)
+            planned_demands = demand_calculator_planned.calculate_daily_demand_per_product_dict(day, {})
+            # Tatsächliche Nachfrage (mit Marketing)
+            actual_demands = demand_calculator_actual.calculate_daily_demand_per_product_dict(day, marketing_add_ons)
+            
+            for product in MasterData.BOM.keys():
+                daily_demands_planned[day][product] = planned_demands.get(product, 0)
+                daily_demands_actual[day][product] = actual_demands.get(product, 0)
+        else:
+            # An Feiertagen/Wochenenden: Alle Nachfragen sind 0
+            for product in MasterData.BOM.keys():
+                daily_demands_planned[day][product] = 0
+                daily_demands_actual[day][product] = 0
+    
     # Berechne letzte Kalenderwoche des Jahres
     last_week = get_week_number(end_date)
     
@@ -142,8 +200,8 @@ with tab1:
         # Start der gewünschten Woche
         week_start = first_monday + timedelta(weeks=week_num - 1)
         
-        # Berechne Nachfrage für alle Tage der Woche (geplant und tatsächlich)
-        # WICHTIG: Nur Tage berücksichtigen, die tatsächlich im Jahr 2026 liegen
+        # Aggregiere Nachfrage für alle Tage der Woche (aus bereits berechneten Daten)
+        # WICHTIG: Nutze die sequenziell berechneten Nachfragen (für korrekte Carry-Over-Logik)
         week_demand_planned = {}
         week_demand_actual = {}
         total_week_demand_planned = 0.0
@@ -156,12 +214,16 @@ with tab1:
             if current_date.year == 2026:
                 day_of_year = (current_date - start_date).days
                 if 0 <= day_of_year < 365:
+                    # Nutze bereits berechnete Nachfragen (sequenziell berechnet)
+                    day_planned = daily_demands_planned.get(day_of_year, {})
+                    day_actual = daily_demands_actual.get(day_of_year, {})
+                    
                     day_total_planned = 0.0
                     day_total_actual = 0.0
+                    
                     for product in MasterData.BOM.keys():
-                        # Berechne geplante und tatsächliche Nachfrage
-                        planned_demand = calculate_product_demand(day_of_year, product, include_marketing=False)
-                        actual_demand = calculate_product_demand(day_of_year, product, include_marketing=True)
+                        planned_demand = day_planned.get(product, 0)
+                        actual_demand = day_actual.get(product, 0)
                         
                         if product not in week_demand_planned:
                             week_demand_planned[product] = 0.0
@@ -175,6 +237,7 @@ with tab1:
                     
                     total_week_demand_planned += day_total_planned
                     total_week_demand_actual += day_total_actual
+                    
                     # Nur Arbeitstage für Kapazitätsberechnung (verwende tatsächliche Nachfrage)
                     if workday_calc.is_workday(day_of_year):
                         daily_demands.append(day_total_actual)
@@ -270,8 +333,37 @@ with tab1:
     
     display_weekly_df = pd.DataFrame(data_dict, columns=multi_index)
     
+    # Berechne Summenzeile
+    sum_row = {}
+    sum_row[('', 'Kalenderwoche')] = 'Summe'
+    sum_row[('', 'Schichten')] = ''
+    
+    for product in MasterData.BOM.keys():
+        sum_row[(product, 'Geplanter Bedarf')] = display_weekly_df[(product, 'Geplanter Bedarf')].sum()
+        sum_row[(product, 'Tatsächlicher Bedarf')] = display_weekly_df[(product, 'Tatsächlicher Bedarf')].sum()
+    
+    sum_row[('Gesamt', 'Geplanter Bedarf')] = display_weekly_df[('Gesamt', 'Geplanter Bedarf')].sum()
+    sum_row[('Gesamt', 'Tatsächlicher Bedarf')] = display_weekly_df[('Gesamt', 'Tatsächlicher Bedarf')].sum()
+    
+    # Füge Summenzeile hinzu
+    sum_df = pd.DataFrame([sum_row], columns=multi_index)
+    display_weekly_df_with_sum = pd.concat([display_weekly_df, sum_df], ignore_index=True)
+    
+    # Styling für Summenzeile
+    def style_weekly_row(row):
+        """Styling-Funktion für wöchentliche Tabelle"""
+        row_idx = row.name
+        if row_idx < len(display_weekly_df):
+            # Normale Zeile: kein spezielles Styling
+            return [''] * len(row)
+        else:
+            # Summenzeile: Fett markieren
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+    
+    styled_weekly_df = display_weekly_df_with_sum.style.apply(style_weekly_row, axis=1)
+    
     # Zeige Tabelle
-    st.dataframe(display_weekly_df, use_container_width=True, hide_index=True)
+    st.dataframe(styled_weekly_df, width='stretch', hide_index=True)
     
     # Visualisierung der Schichten
     st.subheader("Schichten-Visualisierung")
@@ -292,7 +384,7 @@ with tab1:
         height=300,
         yaxis=dict(range=[0, 4], tickmode='linear', tick0=0, dtick=1)
     )
-    st.plotly_chart(fig_shifts, use_container_width=True)
+    st.plotly_chart(fig_shifts, width='stretch')
     
     # Vergleich aller Fahrräder über die Kalenderwochen
     st.subheader("Fahrrad-Vergleich über Kalenderwochen")
@@ -334,7 +426,7 @@ with tab1:
             x=1.02
         )
     )
-    st.plotly_chart(fig_products, use_container_width=True)
+    st.plotly_chart(fig_products, width='stretch')
     
     # Zusätzlich: Stacked Bar Chart für besseren Vergleich
     st.subheader("Fahrrad-Vergleich (Gestapelt)")
@@ -363,7 +455,7 @@ with tab1:
             x=1.02
         )
     )
-    st.plotly_chart(fig_stacked, use_container_width=True)
+    st.plotly_chart(fig_stacked, width='stretch')
 
 with tab2:
     st.header("Tägliche Volumenplanung")
@@ -406,21 +498,29 @@ with tab2:
         is_non_workday = not is_workday or is_holiday or is_weekend
         
         # Berechne geplante und tatsächliche Nachfrage für alle Produkte
+        # KRITISCH: An Feiertagen/Wochenenden ist die Nachfrage 0
         product_demands_planned = {}
         product_demands_actual = {}
         total_demand_planned = 0.0
         total_demand_actual = 0.0
         
-        for product in MasterData.BOM.keys():
-            # Geplanter Bedarf (ohne Marketing)
-            planned_demand = calculate_product_demand(day, product, include_marketing=False)
-            # Tatsächlicher Bedarf (mit Marketing)
-            actual_demand = calculate_product_demand(day, product, include_marketing=True)
-            
-            product_demands_planned[product] = planned_demand
-            product_demands_actual[product] = actual_demand
-            total_demand_planned += planned_demand
-            total_demand_actual += actual_demand
+        # Nur an Arbeitstagen Nachfrage berechnen
+        if is_workday:
+            for product in MasterData.BOM.keys():
+                # Geplanter Bedarf (ohne Marketing)
+                planned_demand = calculate_product_demand(day, product, include_marketing=False)
+                # Tatsächlicher Bedarf (mit Marketing)
+                actual_demand = calculate_product_demand(day, product, include_marketing=True)
+                
+                product_demands_planned[product] = planned_demand
+                product_demands_actual[product] = actual_demand
+                total_demand_planned += planned_demand
+                total_demand_actual += actual_demand
+        else:
+            # An Feiertagen/Wochenenden: Alle Nachfragen sind 0
+            for product in MasterData.BOM.keys():
+                product_demands_planned[product] = 0
+                product_demands_actual[product] = 0
         
         # Erstelle Basis-Row
         row = {
@@ -486,12 +586,42 @@ with tab2:
     
     display_df = pd.DataFrame(data_dict, columns=multi_index)
     
+    # Berechne Summenzeile
+    sum_row = {}
+    sum_row[('', 'Datum')] = 'Summe'
+    sum_row[('', 'Kalenderwoche')] = ''
+    
+    for product in MasterData.BOM.keys():
+        sum_row[(product, 'Geplanter Bedarf')] = display_df[(product, 'Geplanter Bedarf')].sum()
+        sum_row[(product, 'Tatsächlicher Bedarf')] = display_df[(product, 'Tatsächlicher Bedarf')].sum()
+    
+    sum_row[('Gesamt', 'Geplanter Bedarf')] = display_df[('Gesamt', 'Geplanter Bedarf')].sum()
+    sum_row[('Gesamt', 'Tatsächlicher Bedarf')] = display_df[('Gesamt', 'Tatsächlicher Bedarf')].sum()
+    
+    # Füge Summenzeile hinzu
+    sum_df = pd.DataFrame([sum_row], columns=multi_index)
+    display_df_with_sum = pd.concat([display_df, sum_df], ignore_index=True)
+    
+    # Erweitere daily_df um eine Dummy-Zeile für die Summenzeile
+    daily_df_with_sum = daily_df.copy()
+    dummy_row = daily_df.iloc[0].copy()
+    dummy_row['_is_non_workday'] = False
+    daily_df_with_sum = pd.concat([daily_df_with_sum, pd.DataFrame([dummy_row])], ignore_index=True)
+    
     # Wende Styling an (rote Markierung für Wochenenden/Feiertage)
-    styled_df = display_df.style.apply(
-        lambda row: ['background-color: #ffcccc' if daily_df.iloc[row.name]['_is_non_workday'] else '' for _ in row],
-        axis=1
-    )
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    def style_row_with_sum(row):
+        """Styling-Funktion die auch die Summenzeile berücksichtigt"""
+        row_idx = row.name
+        if row_idx < len(daily_df):
+            # Normale Zeile: Prüfe ob Feiertag/Wochenende
+            is_non_workday = daily_df.iloc[row_idx]['_is_non_workday']
+            return ['background-color: #ffcccc' if is_non_workday else '' for _ in row]
+        else:
+            # Summenzeile: Fett markieren
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+    
+    styled_df = display_df_with_sum.style.apply(style_row_with_sum, axis=1)
+    st.dataframe(styled_df, width='stretch', hide_index=True)
     
     # Visualisierung: Gestapeltes Balkendiagramm (tatsächlicher Bedarf)
     st.subheader("Tägliche Entwicklung (Tatsächlicher Bedarf)")
@@ -536,7 +666,7 @@ with tab2:
             x=1.02
         )
     )
-    st.plotly_chart(fig_daily, use_container_width=True)
+    st.plotly_chart(fig_daily, width='stretch')
     
     # Statistiken
     st.subheader("Statistiken")

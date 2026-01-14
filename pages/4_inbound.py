@@ -16,7 +16,18 @@ from simulation.demand_calculator import DemandCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
 from ui.utils import initialize_session_state, run_happy_path_simulation, ensure_simulator_available
 
-st.set_page_config(page_title="Inbound Logistik", page_icon="🚢", layout="wide")
+st.set_page_config(page_title="Inbound", page_icon="🚢", layout="wide")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
@@ -53,6 +64,6 @@ if not df.empty:
         return styles
     
     styled_df = df.style.apply(style_row, axis=1)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=800)
+    st.dataframe(styled_df, width='stretch', hide_index=True, height=800)
 else:
     st.info("Keine Inbound-Daten vorhanden.")

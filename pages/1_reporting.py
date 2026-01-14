@@ -14,7 +14,18 @@ from simulation.workday_calculator import WorkdayCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
 from ui.utils import initialize_session_state, run_happy_path_simulation
 
-st.set_page_config(page_title="Reporting - Supply Chain Simulation", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Reporting", layout="wide", page_icon="📊")
+
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+st.markdown("""
+<style>
+    /* Menüeinträge großgeschrieben und fett */
+    [data-testid="stSidebarNav"] a {
+        font-weight: bold !important;
+        text-transform: capitalize !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
@@ -49,14 +60,22 @@ def get_saddle_inventory_data():
     
     # Wenn nicht vorhanden, berechne sie jetzt
     if 'simulator' in st.session_state and st.session_state.simulator:
-        # Importiere die Funktion direkt
-        import importlib
-        import pages.materiallager as materiallager_module
+        # Importiere die Funktion direkt (Dateiname ist 5_materiallager.py)
+        import importlib.util
+        import os
         
-        # Rufe die Funktion auf, die material_inventory_data setzt
-        materiallager_module.create_saddle_inventory_log()
-        if 'material_inventory_data' in st.session_state:
-            return st.session_state.material_inventory_data
+        try:
+            # Lade Modul über Dateipfad (wegen Zahl im Namen)
+            module_path = os.path.join(os.path.dirname(__file__), "5_materiallager.py")
+            spec = importlib.util.spec_from_file_location("materiallager_module", module_path)
+            if spec and spec.loader:
+                materiallager_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(materiallager_module)
+                materiallager_module.create_saddle_inventory_log()
+                if 'material_inventory_data' in st.session_state:
+                    return st.session_state.material_inventory_data
+        except Exception as e:
+            st.warning(f"Konnte Materiallager-Daten nicht laden: {e}")
     
     return {}
 
@@ -142,7 +161,7 @@ if saddle_inventory_data:
         hovermode='x unified',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    st.plotly_chart(fig_saddles, use_container_width=True)
+    st.plotly_chart(fig_saddles, width='stretch')
 else:
     st.info("Keine Sattel-Bestandsdaten verfügbar.")
 
@@ -186,7 +205,7 @@ if bicycle_inventory_data:
         hovermode='x unified',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    st.plotly_chart(fig_bicycles, use_container_width=True)
+    st.plotly_chart(fig_bicycles, width='stretch')
 else:
     st.info("Keine Fahrrad-Bestandsdaten verfügbar.")
 
@@ -266,7 +285,7 @@ with col1:
         height=350,
         hovermode='x unified'
     )
-    st.plotly_chart(fig_total_backlog, use_container_width=True)
+    st.plotly_chart(fig_total_backlog, width='stretch')
 
 with col2:
     st.write("**Über-/Unterproduktion**")
@@ -289,7 +308,7 @@ with col2:
         hovermode='x unified',
         showlegend=False
     )
-    st.plotly_chart(fig_total_deviation, use_container_width=True)
+    st.plotly_chart(fig_total_deviation, width='stretch')
 
 st.divider()
 
@@ -339,7 +358,7 @@ for product in sorted(production_logs.keys()):
             height=350,
             hovermode='x unified'
         )
-        st.plotly_chart(fig_product_backlog, use_container_width=True)
+        st.plotly_chart(fig_product_backlog, width='stretch')
     
     with col2:
         fig_product_deviation = go.Figure()
@@ -361,6 +380,6 @@ for product in sorted(production_logs.keys()):
             hovermode='x unified',
             showlegend=False
         )
-        st.plotly_chart(fig_product_deviation, use_container_width=True)
+        st.plotly_chart(fig_product_deviation, width='stretch')
     
     st.divider()

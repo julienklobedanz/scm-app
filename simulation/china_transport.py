@@ -8,7 +8,6 @@ from datetime import date, timedelta
 import pandas as pd
 from models.inventory import Inventory
 from simulation.workday_calculator import WorkdayCalculator
-from simulation.demand_calculator import DemandCalculator
 from config.master_data import MasterData
 from models.scenarios import ScenarioManager, DeliveryProblemScenario
 
@@ -260,93 +259,6 @@ class ChinaTransportManager:
                     if self.pending_shipments[arrival_day] <= 0:
                         del self.pending_shipments[arrival_day]
     
-    def receive_orders(self, current_day: int) -> float:
-        """
-        Empfängt Bestellungen, die heute verfügbar werden
-        
-        Args:
-            current_day: Aktueller Tag (0-basiert)
-            
-        Returns:
-            Gesamtmenge der heute verfügbaren Bestellungen (nach Verlust)
-        """
-        # Zuerst Versände verarbeiten (falls Mittwoch)
-        self.process_shipments(current_day)
-        
-        total_received = 0.0
-        
-        for key, status in list(self.transport_status.items()):
-            if status['received']:
-                continue  # Bereits empfangen, überspringen
-            
-            # Berechne available_day deterministisch (wie in Inbound-Tabelle)
-            # Falls available_day noch nicht gesetzt ist, berechne es basierend auf truck_china_start_day
-            available_day = status.get('available_day')
-            
-            if available_day is None:
-                # Fallback: Berechne available_day deterministisch basierend auf truck_china_start_day
-                # (wie in get_inbound_log_dataframe)
-                truck_china_start_day = status.get('truck_china_start_day')
-                if truck_china_start_day is not None:
-                    # Berechne die Transportkette deterministisch
-                    arrival_at_port_day = status.get('arrival_at_port_day')
-                    if arrival_at_port_day is not None:
-                        # Finde nächsten Mittwoch nach Ankunft im Hafen
-                        arrival_date = self.workday_calculator.get_date_from_day(arrival_at_port_day)
-                        days_until_wednesday = (2 - arrival_date.weekday()) % 7
-                        if days_until_wednesday == 0 and arrival_date.weekday() != 2:
-                            days_until_wednesday = 7
-                        ship_departure_day = arrival_at_port_day + days_until_wednesday
-                        
-                        # Schiffsdauer + LKW DE
-                        ship_arrival_day = ship_departure_day + 30
-                        truck_de_start_day = ship_arrival_day
-                        truck_de_end_day = self._add_workdays(truck_de_start_day, 2)
-                        physical_arrival_day = truck_de_end_day
-                        available_day = physical_arrival_day + 1
-                        
-                        # Speichere für zukünftige Verwendung
-                        status['available_day'] = available_day
-            
-            # Prüfe, ob die Ware heute verfügbar wird
-            if available_day == current_day:
-                # Berechne empfangene Menge
-                if status.get('shipped', False):
-                    # Ware wurde bereits verschickt: actual_quantity enthält bereits Transportverlust
-                    # (wurde in process_shipments angewendet)
-                    received_qty = status['actual_quantity']
-                else:
-                    # Ware wurde noch nicht verschickt, aber laut deterministischer Logik kommt sie heute an
-                    # Das kann passieren, wenn process_shipments noch nicht gelaufen ist, aber die Ware
-                    # laut Transportkette heute ankommen sollte
-                    # Wende Transportverlust an (Container-Verlust passiert auf See)
-                    # Prüfe auf Lieferprobleme-Szenarien
-                    delivery_problems = []
-                    if self.scenario_manager and available_day is not None:
-                        # Berechne ship_departure_day für Szenarien
-                        arrival_at_port = status.get('arrival_at_port_day')
-                        if arrival_at_port is not None:
-                            arrival_date = self.workday_calculator.get_date_from_day(arrival_at_port)
-                            days_until_wednesday = (2 - arrival_date.weekday()) % 7
-                            if days_until_wednesday == 0 and arrival_date.weekday() != 2:
-                                days_until_wednesday = 7
-                            ship_dep_day = arrival_at_port + days_until_wednesday
-                            delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(ship_dep_day)
-                    
-                    # Berechne Verlustfaktor
-                    loss_factor = 1.0
-                    for scenario in delivery_problems:
-                        if scenario.component_type == 'saddles':
-                            loss_factor *= (1.0 - scenario.loss_percentage)
-                    
-                    # Wende Transportverlust an
-                    received_qty = status['actual_quantity'] * loss_factor
-                
-                total_received += received_qty
-                status['received'] = True
-        
-        return total_received
-    
     def _get_next_workday(self, start_day: int, use_chinese_holidays: bool = True) -> int:
         """
         Findet den nächsten Arbeitstag nach dem Start-Tag
@@ -453,7 +365,7 @@ class ChinaTransportManager:
                 total_pipeline += status.get('actual_quantity', status.get('quantity', 0.0))
         return total_pipeline
     
-    def get_supplier_log_dataframe(self, saddle_name: str, saddle_share: float, demand_calculator: Optional[DemandCalculator] = None, yearly_volume: float = 370000) -> pd.DataFrame:
+    def get_supplier_log_dataframe(self, saddle_name: str, saddle_share: float) -> pd.DataFrame:
         """
         Erstellt den DataFrame für Page 3 (Lieferant China).
         IMPLEMENTIERT DIE "ALTE" LOSGRÖSSEN-LOGIK:
@@ -465,8 +377,6 @@ class ChinaTransportManager:
         Args:
             saddle_name: Name des Sattels (z.B. "Fizik Tundra")
             saddle_share: Marktanteil dieses Sattels (wird für Produktion/Freigabe verwendet)
-            demand_calculator: Optional DemandCalculator für tägliche Bedarfsberechnung (wird nicht verwendet)
-            yearly_volume: Jahresvolumen (wird nicht verwendet)
         """
         # 1. Datenbasis vorbereiten
         if not self.transport_status:
@@ -634,14 +544,14 @@ class ChinaTransportManager:
             daily_data = {
                 'Wochentag': raw['weekday'],
                 'Datum': raw['date'].strftime(self.master_data.DATE_FORMAT),
-                'Bestelleingang': round(raw['order']) if raw['order'] > 0 else '',
+                'Bestelleingang': int(round(raw['order'])) if raw['order'] > 0 else '',
                 'Freigabedatum': raw['released_date_str'],
-                'Freigegebene Bestellungen': round(raw['release']) if raw['release'] > 0 else 0,
+                'Freigegebene Bestellungen': int(round(raw['release'])) if raw['release'] > 0 else 0,
                 'Störung': raw['breakdown'],
                 'Produktionsdatum': raw['production_date_str'],
-                'Produktionsmenge': round(raw['prod']) if raw['prod'] > 0 else 0,
-                'Warenausgang': round(shipment_results[day_idx]) if shipment_results[day_idx] > 0 else 0,
-                'Warenbestand': round(stock_results[day_idx])
+                'Produktionsmenge': int(round(raw['prod'])) if raw['prod'] > 0 else 0,
+                'Warenausgang': int(round(shipment_results[day_idx])) if shipment_results[day_idx] > 0 else 0,
+                'Warenbestand': int(round(stock_results[day_idx]))
             }
             table_rows.append(daily_data)
         
@@ -688,6 +598,7 @@ class ChinaTransportManager:
         
         # 2. Produktion sammeln (Der Zufluss in die Eimer)
         daily_prod_all = {day_idx: {s: 0.0 for s in all_saddles} for day_idx in range(total_days)}
+        last_production_day = -1  # OPTIMIERUNG: Track letzten Tag mit Produktion
         
         for (o_day, o_id), status in self.transport_status.items():
             p_day_sim = status.get('production_end_day')
@@ -700,6 +611,7 @@ class ChinaTransportManager:
                 # Wir lassen Produktion auch etwas vor/nach dem Zeitraum zu für den Fluss
                 if -20 <= day_offset < total_days + 20:
                     effective_day = max(0, min(day_offset, total_days - 1))
+                    last_production_day = max(last_production_day, effective_day)  # OPTIMIERUNG
                     
                     # Hier verteilen wir die Produktion in die spezifischen Sattel-Eimer
                     for s in all_saddles:
@@ -707,14 +619,27 @@ class ChinaTransportManager:
                         # Exakte Zuteilung in den Eimer
                         daily_prod_all[effective_day][s] += qty_produced * s_share
 
+        # OPTIMIERUNG: Bestimme letzten relevanten Tag
+        # Maximal ~40 Tage nach letzter Produktion können noch Transporte ankommen
+        max_transport_delay = 40
+        last_relevant_day = min(total_days - 1, last_production_day + max_transport_delay) if last_production_day >= 0 else total_days - 1
+
         # 3. Die Simulation der "Eimer" am Hafen (Buckets)
         port_buckets = {s: 0.0 for s in all_saddles}
         lot_size = self.master_data.CHINA_SUPPLIER['Saddles'].get('lot_size', 500)
         
         rows = []
-        # Wochentag-Abkürzungen werden jetzt über WorkdayCalculator geholt
+        # OPTIMIERUNG: Frühzeitiges Beenden wenn keine Daten mehr kommen
+        consecutive_empty_days = 0
+        max_consecutive_empty = 50  # Stoppe nach 50 leeren Tagen
 
         for day_idx in range(total_days):
+            # OPTIMIERUNG: Frühzeitiges Beenden wenn wir über den relevanten Bereich hinaus sind
+            if day_idx > last_relevant_day:
+                total_in_port = sum(port_buckets.values())
+                if total_in_port < lot_size:
+                    break  # Keine Transporte mehr möglich
+            
             curr_date = start_date + timedelta(days=day_idx)
             
             # A. Produktion kommt im Hafen an -> Rein in die Eimer
@@ -723,6 +648,17 @@ class ChinaTransportManager:
             
             # B. Check: Ist der Hafen voll genug für ein Schiff?
             total_in_port = sum(port_buckets.values())
+            
+            # OPTIMIERUNG: Track leere Tage für frühes Beenden
+            has_production_today = any(daily_prod_all[day_idx][s] > 0.001 for s in all_saddles)
+            has_transport_today = total_in_port >= lot_size
+            
+            if not has_production_today and not has_transport_today:
+                consecutive_empty_days += 1
+                if day_idx > last_production_day + max_transport_delay and consecutive_empty_days >= max_consecutive_empty:
+                    break
+            else:
+                consecutive_empty_days = 0
             
             # Wieviele Container können wir füllen?
             # Wir nehmen nur GANZE Container (500er Schritte)
@@ -774,12 +710,12 @@ class ChinaTransportManager:
                 row[s] = ''
 
             if is_transport_day:
-                row['Menge Gesamt'] = ship_qty_total
+                row['Menge Gesamt'] = int(round(ship_qty_total))
                 
-                # Fülle die exakten Werte ein
+                # Fülle die exakten Werte ein (als ganze Zahlen)
                 for s in saddle_shares_dict:
                     if s in shipments_today and shipments_today[s] > 0.001:
-                        row[s] = round(shipments_today[s], 1)
+                        row[s] = int(round(shipments_today[s]))
                 
                 # Datums-Berechnung für Ankunft (wie gehabt)
                 row['Abfahrt LKW (CN)'] = curr_date.strftime(self.master_data.DATE_FORMAT)
