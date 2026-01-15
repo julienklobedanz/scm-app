@@ -1,0 +1,297 @@
+@startuml Supply Chain Simulation - UML Diagramm
+
+!define SIMULATION_COLOR #E1F5FF
+!define MODEL_COLOR #FFF4E1
+!define CONFIG_COLOR #E8F5E9
+!define UI_COLOR #F3E5F5
+
+package "simulation" SIMULATION_COLOR {
+    class Simulator {
+        - yearly_volume: float
+        - master_data: MasterData
+        - scenario_manager: ScenarioManager
+        - inventory: Inventory
+        - backlog: MarketBacklog
+        - workday_calculator: WorkdayCalculator
+        - demand_calculator: DemandCalculator
+        - china_transport_manager: ChinaTransportManager
+        - production_planner: ProductionPlanner
+        - procurement_manager: ProcurementManager
+        + __init__(yearly_volume, initial_stock_*, scenario_manager)
+        + run() : tuple[DataFrame, Dict]
+        - _place_initial_orders()
+        - _warmup_logistics()
+        - _initialize_stock_from_inbound()
+        - _calculate_scor_metrics()
+    }
+    
+    class DemandCalculator {
+        - yearly_volume: float
+        - master_data: MasterData
+        - workday_calculator: WorkdayCalculator
+        - product_remainders: Dict[str, float]
+        - monthly_base_daily_float: Dict[int, Dict[str, float]]
+        - current_month: int
+        + __init__(yearly_volume, workday_calculator)
+        + _calculate_monthly_base_daily_float(month) : Dict[str, float]
+        + calculate_daily_demand_per_product(day, product, marketing_add_on, is_last_workday_of_year) : int
+        + calculate_daily_demand_per_product_dict(day, marketing_add_ons) : Dict[str, int]
+        + aggregate_bom_demand(product_demands) : Tuple[Dict[str, float], float]
+        + get_demand_for_future_day(day_index, marketing_add_ons) : Dict[str, int]
+    }
+    
+    class ProductionPlanner {
+        - inventory: Inventory
+        - master_data: MasterData
+        - demand_calculator: DemandCalculator
+        - workday_calculator: WorkdayCalculator
+        - china_transport_manager: ChinaTransportManager
+        - backlog: Dict[str, float]
+        - production_plan: Dict[int, Dict[str, int]]
+        - production_logs: Dict[str, list]
+        - _inbound_stock_cache: Dict[int, Dict[str, float]]
+        - _consumption_by_saddle: Dict[str, float]
+        + __init__(inventory, demand_calculator, workday_calculator, china_transport_manager)
+        + plan_daily_production(day, marketing_add_ons, scenario_manager) : Dict[str, int]
+        - _log_production(day, product, planned_pm, actual_qty, finished_pm, backlog, utilization, stock_saddle_specific)
+        + get_production_logs() : Dict[str, list]
+    }
+    
+    class ProcurementManager {
+        - inventory: Inventory
+        - china_transport_manager: ChinaTransportManager
+        - workday_calculator: WorkdayCalculator
+        + __init__(inventory, china_transport_manager, workday_calculator)
+        + process_procurement(day)
+    }
+    
+    class ChinaTransportManager {
+        - inventory: Inventory
+        - workday_calculator: WorkdayCalculator
+        - scenario_manager: ScenarioManager
+        - master_data: MasterData
+        - port_buckets: Dict[str, float]
+        - shipment_schedule: List
+        + __init__(inventory, workday_calculator, scenario_manager)
+        + process_shipments(day)
+        + get_supplier_log_dataframe(saddle_name, saddle_share) : DataFrame
+        + get_inbound_log_dataframe(saddle_name, saddle_share) : DataFrame
+        - _get_next_workday(start_day, use_chinese_holidays) : int
+        - _add_workdays(start_day, num_workdays, exclude_start, use_chinese_holidays) : int
+    }
+    
+    class WorkdayCalculator {
+        - year: int
+        - holidays_de: Dict[date, str]
+        - holidays_cn: Dict[date, str]
+        + __init__(year)
+        + is_workday(day) : bool
+        + is_weekend(day) : bool
+        + get_date_from_day(day) : date
+    }
+}
+
+package "models" MODEL_COLOR {
+    class Inventory {
+        + stock_alu: float
+        + stock_carbon: float
+        + stock_saddles: float
+        + add_stock(component_type, quantity)
+        + remove_stock(component_type, quantity)
+        + get_stock(component_type) : float
+    }
+    
+    class MarketBacklog {
+        - backlog: Dict[str, float]
+        - in_transit: Dict[int, Dict[str, float]]
+        + __init__()
+        + initialize_markets(markets)
+        + add_demand(day, market, product, quantity)
+        + fulfill_demand(day, market, product, quantity)
+        + get_backlog(day, market, product) : float
+    }
+    
+    class Scenario {
+        <<abstract>>
+        + name: str
+        + start_day: int
+        + end_day: int
+        + active: bool
+    }
+    
+    class MarketingCampaignScenario {
+        + demand_increase_factor: float
+    }
+    
+    class WarehouseDamageScenario {
+        + stock_loss_percentage: float
+        + affected_component: str
+    }
+    
+    class SupplierBreakdownScenario {
+        + component_type: str
+    }
+    
+    class DeliveryProblemScenario {
+        + loss_percentage: float
+        + delay_days: int
+        + component_type: str
+    }
+    
+    class StandardScenario {
+        + name: str = "Standard (Keine Probleme)"
+        + start_day: int = 0
+        + end_day: int = 364
+        + active: bool = True
+    }
+    
+    class ScenarioManager {
+        - scenarios: list[Scenario]
+        - standard_scenario: StandardScenario
+        + __init__()
+        + add_scenario(scenario)
+        + get_active_scenarios(day) : list[Scenario]
+        + get_marketing_scenarios(day) : list[MarketingCampaignScenario]
+        + get_warehouse_damage_scenarios(day) : list[WarehouseDamageScenario]
+        + get_supplier_breakdown_scenarios(day) : list[SupplierBreakdownScenario]
+        + get_delivery_problem_scenarios(day) : list[DeliveryProblemScenario]
+    }
+}
+
+package "config" CONFIG_COLOR {
+    class MasterData {
+        <<static>>
+        + DATE_FORMAT: str
+        + SEASONALITY: Dict[int, float]
+        + MARKETS: Dict[str, Dict[str, Any]]
+        + BOM: Dict[str, Dict[str, str]]
+        + PRODUCT_SALES_SHARES: Dict[str, float]
+        + GLOBAL_CONFIG: Dict[str, Any]
+        + SADDLE_SHARES: Dict[str, float]
+        + DEFAULT_INITIAL_STOCK: Dict[str, float]
+        + {static} get_month_from_day(day) : int
+        + {static} get_frame_category(frame_type) : str
+    }
+    
+    class HolidaysConfig {
+        <<static>>
+        + COUNTRY_CODES: Dict[str, str]
+        + {static} get_holidays_for_year(year, country_code) : Dict[date, str]
+        + {static} get_all_holidays(year) : Dict[str, List[Dict[str, str]]]
+        + {static} is_holiday(date_obj, country_code) : bool
+    }
+}
+
+package "ui" UI_COLOR {
+    class Utils {
+        <<utility>>
+        + {static} initialize_session_state()
+        + {static} create_simulator(scenario_manager) : Simulator
+        + {static} run_happy_path_simulation()
+        + {static} ensure_simulator_available()
+    }
+    
+    class ScenarioSidebar {
+        <<utility>>
+        + {static} render_scenario_sidebar()
+    }
+    
+    class Charts {
+        <<utility>>
+        + {static} create_chart(...)
+    }
+}
+
+' Beziehungen - Simulator
+Simulator *-- Inventory : "komponiert"
+Simulator *-- MarketBacklog : "komponiert"
+Simulator *-- ScenarioManager : "komponiert"
+Simulator *-- WorkdayCalculator : "komponiert"
+Simulator *-- DemandCalculator : "komponiert"
+Simulator *-- ChinaTransportManager : "komponiert"
+Simulator *-- ProductionPlanner : "komponiert"
+Simulator *-- ProcurementManager : "komponiert"
+Simulator ..> MasterData : "nutzt"
+
+' Beziehungen - ProductionPlanner
+ProductionPlanner --> Inventory : "nutzt"
+ProductionPlanner --> DemandCalculator : "nutzt"
+ProductionPlanner --> WorkdayCalculator : "nutzt"
+ProductionPlanner --> ChinaTransportManager : "nutzt"
+ProductionPlanner ..> MasterData : "nutzt"
+
+' Beziehungen - ProcurementManager
+ProcurementManager --> Inventory : "nutzt"
+ProcurementManager --> ChinaTransportManager : "nutzt"
+ProcurementManager --> WorkdayCalculator : "nutzt"
+
+' Beziehungen - ChinaTransportManager
+ChinaTransportManager --> Inventory : "nutzt"
+ChinaTransportManager --> WorkdayCalculator : "nutzt"
+ChinaTransportManager --> ScenarioManager : "nutzt"
+ChinaTransportManager ..> MasterData : "nutzt"
+
+' Beziehungen - DemandCalculator
+DemandCalculator --> WorkdayCalculator : "nutzt"
+DemandCalculator ..> MasterData : "nutzt"
+
+' Beziehungen - WorkdayCalculator
+WorkdayCalculator ..> HolidaysConfig : "nutzt"
+
+' Beziehungen - MarketBacklog
+MarketBacklog ..> MasterData : "nutzt (MARKETS)"
+
+' Beziehungen - ScenarioManager
+ScenarioManager *-- Scenario : "verwaltet"
+ScenarioManager *-- StandardScenario : "verwaltet"
+
+' Vererbung - Scenario
+Scenario <|-- MarketingCampaignScenario
+Scenario <|-- WarehouseDamageScenario
+Scenario <|-- SupplierBreakdownScenario
+Scenario <|-- DeliveryProblemScenario
+Scenario <|-- StandardScenario
+
+' UI Beziehungen
+Utils ..> Simulator : "erstellt"
+Utils ..> ScenarioManager : "nutzt"
+ScenarioSidebar ..> ScenarioManager : "nutzt"
+
+note right of Simulator
+  **Haupt-Orchestrator**
+  - Koordiniert alle Simulationskomponenten
+  - Führt 365-Tage-Simulation aus
+  - Berechnet SCOR-Metriken
+end note
+
+note right of DemandCalculator
+  **Nachfrageberechnung**
+  - Carry-Over-Logik für präzise Ganzzahl-Produktion
+  - Monatliche Base-Daily-Float Berechnung
+  - Marketing-Add-ons Integration
+end note
+
+note right of ProductionPlanner
+  **Produktionsplanung**
+  - Bottleneck-Logik
+  - Priorisierung nach Backlog
+  - Kapazitätsberechnung
+end note
+
+note right of ChinaTransportManager
+  **Transport-Logistik**
+  - Produktion in China
+  - Transport zum Hafen
+  - Verschiffung (Losgröße-basiert)
+  - Ankunft in Deutschland
+end note
+
+note right of ScenarioManager
+  **Szenarien-Verwaltung**
+  - Marketing-Szenarien
+  - Störungs-Szenarien
+  - Zeit-basierte Aktivierung
+end note
+
+@enduml
+

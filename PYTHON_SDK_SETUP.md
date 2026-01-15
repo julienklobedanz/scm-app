@@ -255,4 +255,3 @@ Da Ihre App eine Streamlit-App ist, ist es besser, eine spezielle Streamlit-Konf
 
 **Viel Erfolg!** 🚀
 
-
