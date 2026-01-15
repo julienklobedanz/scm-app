@@ -56,16 +56,18 @@ class DemandCalculator:
             num_workdays = 1
         
         # Base_Daily_Float pro Produkt
+        # Excel-Formel: Basisdaten!$E$8 * 'Lieferanten und Markt'!$H18 * Saisonalität / Arbeitstage_im_Monat
+        # WICHTIG: Verkaufsanteile werden direkt verwendet, ohne durch total_share zu teilen
+        # Dies entspricht der Excel-Formel, wo jeder Verkaufsanteil direkt multipliziert wird
         base_daily_float = {}
-        total_share = sum(self.master_data.PRODUCT_SALES_SHARES.values())
         
         for product in self.master_data.BOM.keys():
             sales_share = self.master_data.PRODUCT_SALES_SHARES.get(product, 0.0)
-            if total_share > 0:
-                monthly_target_product = monthly_target_global * (sales_share / total_share)
-            else:
-                monthly_target_product = monthly_target_global / len(self.master_data.BOM)
-            
+            # Excel-Formel: Jahresvolumen * Verkaufsanteil * Saisonalität / Arbeitstage_im_Monat
+            # Dies entspricht: monthly_target_global * sales_share / num_workdays
+            # Aber monthly_target_global = yearly_volume * monthly_factor
+            # Also: yearly_volume * monthly_factor * sales_share / num_workdays
+            monthly_target_product = monthly_target_global * sales_share
             base_daily_float[product] = monthly_target_product / num_workdays
         
         self.monthly_base_daily_float[month] = base_daily_float
@@ -118,32 +120,59 @@ class DemandCalculator:
         # Wenn der vorherige Tag ein Feiertag/Wochenende war, bleibt der Rest unverändert
         remainder = self.product_remainders.get(product, 0.0)
         
-        # Excel-Formel: ABRUNDEN((Base * Share / AT) + Rest; 0)
+        # Excel-Formel: ABRUNDEN((Base * Share / AT) + Rest; 0) + Marketing-Add-on
         # 1. Base + Rest zusammenfassen
-        base_with_remainder = base_daily_float + remainder
+        # WICHTIG: Runde auf 12 Dezimalstellen, um Floating-Point-Fehler zu vermeiden
+        # Excel verwendet interne Präzision, wir müssen ähnlich präzise sein
+        base_with_remainder = round(base_daily_float + remainder, 12)
         
         # 2. Abrunden (wie Excel ABRUNDEN(..., 0))
-        rounded_base = int(base_with_remainder)  # Round down to nearest integer
+        # WICHTIG: math.floor() für korrekte Abrundung (int() rundet bei negativen Zahlen falsch)
+        import math
+        # Excel ABRUNDEN rundet immer ab (auch bei negativen Zahlen)
+        # math.floor() macht das korrekt
+        # WICHTIG: Prüfe ob base_with_remainder sehr nahe an einer ganzen Zahl ist (Floating-Point-Fehler)
+        # Wenn abs(base_with_remainder - round(base_with_remainder)) < 1e-10, dann ist es praktisch eine ganze Zahl
+        if abs(base_with_remainder - round(base_with_remainder)) < 1e-10:
+            # Praktisch eine ganze Zahl, runde auf diese ganze Zahl
+            rounded_base = int(round(base_with_remainder))
+        else:
+            rounded_base = math.floor(base_with_remainder)  # Round down to nearest integer
         
         # 3. Marketing-Add-on addieren (NACH der Rundung, wie in Excel)
         # Marketing-Add-on wird als Float addiert (kann auch Float sein in Excel)
         daily_target_float = rounded_base + marketing_add_on
         
         # 4. Am letzten Arbeitstag des Jahres: Reste aufsummieren
+        # WICHTIG: Am letzten Arbeitstag müssen ALLE Reste aufsummiert werden
+        # Excel-Formel: Am letzten Arbeitstag wird der Rest nicht verworfen, sondern addiert
         if is_last_workday_of_year:
             # Addiere den Rest vom Base+Rest (wird normalerweise verworfen)
-            daily_target_float += (base_with_remainder - rounded_base)
+            # Dies stellt sicher, dass alle Reste am Jahresende aufsummiert werden
+            remainder_to_add = base_with_remainder - rounded_base
+            daily_target_float = rounded_base + remainder_to_add + marketing_add_on
+        else:
+            # Normalfall: Marketing-Add-on nach der Rundung addieren
+            daily_target_float = rounded_base + marketing_add_on
         
         # 5. Ergebnis abrunden (da wir Integer zurückgeben müssen)
-        daily_target_int = int(daily_target_float)
+        # WICHTIG: math.floor() für korrekte Abrundung
+        # ABER: Am letzten Arbeitstag sollte das Ergebnis bereits ganzzahlig sein (Rest wurde addiert)
+        daily_target_int = math.floor(daily_target_float)
         
         # 6. Berechne neuen Rest (nur aus Base + Rest, Marketing-Add-on wird nicht in Rest übernommen)
         # Excel-Formel: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
+        # WICHTIG: Verwende math.floor() für konsistente Berechnung
         # Wenn Ergebnis < 0, dann 0 (sollte nicht vorkommen, aber sicherheitshalber)
         if is_last_workday_of_year:
             new_remainder = 0.0
         else:
+            # Berechne Rest genau wie Excel: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
+            # Verwende math.floor() für konsistente Abrundung
+            # WICHTIG: Verwende die gleiche rounded_base wie oben, um Konsistenz zu gewährleisten
             new_remainder = base_with_remainder - rounded_base
+            # Runde auf 12 Dezimalstellen, um Floating-Point-Fehler zu vermeiden
+            new_remainder = round(new_remainder, 12)
             if new_remainder < 0:
                 new_remainder = 0.0
         
