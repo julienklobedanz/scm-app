@@ -105,3 +105,4 @@ Die Seite hat ausreichende Kommentare, besonders bei:
 
 Die Reporting-Seite ist ein Dashboard, das die wichtigsten Lagerbestände und Produktionsleistungen visualisiert. Sie nutzt dynamische Imports und Session State, um Daten effizient zu laden und zu speichern.
 
+

@@ -140,3 +140,4 @@ Die Seite hat ausreichende Kommentare, besonders bei:
 
 Die App-Seite ist das zentrale Dashboard für die SCOR-Metriken. Sie führt beim ersten Laden automatisch eine Simulation aus und zeigt alle wichtigen Performance-Indikatoren in übersichtlichen Tabellen und Diagrammen.
 
+

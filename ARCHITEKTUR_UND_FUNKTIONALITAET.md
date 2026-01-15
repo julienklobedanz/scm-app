@@ -77,16 +77,57 @@ Die Anwendung folgt einer **layered architecture** mit klarer Trennung von Veran
 
 ### 1.3 Datenfluss
 
-1. **Initialisierung**: `app.py` → `Simulator.__init__()` → Initialisierung aller Komponenten
-2. **Simulation**: `Simulator.run()` → Tägliche Schleife über 365 Tage
-3. **Täglicher Ablauf**:
-   - Nachfrageberechnung (`DemandCalculator`)
-   - Produktionsplanung (`ProductionPlanner`)
-   - Beschaffung (`ProcurementManager`)
-   - Transport-Logistik (`ChinaTransportManager`)
-   - Lagerverwaltung (`Inventory`)
-   - Auslieferung (`MarketBacklog`)
-4. **Visualisierung**: Ergebnisse werden in Streamlit-Seiten dargestellt
+**WICHTIG: Volumenplanung als "Single Source of Truth"**
+
+Die Volumenplanung ist die **einzige Quelle** für Nachfrageberechnungen. Alle anderen Komponenten verwenden die Daten aus der Volumenplanung.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  VOLUMENPLANUNG (Page 2) - "Single Source of Truth"        │
+│  • Berechnet Nachfrage für ALLE 365 Tage                    │
+│  • Inkl. Marketing-Add-ons                                   │
+│  • Inkl. Carry-Over-Logik                                   │
+│  • Speichert in st.session_state.daily_demands_actual      │
+└───────────────────────┬───────────────────────────────────┘
+                         │
+                         │ Übergibt Daten
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  SIMULATOR - Verwendet vorgegebene Nachfrage                 │
+│  • Liest daily_demands_actual aus session_state              │
+│  • Verwendet für tägliche Nachfrage                          │
+│  • Verwendet für zukünftige Nachfrage (Bestellungen)        │
+└───────────────────────┬───────────────────────────────────┘
+                         │
+                         │ Weiterleitung
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LIEFERANT CHINA (Page 3) - Datenkonsument                  │
+│  • Bestelleingang aus Volumenplanung berechnet              │
+│  • Zeigt Produktions- und Transport-Daten                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Detaillierter Ablauf:**
+
+1. **Initialisierung**: 
+   - `app.py` → `calculate_volume_planning_demand()` → Berechnet Nachfrage für alle 365 Tage
+   - `app.py` → `Simulator.__init__()` → Initialisierung aller Komponenten
+   - `Simulator.__init__()` → `_place_initial_orders()` → Verwendet Volumenplanung-Daten
+   
+2. **Simulation**: 
+   - `Simulator.run()` → Tägliche Schleife über 365 Tage
+   - Für jeden Tag:
+     - Nachfrage aus `daily_demands_actual` lesen (statt selbst zu berechnen)
+     - Produktionsplanung (`ProductionPlanner`)
+     - Beschaffung (`ProcurementManager`) → Verwendet Volumenplanung-Daten
+     - Transport-Logistik (`ChinaTransportManager`)
+     - Lagerverwaltung (`Inventory`)
+     - Auslieferung (`MarketBacklog`)
+   
+3. **Visualisierung**: 
+   - Ergebnisse werden in Streamlit-Seiten dargestellt
+   - Lieferant China: Bestelleingang aus Volumenplanung berechnet
 
 ---
 
@@ -366,7 +407,10 @@ class DemandCalculator:
 - `product_remainders`: Dict[str, float] - Rest pro Produkt
 - `monthly_base_daily_float`: Dict[int, Dict[str, float]] - Base-Daily-Float pro Monat
 
-**Bekanntes Problem**: Carry-Over-Logik funktioniert nicht korrekt (KW 5 zeigt 1057 statt 1058)
+**WICHTIG: Verwendung in der Anwendung**
+- **Hauptverwendung**: In Volumenplanung (Page 2) für Nachfrageberechnung
+- **Fallback**: Im Simulator, wenn Volumenplanung-Daten nicht verfügbar sind
+- **Status**: Carry-Over-Logik wurde korrigiert (Floating-Point-Fehler behoben)
 
 ---
 
@@ -423,26 +467,50 @@ class ProcurementManager:
 ```python
 class ChinaTransportManager:
     def __init__(inventory, workday_calculator, scenario_manager)
+    def place_order(order_day, quantity) -> int
     def process_shipments(day)
     def get_supplier_log_dataframe(saddle_name, saddle_share) -> pd.DataFrame
-    def get_inbound_log_dataframe(saddle_name, saddle_share) -> pd.DataFrame
+    def get_inbound_log_dataframe(saddle_shares_dict) -> pd.DataFrame
+    def get_daily_arrival_qty(day_index) -> float
+    def _calculate_order_quantity_from_volume_planning(order_date, saddle_name, daily_demands_actual_cache) -> float
     def _get_next_workday(start_day, use_chinese_holidays) -> int
     def _add_workdays(start_day, num_workdays, exclude_start, use_chinese_holidays) -> int
 ```
 
 **Funktionalität**:
 - **Transport-Logistik**: 
-  - Produktion in China
-  - Transport zum Hafen
-  - Verschiffung (Losgröße-basiert)
-  - Ankunft in Deutschland
-- **Port-Buckets**: Verwaltet Bestände im Hafen
-- **Losgröße**: Verschifft nur wenn Losgröße erreicht
-- **Optimierung**: Early-Exit wenn keine weiteren Transporte erwartet
+  - Produktion in China (5 AT, chinesische Feiertage)
+  - Transport zum Hafen (2 AT)
+  - Verschiffung (Losgröße-basiert, >= 500)
+  - Ankunft in Deutschland (30 KT + 2 AT)
+- **Bestelleingang-Berechnung**: 
+  - **WICHTIG**: Wird direkt aus Volumenplanung berechnet (nicht aus transport_status)
+  - Methode: `_calculate_order_quantity_from_volume_planning()`
+  - Summiert Nachfrage aller Produkte, die den gleichen Sattel verwenden
+  - Entspricht Excel-Formel für "Bestelleingang"
+- **Produktionsdatum-Berechnung**:
+  - Excel-Formel: `=ARBEITSTAG(KU16; Produktionszeit-1; Feiertage)`
+  - Berechnung: Freigabedatum + (Produktionszeit - 1) Arbeitstage
+  - Wird in der Zeile des Freigabedatums angezeigt
+- **Produktionsmenge-Berechnung**:
+  - Excel-Formel: `=WENN(ODER(KU11="Sa.";KU11="So.";KU13<>"");0;SUMMENPRODUKT(...))`
+  - Wenn Wochenende oder Störung: 0, sonst: Freigegebene Bestellungen
+- **Warenausgang-Berechnung**:
+  - Excel-Formel: `=WENN(ODER('Inbound (Material)'!KU68="Ausgefallen";'Inbound (Material)'!KU68="");0;KU172)`
+  - Prüft DeliveryProblemScenario mit 100% Verlust ("Ausgefallen")
+- **Warenbestand-Berechnung**:
+  - Excel-Formel: `Produziert + Warenbestand - Ausgangsmenge`
+  - Kumulativ: Vorheriger Bestand + Produziert - Ausgangsmenge
+- **Port-Buckets**: Verwaltet Bestände im Hafen (Eimer-Logik)
+- **Losgröße**: Verschifft nur wenn Losgröße erreicht (>= 500)
+- **Performance-Optimierung**: 
+  - `get_daily_arrival_qty()` berechnet direkt aus `transport_status` (nicht aus vollständiger Inbound-Tabelle)
+  - `_calculate_order_quantity_from_volume_planning()` verwendet Cache für `daily_demands_actual`
 
 **Wichtige Datenstrukturen**:
-- `port_buckets`: Dict[str, float] - Bestände im Hafen pro Sattel-Typ
-- `shipment_schedule`: Liste von geplanten Verschiffungen
+- `transport_status`: Dict[Tuple[int, int], Dict] - Status pro Bestellung
+- `pending_shipments`: Dict[int, float] - Kumulierte Bestellungen am Hafen
+- `_inbound_df_cache`: Cache für Inbound-Tabelle (Performance)
 
 ---
 
@@ -824,4 +892,5 @@ Siehe `requirements.txt`
 **Dokumentation erstellt am**: 2024
 **Version**: 1.0
 **Autor**: AI Assistant
+
 

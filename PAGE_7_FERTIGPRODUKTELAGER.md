@@ -91,3 +91,4 @@ Die Seite hat ausreichende Kommentare, besonders bei:
 
 Die Fertigproduktelager-Seite zeigt den kompletten Fertigproduktfluss von der Produktion bis zur Auslieferung. Sie geht von einem Just-in-Time-System aus und speichert Lagerzugang und Lagerabgang als Float-Werte.
 
+

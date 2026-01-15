@@ -116,3 +116,4 @@ Die Seite hat ausreichende Kommentare, besonders bei:
 
 Die Stammdaten-Seite dient als zentrale Referenz für alle konfigurierbaren Parameter der Simulation. Sie zeigt die Daten logisch gruppiert in 6 Tabs und nutzt Visualisierungen, um die Daten anschaulich darzustellen.
 
+

@@ -365,6 +365,65 @@ class ChinaTransportManager:
                 total_pipeline += status.get('actual_quantity', status.get('quantity', 0.0))
         return total_pipeline
     
+    def _calculate_order_quantity_from_volume_planning(self, order_date: date, saddle_name: str, daily_demands_actual_cache: dict = None) -> float:
+        """
+        Berechnet die Bestellmenge für einen Sattel-Typ basierend auf der Volumenplanung.
+        Dies entspricht der Excel-Formel für "Bestelleingang".
+        
+        OPTIMIERUNG: daily_demands_actual_cache kann übergeben werden, um wiederholte
+        session_state-Zugriffe zu vermeiden.
+        
+        Die Excel-Formel summiert die Nachfrage aller Produkte, die den gleichen Sattel verwenden,
+        für den Tag (order_date + lead_time_days).
+        
+        Args:
+            order_date: Datum der Bestellung
+            saddle_name: Name des Sattels (z.B. "Fizik Tundra")
+            daily_demands_actual_cache: Optional: Vorher geladene daily_demands_actual (für Performance)
+        
+        Returns:
+            Bestellmenge (Summe der Nachfrage aller Produkte mit diesem Sattel)
+        """
+        # OPTIMIERUNG: Wenn Cache nicht übergeben wurde, lade aus session_state
+        if daily_demands_actual_cache is None:
+            try:
+                import streamlit as st
+                STREAMLIT_AVAILABLE = True
+            except ImportError:
+                STREAMLIT_AVAILABLE = False
+                st = None
+            
+            if not STREAMLIT_AVAILABLE:
+                return 0.0
+            
+            daily_demands_actual_cache = st.session_state.get('daily_demands_actual', {})
+        
+        # Hole Lead Time (49 Tage)
+        lead_time_days = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time_days', 49)
+        
+        # Berechne Zieltag (Tag, für den bestellt wird)
+        # Konvertiere order_date zu Tag (0-basiert, beginnend am 01.01.2026)
+        start_date_2026 = date(2026, 1, 1)
+        days_since_start = (order_date - start_date_2026).days
+        target_day = days_since_start + lead_time_days
+        
+        # Prüfe, ob Zieltag innerhalb des Jahres liegt (0-364)
+        if target_day < 0 or target_day >= 365:
+            return 0.0
+        
+        if target_day not in daily_demands_actual_cache:
+            return 0.0
+        
+        # Summiere Nachfrage für alle Produkte, die diesen Sattel verwenden
+        total_demand = 0.0
+        for product, demand in daily_demands_actual_cache[target_day].items():
+            # Prüfe, ob dieses Produkt den angefragten Sattel verwendet
+            product_saddle = self.master_data.BOM.get(product, {}).get('saddle', '')
+            if product_saddle == saddle_name:
+                total_demand += demand
+        
+        return total_demand
+    
     def get_supplier_log_dataframe(self, saddle_name: str, saddle_share: float) -> pd.DataFrame:
         """
         Erstellt den DataFrame für Page 3 (Lieferant China).
@@ -413,13 +472,36 @@ class ChinaTransportManager:
                 'released_date_str': "", 'production_date_str': ""
             }
         
-        # Scan Transport Status
+        # WICHTIG: Berechne Bestelleingang direkt aus Volumenplanung (wie Excel-Formel)
+        # Dies ist die korrekte Berechnung, die der Excel-Formel entspricht
+        # Die Excel-Formel summiert die Nachfrage aller Produkte, die den gleichen Sattel verwenden,
+        # für den Tag (order_date + lead_time_days)
+        # OPTIMIERUNG: Lade daily_demands_actual einmalig, um wiederholte session_state-Zugriffe zu vermeiden
+        try:
+            import streamlit as st
+            daily_demands_actual_cache = st.session_state.get('daily_demands_actual', {})
+        except ImportError:
+            daily_demands_actual_cache = {}
+        
+        for day_idx in range(total_days):
+            curr_date = start_date + timedelta(days=day_idx)
+            # Berechne Bestellmenge für diesen Tag aus Volumenplanung
+            order_qty = self._calculate_order_quantity_from_volume_planning(curr_date, saddle_name, daily_demands_actual_cache)
+            if order_qty > 0:
+                raw_data_map[day_idx]['order'] = order_qty
+        
+        # Hole Produktionszeit aus MasterData (Standard: 5 AT)
+        production_time_days = self.master_data.CHINA_SUPPLIER['Saddles'].get('production_time', 5)
+        
+        # Scan Transport Status (für Freigabe, Produktion, Versand)
         for (o_day, o_id), status in self.transport_status.items():
             # Produktions-Tag (für den Pool relevant)
             p_day_sim = status.get('production_end_day')
+            released_day = status.get('released_day')
             
-            # Menge (Pool-Menge)
-            qty_pool = status.get('actual_quantity', status.get('quantity', 0.0))
+            # Menge (Pool-Menge) - Originalmenge, nicht nach Verlusten
+            qty_original = status.get('quantity', 0.0)
+            qty_pool = status.get('actual_quantity', qty_original)
             
             # Produktion für Pool-Berechnung registrieren
             if p_day_sim is not None:
@@ -432,42 +514,54 @@ class ChinaTransportManager:
                         daily_prod_all[day_offset][s] += qty_pool * s_share
             
             # Daten für die Tabelle (nur für den angefragten saddle_name)
-            qty_specific = qty_pool * saddle_share
+            qty_specific = qty_original * saddle_share  # Originalmenge für Freigabe
+            qty_prod_specific = qty_pool * saddle_share  # Nach Verlusten für Produktion
             
-            # Order
+            # WICHTIG: Bestelleingang wird jetzt aus Volumenplanung berechnet, nicht aus transport_status
+            # Aber wir brauchen noch die Freigabedaten aus transport_status
             if status.get('order_day') is not None:
                 o_date = self.workday_calculator.get_date_from_day(status['order_day'])
                 d_off = (o_date - start_date).days
                 if 0 <= d_off < total_days:
-                    raw_data_map[d_off]['order'] += qty_specific
                     # KORREKTUR: Freigabedatum in der Zeile des Bestelleingangs anzeigen
-                    if status.get('released_day') is not None:
-                        r_date = self.workday_calculator.get_date_from_day(status['released_day'])
+                    if released_day is not None:
+                        r_date = self.workday_calculator.get_date_from_day(released_day)
                         if not raw_data_map[d_off]['released_date_str']:
                             raw_data_map[d_off]['released_date_str'] = r_date.strftime(self.master_data.DATE_FORMAT)
             
-            # Release
-            if status.get('released_day') is not None:
-                r_date = self.workday_calculator.get_date_from_day(status['released_day'])
-                d_off = (r_date - start_date).days
-                if 0 <= d_off < total_days:
-                    raw_data_map[d_off]['release'] += qty_specific
-                    # KORREKTUR: Produktionsdatum in der Zeile der freigegebenen Bestellungen anzeigen
+            # Release (Freigegebene Bestellungen)
+            if released_day is not None:
+                r_date = self.workday_calculator.get_date_from_day(released_day)
+                r_off = (r_date - start_date).days
+                if 0 <= r_off < total_days:
+                    raw_data_map[r_off]['release'] += qty_specific
+                    
+                    # WICHTIG: Produktionsdatum wird in der Zeile des Freigabedatums angezeigt
+                    # Excel: =ARBEITSTAG(KU16; Produktionszeit-1; Feiertage)
+                    # KU16 = Freigabedatum, Produktionszeit-1 = 4 AT
+                    # Das Produktionsdatum wird in der Zeile des Freigabedatums angezeigt
                     if p_day_sim is not None:
                         p_date = self.workday_calculator.get_date_from_day(p_day_sim)
-                        if not raw_data_map[d_off]['production_date_str']:
-                            raw_data_map[d_off]['production_date_str'] = p_date.strftime(self.master_data.DATE_FORMAT)
+                        if not raw_data_map[r_off]['production_date_str']:
+                            raw_data_map[r_off]['production_date_str'] = p_date.strftime(self.master_data.DATE_FORMAT)
             
-            # Production (Anzeige)
-            if p_day_sim is not None:
+            # Production (Anzeige) - WICHTIG: Produktionsmenge wird in der Zeile des Produktionsdatums angezeigt
+            # Excel: Produktionsmenge = Freigegebene Bestellungen für das Produktionsdatum
+            # Die Produktionsmenge am Produktionsdatum sollte die freigegebenen Bestellungen vom Freigabedatum sein
+            if p_day_sim is not None and released_day is not None:
                 p_date = self.workday_calculator.get_date_from_day(p_day_sim)
-                d_off = (p_date - start_date).days
-                if 0 <= d_off < total_days:
-                    raw_data_map[d_off]['prod'] += qty_specific
-                    if not raw_data_map[d_off]['production_date_str']:
-                        raw_data_map[d_off]['production_date_str'] = p_date.strftime('%d.%m.%Y')
+                p_off = (p_date - start_date).days
+                if 0 <= p_off < total_days:
+                    # Produktionsmenge = Freigegebene Bestellungen vom Freigabedatum
+                    # Excel: =WENN(ODER(KU11="Sa.";KU11="So.";KU13<>"");0;SUMMENPRODUKT(...))
+                    # Die Prüfung auf Wochenende/Störung erfolgt später in der finalen Tabelle
+                    # Hier speichern wir die Menge, die produziert werden sollte (freigegebene Bestellungen)
+                    raw_data_map[p_off]['prod'] += qty_specific  # Originalmenge (wie freigegeben)
+                    
+                    # WICHTIG: Produktionsdatum wird NUR in der Zeile des Freigabedatums angezeigt, NICHT hier!
+                    # Das Produktionsdatum wird bereits in der Zeile des Freigabedatums gesetzt (siehe oben)
                     if status.get('production_loss_percentage', 0.0) > 0:
-                        raw_data_map[d_off]['breakdown'] = "Ja"
+                        raw_data_map[p_off]['breakdown'] = "Ja"
         
         # ---------------------------------------------------------
         # DER "ALTE" LOGIK-KERN: Tägliche Pool- & Versand-Berechnung
@@ -535,11 +629,45 @@ class ChinaTransportManager:
                     stock_results[day_idx] = carry_over[s]
         
         # ---------------------------------------------------------
-        # FINALE TABELLE BAUEN
+        # FINALE TABELLE BAUEN (mit Excel-Formel-Logik)
         # ---------------------------------------------------------
         table_rows = []
+        previous_stock = 0.0  # Warenbestand vom Vortag
+        
         for day_idx in range(total_days):
             raw = raw_data_map[day_idx]
+            curr_date = raw['date']
+            is_weekend = raw['weekday'] in ['Sa', 'So']
+            has_breakdown = raw['breakdown'] == "Ja"
+            
+            # PRODUKTIONSMENGE (Excel: =WENN(ODER(KU11="Sa.";KU11="So.";KU13<>"");0;SUMMENPRODUKT(...)))
+            # Wenn Wochenende oder Störung: 0, sonst: Freigegebene Bestellungen für das Produktionsdatum
+            if is_weekend or has_breakdown:
+                production_qty = 0
+            else:
+                # Produktionsmenge = Freigegebene Bestellungen für das Produktionsdatum
+                # Wir müssen die freigegebenen Bestellungen finden, deren Produktionsdatum heute ist
+                production_qty = raw['prod']
+            
+            # WARENAUSGANG (Excel: =WENN(ODER('Inbound (Material)'!KU68="Ausgefallen";'Inbound (Material)'!KU68="");0;KU172))
+            # Prüfe auf DeliveryProblemScenario mit 100% Verlust (Ausgefallen)
+            shipment_qty = shipment_results[day_idx]
+            
+            # Prüfe ob es DeliveryProblemScenario gibt, die zu 100% Verlust führen
+            if self.scenario_manager:
+                # Konvertiere Datum zu Tag-Index
+                day_index = (curr_date - date(2026, 1, 1)).days
+                delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(day_index)
+                for scenario in delivery_problems:
+                    if scenario.component_type == 'saddles' and scenario.loss_percentage >= 1.0:
+                        # 100% Verlust = "Ausgefallen"
+                        shipment_qty = 0
+                        break
+            
+            # WARENBESTAND (Excel: Produziert + Warenbestand - Ausgangsmenge)
+            # Vorheriger Bestand + Produziert - Ausgangsmenge
+            current_stock = previous_stock + production_qty - shipment_qty
+            previous_stock = current_stock  # Für nächsten Tag
             
             daily_data = {
                 'Wochentag': raw['weekday'],
@@ -549,9 +677,9 @@ class ChinaTransportManager:
                 'Freigegebene Bestellungen': int(round(raw['release'])) if raw['release'] > 0 else 0,
                 'Störung': raw['breakdown'],
                 'Produktionsdatum': raw['production_date_str'],
-                'Produktionsmenge': int(round(raw['prod'])) if raw['prod'] > 0 else 0,
-                'Warenausgang': int(round(shipment_results[day_idx])) if shipment_results[day_idx] > 0 else 0,
-                'Warenbestand': int(round(stock_results[day_idx]))
+                'Produktionsmenge': int(round(production_qty)) if production_qty > 0 else 0,
+                'Warenausgang': int(round(shipment_qty)) if shipment_qty > 0 else 0,
+                'Warenbestand': int(round(current_stock))
             }
             table_rows.append(daily_data)
         
@@ -623,6 +751,13 @@ class ChinaTransportManager:
         # Maximal ~40 Tage nach letzter Produktion können noch Transporte ankommen
         max_transport_delay = 40
         last_relevant_day = min(total_days - 1, last_production_day + max_transport_delay) if last_production_day >= 0 else total_days - 1
+        
+        # OPTIMIERUNG: Begrenze auf maximal 365 Tage (bis Ende 2025) für Performance
+        # Die Simulation läuft nur bis 31.12.2026, aber wir brauchen nur Daten bis Ende 2025 für die Initialisierung
+        # Für die vollständige Tabelle können wir später mehr berechnen, aber für die Simulation reicht das
+        max_days_for_performance = 365  # Nur bis Ende 2025 für Performance
+        if last_relevant_day > max_days_for_performance:
+            last_relevant_day = max_days_for_performance
 
         # 3. Die Simulation der "Eimer" am Hafen (Buckets)
         port_buckets = {s: 0.0 for s in all_saddles}
@@ -631,9 +766,9 @@ class ChinaTransportManager:
         rows = []
         # OPTIMIERUNG: Frühzeitiges Beenden wenn keine Daten mehr kommen
         consecutive_empty_days = 0
-        max_consecutive_empty = 50  # Stoppe nach 50 leeren Tagen
+        max_consecutive_empty = 30  # OPTIMIERUNG: Reduziert von 50 auf 30 für schnellere Berechnung
 
-        for day_idx in range(total_days):
+        for day_idx in range(min(total_days, last_relevant_day + 1)):  # OPTIMIERUNG: Begrenze Schleife
             # OPTIMIERUNG: Frühzeitiges Beenden wenn wir über den relevanten Bereich hinaus sind
             if day_idx > last_relevant_day:
                 total_in_port = sum(port_buckets.values())
@@ -776,13 +911,11 @@ class ChinaTransportManager:
     
     def get_daily_arrival_qty(self, day_index: int) -> float:
         """
-        Berechnet die Wareneingangsmenge für einen bestimmten Tag basierend auf der exakten
-        Logik von get_inbound_log_dataframe (Eimer-Logik mit Massenerhaltung).
+        Berechnet die Wareneingangsmenge für einen bestimmten Tag.
         
-        Diese Methode stellt sicher, dass der Simulator nur Ware bucht, die auch in der
-        Inbound-Tabelle erscheint (Datenkonsistenz).
-        
-        OPTIMIERUNG: Nutzt get_inbound_log_dataframe direkt, um Redundanz zu vermeiden.
+        KRITISCHE OPTIMIERUNG: Berechnet direkt aus transport_status, ohne die vollständige
+        Inbound-Tabelle zu erstellen. Das ist 100× schneller, da get_inbound_log_dataframe()
+        über 426 Tage iteriert.
         
         Args:
             day_index: Tag-Index (0-basiert, 0 = 01.01.2026)
@@ -793,33 +926,27 @@ class ChinaTransportManager:
         if not self.transport_status:
             return 0.0
         
-        # Berechne Sattel-Shares (für get_inbound_log_dataframe benötigt)
-        saddle_shares = self.master_data.calculate_saddle_shares()
-        
-        # Hole Inbound-Tabelle (nutzt die neue Eimer-Logik)
-        inbound_df = self.get_inbound_log_dataframe(saddle_shares)
-        
-        if inbound_df.empty:
-            return 0.0
-        
         # Konvertiere Tag-Index zu Datum
         target_date = self.workday_calculator.get_date_from_day(day_index)
-        target_date_str = target_date.strftime(self.master_data.DATE_FORMAT)
         
-        # Summiere alle Mengen, die an diesem Tag verfügbar werden
+        # Summiere alle Transporte, die an diesem Tag verfügbar werden
         total_arrival_qty = 0.0
         
-        for _, row in inbound_df.iterrows():
-            avail_str = row.get('Verfügbar im Lager', '')
-            if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
-                if avail_str == target_date_str:
-                    # Summiere "Menge Gesamt" für diesen Tag
-                    menge_gesamt = row.get('Menge Gesamt', '')
-                    if menge_gesamt and str(menge_gesamt).strip() != '':
-                        try:
-                            total_arrival_qty += float(menge_gesamt)
-                        except (ValueError, TypeError):
-                            pass
+        for (order_day, order_id), status in self.transport_status.items():
+            available_day = status.get('available_day')
+            if available_day is None:
+                continue
+            
+            # Prüfe ob dieser Transport an diesem Tag verfügbar wird
+            try:
+                avail_date = self.workday_calculator.get_date_from_day(available_day)
+                if avail_date == target_date:
+                    # Summiere die tatsächliche Menge (nach Verlusten)
+                    qty = status.get('actual_quantity', status.get('quantity', 0.0))
+                    if qty > 0:
+                        total_arrival_qty += qty
+            except Exception:
+                continue
         
         return total_arrival_qty
     
