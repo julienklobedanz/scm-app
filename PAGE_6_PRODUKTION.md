@@ -100,3 +100,4 @@ Die Seite hat ausreichende Kommentare, besonders bei:
 
 Die Produktion-Seite zeigt den kompletten Produktionsprozess für jedes Produkt. Sie nutzt die Produktionslogs als "Single Source of Truth" und visualisiert die Daten in übersichtlichen Tabellen und Diagrammen.
 
+

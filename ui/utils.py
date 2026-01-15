@@ -4,9 +4,11 @@ Zentrale Hilfsfunktionen für Streamlit-Seiten
 """
 
 import streamlit as st
+import time
 from simulation.simulator import Simulator
 from models.scenarios import ScenarioManager
 from config.master_data import MasterData
+from ui.volume_planning_utils import calculate_volume_planning_demand
 
 
 def initialize_session_state():
@@ -23,6 +25,14 @@ def initialize_session_state():
         st.session_state.happy_path_run = False
     if 'yearly_volume' not in st.session_state:
         st.session_state.yearly_volume = 370000
+    if 'simulation_running' not in st.session_state:
+        st.session_state.simulation_running = False
+    if 'simulation_started' not in st.session_state:
+        st.session_state.simulation_started = False
+    if 'volume_planning_calculated' not in st.session_state:
+        st.session_state.volume_planning_calculated = False
+    if 'last_progress_update' not in st.session_state:
+        st.session_state.last_progress_update = 0
 
 
 def create_simulator(scenario_manager=None):
@@ -52,27 +62,144 @@ def run_happy_path_simulation():
     """
     Führt die Happy Path Simulation aus, wenn noch keine Ergebnisse vorhanden sind.
     Wird automatisch beim ersten Laden einer Seite aufgerufen.
+    
+    WICHTIG: Diese Funktion prüft mehrfach, ob die Simulation bereits läuft oder abgeschlossen ist,
+    um sicherzustellen, dass sie nicht mehrfach ausgeführt wird.
+    
+    WICHTIG: Die Simulation wird synchron ausgeführt, aber mit einem Progress-Indikator.
     """
-    if not st.session_state.happy_path_run and st.session_state.results_df is None:
+    # Prüfe ob Simulation bereits abgeschlossen ist
+    if st.session_state.get('happy_path_run', False) and st.session_state.get('results_df') is not None:
+        return
+    
+    # Prüfe ob Simulation bereits läuft (verhindert parallele Ausführung)
+    if st.session_state.get('simulation_running', False):
+        # Zeige Progress-Indikator während Simulation läuft
+        progress_placeholder = st.empty()
+        status_placeholder = st.empty()
+        
+        # Schätze Fortschritt basierend auf verstrichener Zeit
+        start_time = st.session_state.get('simulation_start_time', time.time())
+        elapsed = time.time() - start_time
+        # WICHTIG: Kein fester Timeout mehr - Simulation darf so lange laufen wie nötig
+        # Progress wird basierend auf verstrichener Zeit angezeigt (max. 95% bis fertig)
+        estimated_total = max(60, elapsed + 10)  # Dynamisch: mindestens 60s, sonst elapsed + 10s
+        progress = min(elapsed / estimated_total, 0.95)  # Max 95%, bis Simulation wirklich fertig ist
+        
+        progress_placeholder.progress(progress, text=f"Simulation läuft... ({int(elapsed)}s)")
+        status_placeholder.info("🔄 Die Simulation wird ausgeführt. Bitte warten Sie...")
+        
+        # WICHTIG: Aktualisiere die Seite regelmäßig (alle 2 Sekunden), aber nur wenn Simulation noch läuft
+        # Verhindere Endlosschleife durch Prüfung der letzten Aktualisierung
+        last_update = st.session_state.get('last_progress_update', 0)
+        if time.time() - last_update > 2:  # Nur alle 2 Sekunden aktualisieren
+            st.session_state.last_progress_update = time.time()
+            time.sleep(0.1)  # Kurze Pause, damit der Progress sichtbar ist
+            st.rerun()
+        return
+    
+    # Prüfe ob Simulation bereits gestartet wurde (aber noch nicht abgeschlossen)
+    if st.session_state.get('simulation_started', False):
+        # Warte auf Abschluss (wird durch st.rerun() getriggert)
+        return
+    
+    # Starte Simulation nur wenn alle Bedingungen erfüllt sind
+    if not st.session_state.get('happy_path_run', False) and st.session_state.get('results_df') is None:
         try:
-            with st.spinner("🔄 Happy Path Simulation wird ausgeführt..."):
+            # WICHTIG: Berechne Volumenplanung VOR der Simulation
+            # Die Volumenplanung ist die Basis, der Simulator verwendet diese Daten
+            if not st.session_state.get('volume_planning_calculated', False):
+                calculate_volume_planning_demand()
+            
+            # Markiere Simulation als gestartet und laufend
+            st.session_state.simulation_started = True
+            st.session_state.simulation_running = True
+            st.session_state.simulation_start_time = time.time()
+            
+            # Zeige Progress-Indikator
+            progress_placeholder = st.empty()
+            status_placeholder = st.empty()
+            
+            # Initiale Anzeige
+            progress_placeholder.progress(0.0, text="Simulation wird gestartet...")
+            status_placeholder.info("🔄 Die Simulation wird ausgeführt. Dies sollte max. 60 Sekunden dauern...")
+            
+            # Führe Simulation aus (mit Timeout-Schutz)
+            # WICHTIG: Kein Timeout mehr - Simulation darf so lange laufen wie nötig
+            try:
+                # Update Progress während Initialisierung
+                progress_placeholder.progress(0.1, text="Simulator wird initialisiert...")
                 simulator = create_simulator()
+                
+                # Update Progress während Simulation
+                progress_placeholder.progress(0.3, text="Simulation läuft...")
                 results_df, kpis = simulator.run()
+                
+                # Speichere Ergebnisse
                 st.session_state.results_df = results_df
                 st.session_state.kpis = kpis
                 st.session_state.simulator = simulator
                 st.session_state.happy_path_run = True
+                st.session_state.simulation_running = False
+                st.session_state.simulation_started = False
+                
+                # Entferne Progress-Indikator
+                progress_placeholder.empty()
+                status_placeholder.empty()
+                
+                # WICHTIG: Nur einmal rerun() am Ende, nicht während der Simulation
                 st.rerun()
+            except Exception as sim_error:
+                # Bei Fehler: Setze Flags zurück
+                st.session_state.simulation_running = False
+                st.session_state.simulation_started = False
+                progress_placeholder.empty()
+                status_placeholder.empty()
+                raise  # Re-raise für die äußere Exception-Behandlung
         except Exception as e:
             st.error(f"❌ Fehler bei der Simulation: {str(e)}")
             st.exception(e)
             st.session_state.happy_path_run = True  # Verhindere Endlosschleife
+            st.session_state.simulation_running = False
+            st.session_state.simulation_started = False
 
 
 def ensure_simulator_available():
     """
-    Prüft ob Simulator verfügbar ist, zeigt Warning und stoppt falls nicht.
+    Prüft ob Simulator verfügbar ist.
+    Wenn die Simulation gerade läuft, zeigt eine Meldung und wartet.
+    Wenn die Simulation nicht läuft und kein Simulator verfügbar ist, zeigt eine Warnung und stoppt.
     """
+    # Prüfe ob Simulation gerade läuft
+    if st.session_state.get('simulation_running', False) or st.session_state.get('simulation_started', False):
+        # Simulation läuft noch - zeige Info
+        elapsed = time.time() - st.session_state.get('simulation_start_time', time.time())
+        
+        # WICHTIG: Kein Timeout mehr - Simulation darf so lange laufen wie nötig
+        
+        # Aktualisiere regelmäßig (alle 2 Sekunden), aber nur wenn Simulation noch läuft
+        last_update = st.session_state.get('last_progress_update', 0)
+        if time.time() - last_update > 2:
+            st.session_state.last_progress_update = time.time()
+            time.sleep(0.1)
+            st.rerun()
+        
+        st.info(f"🔄 Die Simulation wird gerade ausgeführt. Bitte warten Sie... ({int(elapsed)}s)")
+        st.stop()  # Stoppe die Seite, bis Simulation fertig ist
+        return
+    
+    # Prüfe ob Simulator verfügbar ist
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
-        st.warning("⚠️ Bitte führen Sie zuerst die Simulation auf dem Dashboard aus.")
-        st.stop()
+        # Prüfe ob Simulation bereits gestartet wurde (aber noch nicht abgeschlossen)
+        if st.session_state.get('happy_path_run', False):
+            # Simulation wurde bereits ausgeführt, aber Simulator ist nicht verfügbar
+            # Das sollte nicht passieren, aber falls doch, zeige eine Warnung
+            st.warning("⚠️ Die Simulation wurde ausgeführt, aber der Simulator ist nicht verfügbar. Bitte starten Sie die Simulation erneut.")
+            st.stop()
+        else:
+            # Simulation wurde noch nicht gestartet - das sollte nicht passieren, da run_happy_path_simulation() vorher aufgerufen wird
+            # Aber falls doch, zeige eine Warnung
+            st.warning("⚠️ Die Simulation wurde noch nicht gestartet. Bitte warten Sie, bis die automatische Simulation abgeschlossen ist.")
+            # Versuche die Simulation zu starten (falls sie noch nicht gestartet wurde)
+            run_happy_path_simulation()
+            st.stop()

@@ -74,3 +74,4 @@ Die Seite hat ausreichende Kommentare, besonders bei:
 
 Die Inbound-Seite zeigt alle Verschiffungen und Zuläufe zum Lager Dortmund. Sie nutzt den `ChinaTransportManager`, um die Daten zu erhalten und visualisiert sie in einer großen, übersichtlichen Tabelle.
 
+

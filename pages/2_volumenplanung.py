@@ -150,8 +150,20 @@ with tab1:
     # KRITISCH: Berechne Nachfrage für ALLE Tage sequenziell (für korrekte Carry-Over-Logik)
     # Die DemandCalculator-Instanzen haben einen Zustand (product_remainders), der sequenziell aktualisiert werden muss
     # WICHTIG: Berechne für alle Produkte gleichzeitig, damit der Rest korrekt weitergegeben wird
-    daily_demands_planned = {}  # day -> {product -> demand}
-    daily_demands_actual = {}   # day -> {product -> demand}
+    # WICHTIG: Verwende bereits berechnete Daten aus Session State, falls vorhanden
+    from ui.volume_planning_utils import calculate_volume_planning_demand
+    
+    if st.session_state.get('volume_planning_calculated', False):
+        # Verwende bereits berechnete Daten
+        daily_demands_planned = st.session_state.get('daily_demands_planned', {})
+        daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+    else:
+        # Berechne neu (sollte normalerweise nicht passieren, da calculate_volume_planning_demand beim Start aufgerufen wird)
+        daily_demands_planned, daily_demands_actual = calculate_volume_planning_demand()
+    
+    # Falls Daten noch nicht vollständig sind, berechne sie
+    if not daily_demands_planned or not daily_demands_actual:
+        daily_demands_planned, daily_demands_actual = calculate_volume_planning_demand()
     
     # Finde letzten Arbeitstag des Jahres (für korrekte Rest-Aufsummierung)
     last_workday_of_year = None
@@ -160,10 +172,14 @@ with tab1:
             last_workday_of_year = day
             break
     
-    # Berechne Nachfrage für alle 365 Tage sequenziell
-    for day in range(365):
-        daily_demands_planned[day] = {}
-        daily_demands_actual[day] = {}
+    # Berechne Nachfrage für alle 365 Tage sequenziell (nur wenn nicht bereits vorhanden)
+    if not daily_demands_planned or len(daily_demands_planned) < 365:
+        daily_demands_planned = {}  # day -> {product -> demand}
+        daily_demands_actual = {}   # day -> {product -> demand}
+        
+        for day in range(365):
+            daily_demands_planned[day] = {}
+            daily_demands_actual[day] = {}
         
         is_workday = workday_calc.is_workday(day)
         is_last_workday = (day == last_workday_of_year)
@@ -206,6 +222,11 @@ with tab1:
             for product in MasterData.BOM.keys():
                 daily_demands_planned[day][product] = 0
                 daily_demands_actual[day][product] = 0
+    
+    # WICHTIG: Speichere Nachfrage im Session State für Simulator
+    # Der Simulator verwendet diese Daten als Basis, anstatt sie parallel zu berechnen
+    st.session_state.daily_demands_actual = daily_demands_actual
+    st.session_state.daily_demands_planned = daily_demands_planned
     
     # Berechne letzte Kalenderwoche des Jahres
     last_week = get_week_number(end_date)

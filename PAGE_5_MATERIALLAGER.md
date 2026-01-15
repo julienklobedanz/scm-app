@@ -121,3 +121,4 @@ Die Seite hat ausreichende Kommentare, besonders bei:
 
 Die Materiallager-Seite zeigt den kompletten Materialfluss vom Wareneingang bis zum Verbrauch. Sie synchronisiert sich mit den Inbound-Daten und nutzt die exakte Stücklisten-Logik, um den Verbrauch korrekt zu berechnen.
 
+

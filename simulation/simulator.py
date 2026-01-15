@@ -4,6 +4,12 @@ Koordiniert alle Simulationskomponenten
 """
 
 import pandas as pd
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
+    st = None
 from typing import Dict, Any, Optional
 from models.inventory import Inventory
 from models.backlog import MarketBacklog
@@ -68,58 +74,48 @@ class Simulator:
         # Damit Schiffe bereits im Dezember abfahren können
         self._warmup_logistics()
         
-        # Initial-Betankung: Setze Initialbestand aus Inbound-Tabelle
-        # WICHTIG: Dies muss NACH _place_initial_orders() und _warmup_logistics() erfolgen,
-        # damit die Inbound-Tabelle bereits alle Vorlauf-Lieferungen enthält
+        # Initial-Betankung: Setze Initialbestand aus transport_status
+        # OPTIMIERUNG: Berechnet direkt aus transport_status, nicht aus vollständiger Tabelle
+        # Dies ist viel schneller und wird sofort nach _place_initial_orders() ausgeführt
         self._initialize_stock_from_inbound()
     
     def _initialize_stock_from_inbound(self) -> None:
         """
         Initialisiert den Sattel-Bestand aus der Inbound-Tabelle.
         
-        OPTIMIERUNG: Baut die Inbound-Tabelle nur einmal und filtert dann.
-        Das ist schneller als get_daily_arrival_qty für jeden Tag aufzurufen (O(n²) Problem).
+        OPTIMIERUNG: Berechnet nur die benötigten Daten bis zum 31.12.2025,
+        nicht die gesamte Tabelle bis 31.12.2026. Das spart erheblich Zeit.
         
         Diese Methode stellt sicher, dass der Simulator am 01.01.2026 mit dem exakt
         gleichen Bestand startet, den auch die Materiallager-Seite anzeigt.
         """
         from datetime import date
         
-        # Berechne Sattel-Shares (für get_inbound_log_dataframe benötigt)
-        saddle_shares = self.master_data.calculate_saddle_shares()
+        # OPTIMIERUNG: Berechne Initialbestand direkt aus transport_status,
+        # ohne die gesamte Inbound-Tabelle zu erstellen
+        # Das ist viel schneller, da wir nur bis 31.12.2025 benötigen
         
-        # Hole Inbound-Tabelle (einmalig, wird gecacht)
-        try:
-            inbound_df = self.china_transport_manager.get_inbound_log_dataframe(saddle_shares)
-        except Exception:
-            # Bei Fehler: behalte stock_saddles = 0.0
-            return
-        
-        if inbound_df.empty:
-            # Keine Daten verfügbar, behalte stock_saddles = 0.0
-            return
-        
-        # Filtere alle Zeilen mit "Verfügbar im Lager" <= 31.12.2025
         cutoff_date = date(2025, 12, 31)
         initial_stock = 0.0
         
-        for _, row in inbound_df.iterrows():
-            avail_str = row.get('Verfügbar im Lager', '')
-            if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
-                try:
-                    from datetime import datetime
-                    avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()
-                    
-                    if avail_date <= cutoff_date:
-                        # Summiere "Menge Gesamt" (Pool-Menge aller Sättel)
-                        menge_gesamt = row.get('Menge Gesamt', 0)
-                        if menge_gesamt and str(menge_gesamt).strip() != '':
-                            try:
-                                initial_stock += float(menge_gesamt)
-                            except (ValueError, TypeError):
-                                pass
-                except (ValueError, TypeError):
-                    continue
+        # Iteriere über alle Transporte und berechne nur die, die bis 31.12.2025 ankommen
+        for (order_day, order_id), status in self.china_transport_manager.transport_status.items():
+            # Prüfe ob die Ware bis 31.12.2025 verfügbar ist
+            available_day = status.get('available_day')
+            if available_day is None:
+                continue
+            
+            # Konvertiere Tag-Index zu Datum
+            try:
+                avail_date = self.workday_calculator.get_date_from_day(available_day)
+                
+                if avail_date <= cutoff_date:
+                    # Summiere die tatsächliche Menge (nach Verlusten)
+                    qty = status.get('actual_quantity', status.get('quantity', 0.0))
+                    if qty > 0:
+                        initial_stock += qty
+            except Exception:
+                continue
         
         # Setze inventory.stock_saddles auf den berechneten Initialbestand
         self.inventory.stock_saddles = initial_stock
@@ -143,6 +139,9 @@ class Simulator:
         Platziert initiale Bestellungen vor Simulationsbeginn.
         Bestellt täglich basierend auf dem täglichen Bedarf, 49 Tage vor dem jeweiligen Bedarfstag.
         
+        OPTIMIERUNG: Verwendet Nachfrage aus Volumenplanung, falls verfügbar.
+        Das ist schneller als eigene Berechnung.
+        
         Beispiel: Für Bedarf am 04.01.2026 (Tag 3) wird am 16.11.2025 (Tag -46) bestellt.
         """
         # WICHTIG: Wir müssen den Bedarf für die gesamte Lead-Time vorbestellen,
@@ -150,15 +149,28 @@ class Simulator:
         # Die Schleife muss mindestens lead_time_days lang sein, um alle Bedarfstage 0-48 abzudecken.
         lead_time_days = 49
         
+        # OPTIMIERUNG: Versuche Nachfrage aus Volumenplanung zu holen
+        daily_demands_actual = None
+        if STREAMLIT_AVAILABLE:
+            try:
+                daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+            except Exception:
+                pass
+        
         for day in range(lead_time_days):  # KORREKTUR: lead_time_days statt 30
             # KORREKTUR: Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen
             if not self.workday_calculator.is_weekend(day):
-                # Berechne täglichen Bedarf (ohne Carry-Over, da wir nur Base_Daily_Float brauchen)
-                month = self.master_data.get_month_from_day(day)
-                base_daily_floats = self.demand_calculator._calculate_monthly_base_daily_float(month)
-                
-                # Summiere Base_Daily_Float für alle Produkte (jedes Bike braucht 1 Sattel)
-                daily_saddle_demand = sum(base_daily_floats.values())
+                # OPTIMIERUNG: Verwende Nachfrage aus Volumenplanung, falls verfügbar
+                if daily_demands_actual and day in daily_demands_actual:
+                    # Summiere Nachfrage aller Produkte (jedes Bike braucht 1 Sattel)
+                    daily_saddle_demand = sum(daily_demands_actual[day].values())
+                else:
+                    # Fallback: Berechne täglichen Bedarf (ohne Carry-Over, da wir nur Base_Daily_Float brauchen)
+                    month = self.master_data.get_month_from_day(day)
+                    base_daily_floats = self.demand_calculator._calculate_monthly_base_daily_float(month)
+                    
+                    # Summiere Base_Daily_Float für alle Produkte (jedes Bike braucht 1 Sattel)
+                    daily_saddle_demand = sum(base_daily_floats.values())
                 
                 # Bestelldatum = Bedarfstag - Lead Time
                 order_day = day - lead_time_days
@@ -252,13 +264,38 @@ class Simulator:
                         break
                 is_last_workday_of_year = not has_future_workdays
             
-            # Berechne Nachfrage mit Carry-Over-Logik (inkl. Marketing-Add-ons)
-            # Diese Methode führt die Rundung durch und aktualisiert Remainders
-            product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
-                day, 
-                marketing_add_ons,
-                is_last_workday_of_year
-            )
+            # WICHTIG: Verwende Nachfrage aus Volumenplanung, falls vorhanden
+            # Die Volumenplanung ist die Basis, der Simulator verarbeitet diese Daten weiter
+            # Prüfe ob Nachfrage aus Volumenplanung verfügbar ist
+            product_demands = None
+            if STREAMLIT_AVAILABLE:
+                try:
+                    # Versuche Nachfrage aus Volumenplanung zu holen (tatsächliche Nachfrage mit Marketing)
+                    daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+                    if day in daily_demands_actual and daily_demands_actual[day]:
+                        # Verwende Nachfrage aus Volumenplanung
+                        product_demands = daily_demands_actual[day].copy()
+                    else:
+                        # Fallback: Berechne Nachfrage selbst (wenn Volumenplanung noch nicht ausgeführt wurde)
+                        product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
+                            day, 
+                            marketing_add_ons,
+                            is_last_workday_of_year
+                        )
+                except Exception:
+                    # Fallback: Berechne Nachfrage selbst (wenn Streamlit nicht verfügbar oder Fehler)
+                    product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
+                        day, 
+                        marketing_add_ons,
+                        is_last_workday_of_year
+                    )
+            else:
+                # Fallback: Berechne Nachfrage selbst (wenn Streamlit nicht verfügbar)
+                product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
+                    day, 
+                    marketing_add_ons,
+                    is_last_workday_of_year
+                )
             
             # Gesamtnachfrage (ganzzahlig)
             daily_target = sum(product_demands.values())
@@ -336,11 +373,31 @@ class Simulator:
                                     future_marketing_add_ons[product] = 0.0
                                 future_marketing_add_ons[product] += add_on
                     
-                    # 2. Berechne den EXAKTEN Bedarf für diesen Zukunftstag (inkl. Marketing)
-                    # Methode gibt 0 zurück, wenn future_day außerhalb 2026 liegt
-                    future_product_demands = self.demand_calculator.get_demand_for_future_day(
-                        future_day, future_marketing_add_ons
-                    )
+                    # 2. WICHTIG: Verwende Nachfrage aus Volumenplanung (Basis), falls verfügbar
+                    # Die Volumenplanung ist die Basis, der Simulator verarbeitet diese Daten weiter
+                    future_product_demands = None
+                    if STREAMLIT_AVAILABLE:
+                        try:
+                            # Versuche Nachfrage aus Volumenplanung zu holen (tatsächliche Nachfrage mit Marketing)
+                            daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+                            if future_day in daily_demands_actual and daily_demands_actual[future_day]:
+                                # Verwende Nachfrage aus Volumenplanung
+                                future_product_demands = daily_demands_actual[future_day].copy()
+                            else:
+                                # Fallback: Berechne Nachfrage selbst (wenn Volumenplanung noch nicht ausgeführt wurde)
+                                future_product_demands = self.demand_calculator.get_demand_for_future_day(
+                                    future_day, future_marketing_add_ons
+                                )
+                        except Exception:
+                            # Fallback: Berechne Nachfrage selbst (wenn Streamlit nicht verfügbar oder Fehler)
+                            future_product_demands = self.demand_calculator.get_demand_for_future_day(
+                                future_day, future_marketing_add_ons
+                            )
+                    else:
+                        # Fallback: Berechne Nachfrage selbst (wenn Streamlit nicht verfügbar)
+                        future_product_demands = self.demand_calculator.get_demand_for_future_day(
+                            future_day, future_marketing_add_ons
+                        )
                     
                     # 3. Aggregiere BOM-Anforderungen für Sättel
                     _, future_saddle_demand = self.demand_calculator.aggregate_bom_demand(future_product_demands)
@@ -348,6 +405,7 @@ class Simulator:
                     # 4. Übergib den täglichen Bedarf des Zukunftstags (nicht kumulativ)
                     # Der ProcurementManager bestellt täglich basierend auf diesem Bedarf
                     # Analog zur Excel-Formel: Wir schauen auf den Bedarf in 49 Tagen und bestellen heute dafür
+                    # WICHTIG: Dieser Bedarf stammt jetzt aus der Volumenplanung (Basis)
                     expected_future_demand = future_saddle_demand
                 
                 # KORREKTUR: Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen

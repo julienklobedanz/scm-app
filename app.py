@@ -28,36 +28,34 @@ st.markdown("""
 # Initialisiere Session State
 initialize_session_state()
 
+# WICHTIG: Happy Path Simulation SOFORT beim Start ausführen (vor dem Rendering)
+# Dies stellt sicher, dass die Simulation im Hintergrund läuft, auch wenn keine Page geöffnet wird
+from ui.utils import run_happy_path_simulation
+run_happy_path_simulation()
+
 st.title("📊 SCOR Metriken")
 st.markdown("Supply Chain Operations Reference (SCOR) Metriken")
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar()
 
-# Happy Path: Automatische Simulation beim ersten Laden
-if not st.session_state.happy_path_run and st.session_state.results_df is None:
-    try:
-        simulator = create_simulator()
-        results_df, kpis = simulator.run()
-        st.session_state.results_df = results_df
-        st.session_state.kpis = kpis
-        st.session_state.simulator = simulator
-        st.session_state.happy_path_run = True
-        st.rerun()
-    except Exception as e:
-        st.error(f"❌ Fehler bei der Simulation: {str(e)}")
-        st.exception(e)
-        st.session_state.happy_path_run = True
-
 # Simulation ausführen (für manuellen Neustart)
-if st.session_state.get('run_simulation', False) and st.session_state.happy_path_run:
+if st.session_state.get('run_simulation', False):
     try:
+        # Setze Flags zurück für Neustart
+        st.session_state.happy_path_run = False
+        st.session_state.results_df = None
+        st.session_state.simulator = None
+        st.session_state.simulation_running = False
+        st.session_state.simulation_started = False
+        
         with st.spinner("Simulation läuft..."):
             simulator = create_simulator()
             results_df, kpis = simulator.run()
             st.session_state.results_df = results_df
             st.session_state.kpis = kpis
             st.session_state.simulator = simulator
+            st.session_state.happy_path_run = True
             st.session_state.run_simulation = False
             st.success("✅ Simulation erfolgreich abgeschlossen!")
             st.rerun()

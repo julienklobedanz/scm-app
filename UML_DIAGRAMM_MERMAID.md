@@ -242,3 +242,4 @@ classDiagram
 2. **Lokal**: Nutze Mermaid Live Editor (https://mermaid.live/)
 3. **VS Code**: Installiere "Markdown Preview Mermaid Support" Extension
 
+
