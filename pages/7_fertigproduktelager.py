@@ -46,9 +46,9 @@ if st.session_state.results_df is None:
 results_df = st.session_state.results_df
 
 # Zeitraum
-start_date = date(2026, 1, 1)
-end_date = date(2026, 12, 31)
-workday_calc = WorkdayCalculator(year=2026)
+start_date = date(2027, 1, 1)
+end_date = date(2027, 12, 31)
+workday_calc = WorkdayCalculator(year=2027)
 
 def create_finished_goods_log():
     """Erstellt Fertigproduktelager-Log für jedes Produkt"""
@@ -114,7 +114,7 @@ for product in sorted(fg_logs.keys()):
     
     df_fg = fg_logs[product]
     
-    # Filtere auf den Standard-Zeitraum (2026)
+    # Filtere auf den Standard-Zeitraum (2027)
     df_fg_filtered = df_fg[
         (pd.to_datetime(df_fg['Datum'], format='%d.%m.%Y') >= pd.to_datetime(start_date)) &
         (pd.to_datetime(df_fg['Datum'], format='%d.%m.%Y') <= pd.to_datetime(end_date))

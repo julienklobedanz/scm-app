@@ -40,7 +40,7 @@ render_scenario_sidebar()
 
 # Berechne Planung basierend auf jährlichem Volumen
 yearly_volume = st.session_state.get('yearly_volume', 370000)
-workday_calc = WorkdayCalculator(year=2026)
+workday_calc = WorkdayCalculator(year=2027)
 # Zwei separate DemandCalculator-Instanzen: eine für geplant, eine für tatsächlich
 # (um Carry-Over-Logik nicht zu beeinflussen)
 demand_calculator_planned = DemandCalculator(yearly_volume, workday_calc)
@@ -144,8 +144,8 @@ with tab1:
     st.header("Wöchentliche Volumenplanung")
     
     # Erstelle wöchentliche Planung
-    start_date = date(2026, 1, 1)
-    end_date = date(2026, 12, 31)
+    start_date = date(2027, 1, 1)
+    end_date = date(2027, 12, 31)
     
     # KRITISCH: Berechne Nachfrage für ALLE Tage sequenziell (für korrekte Carry-Over-Logik)
     # Die DemandCalculator-Instanzen haben einen Zustand (product_remainders), der sequenziell aktualisiert werden muss
@@ -236,7 +236,7 @@ with tab1:
     for week_num in range(1, last_week + 1):  # Alle Wochen des Jahres
         # Finde ersten Tag der Woche (ISO-Woche)
         # ISO-Woche 1 beginnt am ersten Montag des Jahres oder früher
-        jan_1 = date(2026, 1, 1)
+        jan_1 = date(2027, 1, 1)
         jan_1_weekday = jan_1.weekday()  # 0=Montag, 6=Sonntag
         
         # Berechne Start der ersten ISO-Woche
@@ -258,8 +258,8 @@ with tab1:
         
         for day_offset in range(7):
             current_date = week_start + timedelta(days=day_offset)
-            # Nur Tage im Jahr 2026 berücksichtigen
-            if current_date.year == 2026:
+            # Nur Tage im Jahr 2027 berücksichtigen
+            if current_date.year == 2027:
                 day_of_year = (current_date - start_date).days
                 if 0 <= day_of_year < 365:
                     # Nutze bereits berechnete Nachfragen (sequenziell berechnet)
@@ -587,27 +587,27 @@ with tab2:
     with col1:
         start_date_filter = st.date_input(
             "Start-Datum",
-            value=date(2026, 1, 1),
-            min_value=date(2026, 1, 1),
-            max_value=date(2026, 12, 31),
+            value=date(2027, 1, 1),
+            min_value=date(2027, 1, 1),
+            max_value=date(2027, 12, 31),
             key="daily_start_date"
         )
     with col2:
         end_date_filter = st.date_input(
             "End-Datum",
-            value=date(2026, 12, 31),
-            min_value=date(2026, 1, 1),
-            max_value=date(2026, 12, 31),
+            value=date(2027, 12, 31),
+            min_value=date(2027, 1, 1),
+            max_value=date(2027, 12, 31),
             key="daily_end_date"
         )
     
     # Konvertiere Datum zu Tag
-    start_day = (start_date_filter - date(2026, 1, 1)).days
-    end_day = (end_date_filter - date(2026, 1, 1)).days
+    start_day = (start_date_filter - date(2027, 1, 1)).days
+    end_day = (end_date_filter - date(2027, 1, 1)).days
     
     # Erstelle tägliche Planung
     daily_data = []
-    start_date = date(2026, 1, 1)
+    start_date = date(2027, 1, 1)
     
     # WICHTIG: Nutze die bereits sequenziell berechneten Nachfragen (für korrekte Carry-Over-Logik)
     for day in range(start_day, min(end_day + 1, 365)):

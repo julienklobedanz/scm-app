@@ -253,9 +253,9 @@ with tab5:
 
 with tab6:
     st.header("Feiertage")
-    st.markdown("Relevante Feiertage für alle betroffenen Länder (2026)")
+    st.markdown("Relevante Feiertage für alle betroffenen Länder (2027)")
     
-    year = st.selectbox("Jahr", [2026, 2027, 2028], index=0, key="holiday_year")
+    year = st.selectbox("Jahr", [2027, 2028, 2029], index=0, key="holiday_year")
     
     try:
         all_holidays = HolidaysConfig.get_all_holidays(year)

@@ -44,7 +44,7 @@ if st.session_state.results_df is None:
     st.stop()
 
 results_df = st.session_state.results_df
-workday_calc = WorkdayCalculator(year=2026)
+workday_calc = WorkdayCalculator(year=2027)
 
 # ============================================================================
 # LAGER

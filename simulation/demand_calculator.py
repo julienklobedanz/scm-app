@@ -40,7 +40,7 @@ class DemandCalculator:
         
         # Zähle Arbeitstage im Monat
         num_workdays = 0
-        start_date = date(2026, 1, 1)
+        start_date = date(2027, 1, 1)
         days_in_month = self.master_data.DAYS_PER_MONTH[month]
         
         # Finde ersten Tag des Monats
@@ -184,22 +184,22 @@ class DemandCalculator:
     def get_demand_for_future_day(self, day_index: int, marketing_add_ons: Dict[str, float] = None) -> Dict[str, int]:
         """
         Berechnet die Nachfrage für einen zukünftigen Tag.
-        STRENGE LOGIK: Nur für Jahr 2026 (0 <= day_index <= 364).
+        STRENGE LOGIK: Nur für Jahr 2027 (0 <= day_index <= 364).
         Für Tag > 364 (Jahr 2027): Gib 0 zurück (keine Bestellung für nächstes Jahr).
         
         Args:
-            day_index: Tag-Index (0-basiert, 0 = 01.01.2026)
+            day_index: Tag-Index (0-basiert, 0 = 01.01.2027)
             marketing_add_ons: Optional dict mit Marketing-Add-ons pro Produkt
         
         Returns:
-            Dict mit Produktname -> Ganzzahlige Nachfrage (0 wenn außerhalb 2026)
+            Dict mit Produktname -> Ganzzahlige Nachfrage (0 wenn außerhalb 2027)
         """
-        # KORREKTUR: Keine Zyklik am Ende - nur für Jahr 2026 bestellen
+        # KORREKTUR: Keine Zyklik am Ende - nur für Jahr 2027 bestellen
         if day_index < 0 or day_index > 364:
-            # Außerhalb des Jahres 2026: Kein Bedarf
+            # Außerhalb des Jahres 2027: Kein Bedarf
             return {product: 0 for product in self.master_data.BOM.keys()}
         
-        # Innerhalb des Jahres 2026: Normaler Bedarf
+        # Innerhalb des Jahres 2027: Normaler Bedarf
         return self.calculate_daily_demand_per_product_dict(day_index, marketing_add_ons)
     
     def calculate_daily_demand_per_product_dict(

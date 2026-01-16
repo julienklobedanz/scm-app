@@ -14,11 +14,11 @@ from simulation.workday_calculator import WorkdayCalculator
 class ProcurementManager:
     """Verwaltet Bestellungen beim chinesischen Lieferanten"""
     
-    # Feiertage 2026 (Deutschland)
-    HOLIDAYS_2026 = [
-        "01.01.2026", "03.04.2026", "06.04.2026", "01.05.2026",
-        "14.05.2026", "25.05.2026", "04.06.2026", "03.10.2026",
-        "01.11.2026", "25.12.2026", "26.12.2026"
+    # Feiertage 2027 (Deutschland)
+    HOLIDAYS_2027 = [
+        "01.01.2027", "26.03.2027", "29.03.2027", "01.05.2027",
+        "06.05.2027", "17.05.2027", "03.10.2027",
+        "01.11.2027", "25.12.2027", "26.12.2027"
     ]
     
     def __init__(
@@ -87,7 +87,7 @@ class ProcurementManager:
                 target_date_str = target_date.strftime(self.master_data.DATE_FORMAT)
                 
                 # Wenn Ankunft an Feiertag -> keine Bestellung
-                if target_date_str in self.HOLIDAYS_2026:
+                if target_date_str in self.HOLIDAYS_2027:
                     return  # Bestellung abbrechen
             
             # Bestelle genau den täglichen Bedarf für den Zukunftstag

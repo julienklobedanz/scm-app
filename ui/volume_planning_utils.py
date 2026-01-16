@@ -29,7 +29,7 @@ def calculate_volume_planning_demand():
     
     # Berechne Nachfrage
     yearly_volume = st.session_state.get('yearly_volume', 370000)
-    workday_calc = WorkdayCalculator(year=2026)
+    workday_calc = WorkdayCalculator(year=2027)
     
     # Zwei separate DemandCalculator-Instanzen: eine für geplant, eine für tatsächlich
     demand_calculator_planned = DemandCalculator(yearly_volume, workday_calc)

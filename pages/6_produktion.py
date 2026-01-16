@@ -46,9 +46,9 @@ if st.session_state.results_df is None:
 results_df = st.session_state.results_df
 
 # Zeitraum
-start_date = date(2026, 1, 1)
-end_date = date(2026, 12, 31)
-workday_calc = WorkdayCalculator(year=2026)
+start_date = date(2027, 1, 1)
+end_date = date(2027, 12, 31)
+workday_calc = WorkdayCalculator(year=2027)
 
 # NEU: Lese Produktionslogs direkt aus dem ProductionPlanner
 def get_production_logs():
@@ -91,7 +91,7 @@ for product in sorted(production_logs.keys()):
         st.info(f"Keine Daten für {product} verfügbar.")
         continue
     
-    # Filtere auf den Standard-Zeitraum (2026)
+    # Filtere auf den Standard-Zeitraum (2027)
     df_prod_filtered = df_prod[
         (pd.to_datetime(df_prod['Datum'], format='%d.%m.%Y') >= pd.to_datetime(start_date)) &
         (pd.to_datetime(df_prod['Datum'], format='%d.%m.%Y') <= pd.to_datetime(end_date))

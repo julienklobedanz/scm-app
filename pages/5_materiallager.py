@@ -47,10 +47,10 @@ if st.session_state.results_df is None:
 results_df = st.session_state.results_df
 
 # Zeitraum
-start_date = date(2025, 12, 31)
-end_date = date(2026, 12, 31)
-workday_calc = WorkdayCalculator(year=2026)
-start_date_simulation = date(2026, 1, 1)
+start_date = date(2026, 12, 31)
+end_date = date(2027, 12, 31)
+workday_calc = WorkdayCalculator(year=2027)
+start_date_simulation = date(2027, 1, 1)
 
 def create_saddle_inventory_log():
     """Erstellt Sattel-Lager-Log synchronisiert mit Inbound-Daten"""
@@ -97,9 +97,9 @@ def create_saddle_inventory_log():
     # 2. Materiallager berechnen
     # Startdatum: Früher ansetzen, um Vorlauf (Initial Stock) mitzunehmen!
     # Die Schleife beginnt ab November, sammelt die ersten Lieferungen ein,
-    # zieht die ersten Verbräuche ab, und kommt dann am 01.01.2026 mit dem korrekten Bestand an
-    start_date_log = date(2025, 11, 1)
-    end_date_log = date(2026, 12, 31)
+    # zieht die ersten Verbräuche ab, und kommt dann am 01.01.2027 mit dem korrekten Bestand an
+    start_date_log = date(2026, 11, 1)
+    end_date_log = date(2027, 12, 31)
     total_days = (end_date_log - start_date_log).days + 1
     
     stock_by_saddle = {saddle_type: 0.0 for saddle_type in saddle_types}
@@ -257,7 +257,7 @@ with st.spinner("🔄 Berechne Materiallager..."):
 for saddle_type in sorted(saddle_logs.keys()):
     st.subheader(f"📋 {saddle_type}")
     df = saddle_logs[saddle_type]
-    # Filtere auf den Standard-Zeitraum (2026)
+    # Filtere auf den Standard-Zeitraum (2027)
     mask = (pd.to_datetime(df['Datum'], format='%d.%m.%Y') >= pd.to_datetime(start_date)) & \
            (pd.to_datetime(df['Datum'], format='%d.%m.%Y') <= pd.to_datetime(end_date))
     df_filt = df[mask].copy()

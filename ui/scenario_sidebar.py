@@ -37,13 +37,13 @@ def render_scenario_sidebar():
             key="scenario_type_global"
         )
         
-        workday_calc = WorkdayCalculator(year=2026)
-        start_of_year = date(2026, 1, 1)
+        workday_calc = WorkdayCalculator(year=2027)
+        start_of_year = date(2027, 1, 1)
         
         if scenario_type == "Marketingaktion":
             st.subheader("Marketingaktion")
-            start_date = st.date_input("Start-Datum", value=date(2026, 2, 19), min_value=start_of_year, max_value=date(2026, 12, 31), key="marketing_start_global")
-            end_date = st.date_input("End-Datum", value=date(2026, 3, 11), min_value=start_of_year, max_value=date(2026, 12, 31), key="marketing_end_global")
+            start_date = st.date_input("Start-Datum", value=date(2027, 2, 19), min_value=start_of_year, max_value=date(2027, 12, 31), key="marketing_start_global")
+            end_date = st.date_input("End-Datum", value=date(2027, 3, 11), min_value=start_of_year, max_value=date(2027, 12, 31), key="marketing_end_global")
             demand_factor = st.slider("Nachfrage-Erhöhung (Faktor)", 1.0, 3.0, 1.5, 0.1, key="marketing_factor_global")
             
             if st.button("➕ Marketingaktion hinzufügen", key="add_marketing_global"):
@@ -61,8 +61,8 @@ def render_scenario_sidebar():
         
         elif scenario_type == "Wasserschaden im Lager":
             st.subheader("Wasserschaden im Lager")
-            start_date = st.date_input("Start-Datum", value=date(2026, 4, 10), min_value=start_of_year, max_value=date(2026, 12, 31), key="warehouse_damage_start_global")
-            end_date = st.date_input("End-Datum", value=date(2026, 4, 20), min_value=start_of_year, max_value=date(2026, 12, 31), key="warehouse_damage_end_global")
+            start_date = st.date_input("Start-Datum", value=date(2027, 4, 10), min_value=start_of_year, max_value=date(2027, 12, 31), key="warehouse_damage_start_global")
+            end_date = st.date_input("End-Datum", value=date(2027, 4, 20), min_value=start_of_year, max_value=date(2027, 12, 31), key="warehouse_damage_end_global")
             stock_loss = st.slider("Lagerbestands-Verlust (%)", 0.0, 1.0, 0.5, 0.1, key="warehouse_damage_loss_global")
             
             if st.button("➕ Wasserschaden hinzufügen", key="add_warehouse_damage_global"):
@@ -81,8 +81,8 @@ def render_scenario_sidebar():
         
         elif scenario_type == "Maschinenausfall (China)":
             st.subheader("Maschinenausfall (China)")
-            start_date = st.date_input("Start-Datum", value=date(2026, 6, 1), min_value=start_of_year, max_value=date(2026, 12, 31), key="supplier_breakdown_start_global")
-            end_date = st.date_input("End-Datum", value=date(2026, 6, 10), min_value=start_of_year, max_value=date(2026, 12, 31), key="supplier_breakdown_end_global")
+            start_date = st.date_input("Start-Datum", value=date(2027, 6, 1), min_value=start_of_year, max_value=date(2027, 12, 31), key="supplier_breakdown_start_global")
+            end_date = st.date_input("End-Datum", value=date(2027, 6, 10), min_value=start_of_year, max_value=date(2027, 12, 31), key="supplier_breakdown_end_global")
             component = st.selectbox("Betroffene Komponente", ["saddles"], key="supplier_component_global")  # Nur Sättel
             
             if st.button("➕ Lieferantenausfall hinzufügen", key="add_supplier_breakdown_global"):
@@ -101,8 +101,8 @@ def render_scenario_sidebar():
         elif scenario_type == "Lieferprobleme (China)":
             st.subheader("Lieferprobleme (China)")
             st.info("Betroffene Komponente: Sättel")
-            start_date = st.date_input("Start-Datum", value=date(2026, 7, 19), min_value=start_of_year, max_value=date(2026, 12, 31), key="delivery_start_global")
-            end_date = st.date_input("End-Datum", value=date(2026, 7, 29), min_value=start_of_year, max_value=date(2026, 12, 31), key="delivery_end_global")
+            start_date = st.date_input("Start-Datum", value=date(2027, 7, 19), min_value=start_of_year, max_value=date(2027, 12, 31), key="delivery_start_global")
+            end_date = st.date_input("End-Datum", value=date(2027, 7, 29), min_value=start_of_year, max_value=date(2027, 12, 31), key="delivery_end_global")
             loss = st.slider("Warenverlust (%)", 0.0, 1.0, 0.0, 0.1, key="delivery_loss_global")
             delay = st.number_input("Verspätung (Tage)", min_value=0, max_value=30, value=0, key="delivery_delay_global")
             
