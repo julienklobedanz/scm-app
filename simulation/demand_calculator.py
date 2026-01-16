@@ -56,14 +56,13 @@ class DemandCalculator:
             num_workdays = 1
         
         # Base_Daily_Float pro Produkt
-        # Excel-Formel: Basisdaten!$E$8 * 'Lieferanten und Markt'!$H18 * Saisonalität / Arbeitstage_im_Monat
+        # Jahresvolumen * Verkaufsanteil * Saisonalität / Arbeitstage_im_Monat
         # WICHTIG: Verkaufsanteile werden direkt verwendet, ohne durch total_share zu teilen
-        # Dies entspricht der Excel-Formel, wo jeder Verkaufsanteil direkt multipliziert wird
         base_daily_float = {}
         
         for product in self.master_data.BOM.keys():
             sales_share = self.master_data.PRODUCT_SALES_SHARES.get(product, 0.0)
-            # Excel-Formel: Jahresvolumen * Verkaufsanteil * Saisonalität / Arbeitstage_im_Monat
+            # Jahresvolumen * Verkaufsanteil * Saisonalität / Arbeitstage_im_Monat
             # Dies entspricht: monthly_target_global * sales_share / num_workdays
             # Aber monthly_target_global = yearly_volume * monthly_factor
             # Also: yearly_volume * monthly_factor * sales_share / num_workdays
@@ -83,7 +82,7 @@ class DemandCalculator:
         """
         Berechnet tägliche Nachfrage für ein spezifisches Produkt mit Carry-Over-Logik
         
-        Excel-Formel-Logik:
+        Berechnungslogik:
         - Wenn Wochenende oder Feiertag: 0 (Rest bleibt unverändert vom letzten Arbeitstag)
         - Sonst: ABRUNDEN((Base * Share / AT) + Rest; 0) + Marketing-Add-on
         - Rest für nächsten Tag: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
@@ -106,7 +105,7 @@ class DemandCalculator:
             self._calculate_monthly_base_daily_float(month)
             self.current_month = month
         
-        # Excel-Formel: WENN(ODER(L$81="Sa.";L$81="So.";L$83<>"");0;...)
+        # Wenn Wochenende oder Feiertag: 0
         # Wenn Wochenende oder Feiertag: 0 (Rest bleibt unverändert)
         if not is_workday:
             # Rest bleibt unverändert vom letzten Arbeitstag (wird nicht aktualisiert)
@@ -116,20 +115,20 @@ class DemandCalculator:
         base_daily_float = self.monthly_base_daily_float[month].get(product, 0.0)
         
         # Apply Carry-Over: Add remainder from previous workday
-        # Excel-Formel: Rest wird vom VORHERIGEN Arbeitstag übernommen
+        # Rest wird vom VORHERIGEN Arbeitstag übernommen
         # Wenn der vorherige Tag ein Feiertag/Wochenende war, bleibt der Rest unverändert
         remainder = self.product_remainders.get(product, 0.0)
         
-        # Excel-Formel: ABRUNDEN((Base * Share / AT) + Rest; 0) + Marketing-Add-on
+        # ABRUNDEN((Base * Share / AT) + Rest; 0) + Marketing-Add-on
         # 1. Base + Rest zusammenfassen
         # WICHTIG: Runde auf 12 Dezimalstellen, um Floating-Point-Fehler zu vermeiden
-        # Excel verwendet interne Präzision, wir müssen ähnlich präzise sein
+        # Verwende hohe Präzision für korrekte Berechnung
         base_with_remainder = round(base_daily_float + remainder, 12)
         
-        # 2. Abrunden (wie Excel ABRUNDEN(..., 0))
+        # 2. Abrunden (ABRUNDEN(..., 0))
         # WICHTIG: math.floor() für korrekte Abrundung (int() rundet bei negativen Zahlen falsch)
         import math
-        # Excel ABRUNDEN rundet immer ab (auch bei negativen Zahlen)
+        # ABRUNDEN rundet immer ab (auch bei negativen Zahlen)
         # math.floor() macht das korrekt
         # WICHTIG: Prüfe ob base_with_remainder sehr nahe an einer ganzen Zahl ist (Floating-Point-Fehler)
         # Wenn abs(base_with_remainder - round(base_with_remainder)) < 1e-10, dann ist es praktisch eine ganze Zahl
@@ -139,17 +138,17 @@ class DemandCalculator:
         else:
             rounded_base = math.floor(base_with_remainder)  # Round down to nearest integer
         
-        # 3. Marketing-Add-on addieren (NACH der Rundung, wie in Excel)
-        # Marketing-Add-on wird als Float addiert (kann auch Float sein in Excel)
+        # 3. Marketing-Add-on addieren (NACH der Rundung)
+        # Marketing-Add-on wird als Float addiert
         daily_target_float = rounded_base + marketing_add_on
         
-        # 4. Marketing-Add-on addieren (NACH der Rundung, wie in Excel)
-        # Marketing-Add-on wird als Float addiert (kann auch Float sein in Excel)
+        # 4. Marketing-Add-on addieren (NACH der Rundung)
+        # Marketing-Add-on wird als Float addiert
         daily_target_float = rounded_base + marketing_add_on
         
         # 5. Am letzten Arbeitstag des Jahres: Reste aufsummieren
         # WICHTIG: Am letzten Arbeitstag müssen ALLE Reste aufsummiert werden
-        # Excel-Formel: Am letzten Arbeitstag wird der Rest nicht verworfen, sondern addiert
+        # Am letzten Arbeitstag wird der Rest nicht verworfen, sondern addiert
         if is_last_workday_of_year:
             # Addiere den Rest vom Base+Rest (wird normalerweise verworfen)
             # Dies stellt sicher, dass alle Reste am Jahresende aufsummiert werden
@@ -162,13 +161,13 @@ class DemandCalculator:
         daily_target_int = math.floor(daily_target_float)
         
         # 6. Berechne neuen Rest (nur aus Base + Rest, Marketing-Add-on wird nicht in Rest übernommen)
-        # Excel-Formel: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
+        # (Base + Rest) - ABRUNDEN(Base + Rest; 0)
         # WICHTIG: Verwende math.floor() für konsistente Berechnung
         # Wenn Ergebnis < 0, dann 0 (sollte nicht vorkommen, aber sicherheitshalber)
         if is_last_workday_of_year:
             new_remainder = 0.0
         else:
-            # Berechne Rest genau wie Excel: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
+            # Berechne Rest: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
             # Verwende math.floor() für konsistente Abrundung
             # WICHTIG: Verwende die gleiche rounded_base wie oben, um Konsistenz zu gewährleisten
             new_remainder = base_with_remainder - rounded_base

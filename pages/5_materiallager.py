@@ -97,9 +97,9 @@ def create_saddle_inventory_log():
 
     # 2. Materiallager berechnen
     # Startdatum: Früher ansetzen, um Vorlauf (Initial Stock) mitzunehmen!
-    # Die Schleife beginnt ab November, sammelt die ersten Lieferungen ein,
-    # zieht die ersten Verbräuche ab, und kommt dann am 01.01.2027 mit dem korrekten Bestand an
-    start_date_log = date(2026, 11, 1)
+    # Die Schleife beginnt ab November des Vorjahres, sammelt die ersten Lieferungen ein,
+    # zieht die ersten Verbräuche ab, und kommt dann am Jahresanfang mit dem korrekten Bestand an
+    start_date_log = date(planning_year - 1, 11, 1)
     end_date_log = date(planning_year, 12, 31)
     total_days = (end_date_log - start_date_log).days + 1
     

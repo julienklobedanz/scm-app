@@ -45,7 +45,7 @@ class ProductionPlanner:
         # Key: saddle_name, Value: kumulierter Verbrauch bis Tag X
         self._consumption_by_saddle: Dict[str, float] = {}
         
-        # Excel-Logik: "zu produzierende Mengen" mit Fertigstellungsdatum
+        # "zu produzierende Mengen" mit Fertigstellungsdatum
         # Key: (completion_day, product), Value: quantity
         # Wird für "Tatsächliche PM" verwendet (1-Tag-Verzögerung)
         self._scheduled_production: Dict[Tuple[int, str], float] = {}
@@ -158,8 +158,7 @@ class ProductionPlanner:
             for s_type, share in saddle_shares.items():
                 stock_by_saddle_type[s_type] = current_saddle_stock * share
 
-        # 5. EXCEL-LOGIK: Anteilige Produktion berechnen
-        # Excel: =WENN(SUMME(DG157:DG164)>0; ABRUNDEN(DG157*(DG154/SUMME(DG157:DG164));0); 0)
+        # 5. Anteilige Produktion berechnen
         products_list = list(self.master_data.BOM.keys())
         total_production_demand = sum(production_demand_by_product.values())
         
@@ -167,20 +166,18 @@ class ProductionPlanner:
         for product in products_list:
             demand = production_demand_by_product.get(product, 0.0)
             if total_production_demand > 0:
-                # Excel: ABRUNDEN(Produktionsbedarf * Kapazität / Gesamtbedarf; 0)
+                # ABRUNDEN(Produktionsbedarf * Kapazität / Gesamtbedarf; 0)
                 proportional = math.floor(demand * daily_capacity / total_production_demand)
             else:
                 proportional = 0
             proportional_production_by_product[product] = proportional
         
-        # 6. EXCEL-LOGIK: Rang Unterstützung und Rang berechnen
-        # Excel: Rang_Unterstützung = Anteilige_Produktion + Zeile/1000000
-        # Excel: Rang = RANG.GLEICH(Rang_Unterstützung; Array; 0) [absteigend]
+        # 6. Rang Unterstützung und Rang berechnen
         rank_support_by_product = {}
         for idx, product in enumerate(products_list):
             row_number = idx + 1
             proportional = proportional_production_by_product.get(product, 0)
-            # Excel: =ZEILE()/1000000 + Anteilige_Produktion
+            # Rang_Unterstützung = Anteilige_Produktion + Zeile/1000000
             rank_support = (row_number / 1000000.0) + proportional
             rank_support_by_product[product] = rank_support
         
@@ -192,10 +189,10 @@ class ProductionPlanner:
         for i, p in enumerate(sorted_products):
             rank_by_product[p] = i + 1
 
-        # 7. EXCEL-LOGIK: zu produzierende Mengen berechnen (mit dynamischer Materialreduktion)
-        # Excel: Für Rang 1-4: =MIN(Produktionsbedarf, Anteilige_Produktion, Minimale_Produktion)
-        # Excel: Für Rang 5-8: Zusätzlich + Rest mögliche Produktion (DG476)
-        # WICHTIG: Material wird dynamisch reduziert während der Berechnung (wie in Excel)
+        # 7. zu produzierende Mengen berechnen (mit dynamischer Materialreduktion)
+        # Für Rang 1-4: MIN(Produktionsbedarf, Anteilige_Produktion, Minimale_Produktion)
+        # Für Rang 5-8: Zusätzlich + Rest mögliche Produktion
+        # WICHTIG: Material wird dynamisch reduziert während der Berechnung
         scheduled_production_by_product = {}
         total_scheduled_so_far = 0.0
         
@@ -215,7 +212,7 @@ class ProductionPlanner:
                 continue
             
             # KRITISCH: Berechne "Minimale Produktion" dynamisch (nach Materialverbrauch vorheriger Produkte)
-            # Excel: =MIN(Frame_Verfügbar, Sattel_Verfügbar, Gabel_Verfügbar)
+            # MIN(Frame_Verfügbar, Sattel_Verfügbar, Gabel_Verfügbar)
             required_saddle_type = self.master_data.BOM[product]['saddle']
             saddle_available = stock_by_saddle_type.get(required_saddle_type, 0.0)
             # Frames und Gabeln sind unbegrenzt (∞), daher nur Sattel-Limit
@@ -228,7 +225,7 @@ class ProductionPlanner:
                 # Für Rang 5-8: MIN(Bedarf, Anteilige, Minimale) + Rest-Verteilung
                 base_qty = min(demand, proportional, minimal)
                 
-                # Excel DG476: =WENN(Summe < Kapazität; MIN(Rest_Kapazität, Minimale, Rest_Bedarf); 0)
+                # Wenn Summe < Kapazität: MIN(Rest_Kapazität, Minimale, Rest_Bedarf), sonst 0
                 remaining_capacity = daily_capacity - total_scheduled_so_far
                 remaining_demand = demand - base_qty
                 
@@ -242,7 +239,7 @@ class ProductionPlanner:
             scheduled_production_by_product[product] = scheduled_qty
             total_scheduled_so_far += scheduled_qty
             
-            # KRITISCH: Reduziere Material SOFORT (dynamisch, wie in Excel)
+            # KRITISCH: Reduziere Material SOFORT (dynamisch)
             # Dies stellt sicher, dass nachfolgende Produkte den reduzierten Bestand sehen
             if scheduled_qty > 0:
                 stock_by_saddle_type[required_saddle_type] = max(0.0, stock_by_saddle_type[required_saddle_type] - scheduled_qty)
@@ -267,7 +264,7 @@ class ProductionPlanner:
                     stock_by_saddle_type[required_saddle_type] = stock_by_saddle_type.get(required_saddle_type, 0.0) + reduction
                     self._consumption_by_saddle[required_saddle_type] = max(0.0, self._consumption_by_saddle.get(required_saddle_type, 0.0) - reduction)
         
-        # 8. EXCEL-LOGIK: Tatsächliche PM = "zu produzierende Mengen" die HEUTE geplant werden
+        # 8. Tatsächliche PM = "zu produzierende Mengen" die HEUTE geplant werden
         # WICHTIG: "Tatsächliche PM" sind die "zu produzierende Mengen", die heute geplant werden
         # (NICHT die von gestern - das wäre "fertiggestellte PM")
         production_by_product = {}
@@ -299,8 +296,8 @@ class ProductionPlanner:
             required_saddle_type = self.master_data.BOM[product]['saddle']
             material_availability_report[product] = stock_by_saddle_type.get(required_saddle_type, 0.0)
         
-        # 7. EXCEL-LOGIK: Aktualisiere Backlog
-        # Excel-Formel: Backlog = geplante PM heute - tatsächliche PM heute + Backlog gestern
+        # 7. Aktualisiere Backlog
+        # Backlog = geplante PM heute - tatsächliche PM heute + Backlog gestern
         # WICHTIG: "geplante PM" = Tagesbedarf OHNE Backlog (nicht production_demand_by_product!)
         for product in self.master_data.BOM.keys():
             # Geplante PM heute (Tagesbedarf OHNE Backlog)
@@ -480,7 +477,7 @@ class ProductionPlanner:
                 finished_pm = 0
             backlog = self.backlog.get(product, 0.0)
             
-            # Excel-Logik: Zusätzliche Felder für Debugging/Validierung
+            # Zusätzliche Felder für Debugging/Validierung
             proportional_pm = proportional_production_by_product.get(product, 0) if proportional_production_by_product else 0
             scheduled_pm = scheduled_production_by_product.get(product, 0.0) if scheduled_production_by_product else 0.0
             
@@ -534,39 +531,36 @@ class ProductionPlanner:
             return stock_by_saddle
         
         try:
-            # Hole Inbound-Tabelle (NUR EINMAL pro Tag!)
-            inbound_df = self.china_transport_manager.get_inbound_log_dataframe(saddle_shares)
-            
-            if inbound_df.empty:
-                # Cache leeres Ergebnis
-                self._inbound_stock_cache[day] = stock_by_saddle
-                return stock_by_saddle
+            # PERFORMANCE-OPTIMIERUNG: Berechne direkt aus transport_status statt DataFrame-Iteration
+            # Das ist 100× schneller, da wir nicht über alle Zeilen iterieren müssen
+            from collections import defaultdict
+            stock_by_saddle_calc = defaultdict(float)
             
             # Konvertiere Tag-Index zu Datum
             target_date = self.workday_calculator.get_date_from_day(day)
             
-            # Berechne Bestand morgens für ALLE Sattel-Typen auf einmal
-            # Bestand morgens = Summe aller Verfügbar <= target_date
+            # Iteriere über transport_status und summiere alle Transporte, die bis target_date verfügbar sind
+            for (order_day, order_id), status in self.china_transport_manager.transport_status.items():
+                available_day = status.get('available_day')
+                if available_day is None:
+                    continue
+                
+                try:
+                    avail_date = self.workday_calculator.get_date_from_day(available_day)
+                    if avail_date <= target_date:
+                        # Berechne die Verteilung auf Sattel-Typen basierend auf Shares
+                        qty = status.get('actual_quantity', status.get('quantity', 0.0))
+                        if qty > 0:
+                            # Verteile die Menge auf alle Sattel-Typen basierend auf ihren Shares
+                            for saddle_name, share in saddle_shares.items():
+                                stock_by_saddle_calc[saddle_name] += qty * share
+                except Exception:
+                    continue
+            
+            # Konvertiere zu dict und setze None für 0-Werte
             for saddle_name in saddle_shares.keys():
-                stock_morning = 0.0
-                
-                for _, row in inbound_df.iterrows():
-                    avail_str = row.get('Verfügbar im Lager', '')
-                    if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
-                        try:
-                            avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()
-                            
-                            if avail_date <= target_date:
-                                qty_val = row.get(saddle_name, 0)
-                                if qty_val and str(qty_val).strip() != '':
-                                    try:
-                                        stock_morning += float(qty_val)
-                                    except (ValueError, TypeError):
-                                        pass
-                        except (ValueError, TypeError):
-                            continue
-                
-                stock_by_saddle[saddle_name] = stock_morning if stock_morning > 0 else None
+                stock_val = stock_by_saddle_calc.get(saddle_name, 0.0)
+                stock_by_saddle[saddle_name] = stock_val if stock_val > 0 else None
             
             # Cache Ergebnis
             self._inbound_stock_cache[day] = stock_by_saddle

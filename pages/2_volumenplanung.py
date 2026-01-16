@@ -247,7 +247,7 @@ with tab1:
                     if workday_calc.is_workday(day_of_year):
                         daily_demands.append(day_total_actual)
         
-        # Berechne Schichten (exakt wie Excel-Formel)
+        # Berechne Schichten
         # Konstanten
         HOURS_PER_SHIFT = 8
         CAPACITY_PER_HOUR = MasterData.GLOBAL_CONFIG['capacity_per_hour']  # 130
@@ -256,10 +256,10 @@ with tab1:
         MIN_SHIFTS = 1
         MAX_SHIFTS = 3
         
-        # Anzahl Arbeitstage in dieser Woche (H105 in Excel)
+        # Anzahl Arbeitstage in dieser Woche
         num_workdays = len(daily_demands)
         
-        # Excel-Formel: AUFRUNDEN(N8/H105/(Basisdaten!$E$9*Basisdaten!$E$13*Basisdaten!$E$10);0)
+        # AUFRUNDEN(Nachfrage / Arbeitstage / (Stunden_pro_Schicht * Kapazität_pro_Stunde * Produktionslinien); 0)
         # N8 = Gesamtvolumen der Woche (total_week_demand_actual)
         # H105 = Anzahl Arbeitstage (num_workdays)
         # Basisdaten!$E$9 = CAPACITY_PER_HOUR (130)

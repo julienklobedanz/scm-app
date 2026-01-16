@@ -43,6 +43,10 @@ class ChinaTransportManager:
         self._inbound_df_cache: Dict[tuple, pd.DataFrame] = {}
         self._inbound_df_cache_key: Optional[tuple] = None
         
+        # PERFORMANCE: Cache für Supplier-Log-Tabelle (Performance-Optimierung)
+        # Key: (saddle_name, saddle_share), Value: DataFrame
+        self._supplier_log_cache: Dict[tuple, pd.DataFrame] = {}
+        
         # PERFORMANCE: Cache für chinesische Feiertage (nur einmal laden)
         self._chinese_holidays_cache: Optional[set] = None
         self._chinese_holidays_year: Optional[int] = None
@@ -61,6 +65,7 @@ class ChinaTransportManager:
         # WICHTIG: Cache invalidieren, da sich die Datenbasis geändert hat!
         self._inbound_df_cache = {}
         self._inbound_df_cache_key = None
+        self._supplier_log_cache = {}  # PERFORMANCE: Auch Supplier-Log-Cache invalidieren
         
         self.order_counter += 1
         order_id = self.order_counter
@@ -73,14 +78,13 @@ class ChinaTransportManager:
         # Status initialisieren
         order_date = self.workday_calculator.get_date_from_day(order_day)
         
-        # Freigabedatum: Nächster Arbeitstag nach Bestellung (wie in Excel "Freigegeben")
+        # Freigabedatum: Nächster Arbeitstag nach Bestellung
         # Das Produktionsdatum bezieht sich auf das Freigabedatum, nicht auf das Bestelldatum!
         released_day = self._get_next_workday(order_day)
         
-        # Schritt 1: Produktion in China (5 AT, wie Excel ARBEITSTAG)
-        # Excel: ARBEITSTAG(F16; Produktionszeit; Feiertage) = ARBEITSTAG(F16; 5; Feiertage) = 5 AT
-        # F16 ist das Freigabedatum, nicht das Bestelldatum!
+        # Schritt 1: Produktion in China (5 AT)
         # ARBEITSTAG bedeutet: Start-Tag + 5 Arbeitstage (Start-Tag zählt nicht mit)
+        # Das Freigabedatum ist der Start-Tag, nicht das Bestelldatum
         # WICHTIG: Für Produktion in China werden chinesische Feiertage verwendet!
         production_start_day = released_day
         production_end_day = self._add_workdays(production_start_day, 5, exclude_start=True, use_chinese_holidays=True)
@@ -199,9 +203,8 @@ class ChinaTransportManager:
             # Konvertiere zurück zu Tag-Index
             ship_arrival_day = (ship_arrival_date - date(self.workday_calculator.year, 1, 1)).days
             
-            # KRITISCH: Excel-Formel für geplante/tatsächliche Ankunft: ARBEITSTAG(Ankunft Schiff; 2-1; Feiertage)
-            # $I$28 = 2 (LKW DE Dauer in AT), $J$28 = "AT" (Arbeitstage)
-            # Excel ARBEITSTAG: Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
+            # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 1 Arbeitstag
+            # Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
             truck_de_start_day = ship_arrival_day
             truck_de_end_day = self._add_workdays(truck_de_start_day, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
             physical_arrival_day = truck_de_end_day
@@ -423,12 +426,11 @@ class ChinaTransportManager:
     def _calculate_order_quantity_from_volume_planning(self, order_date: date, saddle_name: str, daily_demands_actual_cache: dict = None) -> float:
         """
         Berechnet die Bestellmenge für einen Sattel-Typ basierend auf der Volumenplanung.
-        Dies entspricht der Excel-Formel für "Bestelleingang".
         
         OPTIMIERUNG: daily_demands_actual_cache kann übergeben werden, um wiederholte
         session_state-Zugriffe zu vermeiden.
         
-        Die Excel-Formel summiert die Nachfrage aller Produkte, die den gleichen Sattel verwenden,
+        Summiert die Nachfrage aller Produkte, die den gleichen Sattel verwenden,
         für den Tag (order_date + lead_time_days).
         
         Args:
@@ -481,6 +483,16 @@ class ChinaTransportManager:
     
     def get_supplier_log_dataframe(self, saddle_name: str, saddle_share: float) -> pd.DataFrame:
         """
+        Erstellt den DataFrame für Page 3 (Lieferant China) für einen spezifischen Sattel.
+        
+        PERFORMANCE: Verwendet Cache, um wiederholte Berechnungen zu vermeiden.
+        """
+        # PERFORMANCE: Cache-Check
+        cache_key = (saddle_name, saddle_share)
+        if cache_key in self._supplier_log_cache:
+            return self._supplier_log_cache[cache_key]
+        
+        """
         Erstellt den DataFrame für Page 3 (Lieferant China).
         IMPLEMENTIERT DIE "ALTE" LOSGRÖSSEN-LOGIK:
         1. Sammelt Produktion aller Sättel.
@@ -527,9 +539,8 @@ class ChinaTransportManager:
                 'released_date_str': "", 'production_date_str': ""
             }
         
-        # WICHTIG: Berechne Bestelleingang direkt aus Volumenplanung (wie Excel-Formel)
-        # Dies ist die korrekte Berechnung, die der Excel-Formel entspricht
-        # Die Excel-Formel summiert die Nachfrage aller Produkte, die den gleichen Sattel verwenden,
+        # WICHTIG: Berechne Bestelleingang direkt aus Volumenplanung
+        # Summiert die Nachfrage aller Produkte, die den gleichen Sattel verwenden,
         # für den Tag (order_date + lead_time_days)
         # OPTIMIERUNG: Lade daily_demands_actual einmalig, um wiederholte session_state-Zugriffe zu vermeiden
         try:
@@ -547,12 +558,28 @@ class ChinaTransportManager:
         # Schritt 4: Berechne Produktionsdatum für jede freigegebene Bestellung
         # Schritt 5: Summiere freigegebene Bestellungen nach Produktionsdatum = Produktionsmenge
         
+        # PERFORMANCE: Begrenze Berechnung auf relevante Tage (nur bis letzter relevanter Tag)
+        # Finde letzten Tag mit Bestellung aus transport_status
+        last_order_day = -1
+        for (o_day, o_id), status in self.transport_status.items():
+            if o_day > last_order_day:
+                last_order_day = o_day
+        
+        # Berechne letzten relevanten Tag-Index (mit Puffer für Lead Time)
+        if last_order_day >= 0:
+            last_order_date = self.workday_calculator.get_date_from_day(last_order_day)
+            last_relevant_date = last_order_date + timedelta(days=60)  # Puffer für Lead Time
+            last_relevant_day_idx = min(total_days - 1, (last_relevant_date - start_date).days)
+        else:
+            last_relevant_day_idx = total_days - 1
+        
         # Speichere Bestelleingänge mit ihren Freigabedaten
         # Key: (order_date, order_qty), Value: (released_day, production_end_day)
         order_release_map = {}  # released_day -> [order_qty, ...]
         release_production_map = {}  # production_end_day -> [order_qty, ...]
         
-        for day_idx in range(total_days):
+        # PERFORMANCE: Iteriere nur bis zum letzten relevanten Tag
+        for day_idx in range(min(total_days, last_relevant_day_idx + 1)):
             curr_date = start_date + timedelta(days=day_idx)
             # Berechne Bestellmenge für diesen Tag aus Volumenplanung
             order_qty = self._calculate_order_quantity_from_volume_planning(curr_date, saddle_name, daily_demands_actual_cache)
@@ -697,11 +724,11 @@ class ChinaTransportManager:
                     stock_results[day_idx] = carry_over[s]
         
         # ---------------------------------------------------------
-        # FINALE TABELLE BAUEN (mit Excel-Formel-Logik)
+        # FINALE TABELLE BAUEN
         # ---------------------------------------------------------
         table_rows = []
         previous_stock = 0.0  # Warenbestand vom Vortag
-        cumulative_shipped = 0.0  # Kumulierte bereits verschickte Menge (für Excel-Formel)
+        cumulative_shipped = 0.0  # Kumulierte bereits verschickte Menge
         
         for day_idx in range(total_days):
             raw = raw_data_map[day_idx]
@@ -709,8 +736,7 @@ class ChinaTransportManager:
             is_weekend = raw['weekday'] in ['Sa', 'So']
             has_breakdown = raw['breakdown'] == "Ja"
             
-            # PRODUKTIONSMENGE (Excel: =WENN(ODER(KU11="Sa.";KU11="So.";KU13<>"");0;SUMMENPRODUKT(...)))
-            # Wenn Wochenende oder Störung: 0, sonst: Freigegebene Bestellungen für das Produktionsdatum
+            # PRODUKTIONSMENGE: Wenn Wochenende oder Störung: 0, sonst: Freigegebene Bestellungen für das Produktionsdatum
             if is_weekend or has_breakdown:
                 production_qty = 0
             else:
@@ -718,14 +744,11 @@ class ChinaTransportManager:
                 # Wir müssen die freigegebenen Bestellungen finden, deren Produktionsdatum heute ist
                 production_qty = raw['prod']
             
-            # WARENBESTAND (Excel: Produziert + Warenbestand - Ausgangsmenge)
-            # Vorheriger Bestand + Produziert - Ausgangsmenge
-            # WICHTIG: Berechne Warenbestand VOR Warenausgang (für Excel-Formel)
+            # WARENBESTAND: Vorheriger Bestand + Produziert - Ausgangsmenge
+            # WICHTIG: Berechne Warenbestand VOR Warenausgang
             current_stock = previous_stock + production_qty
             
-            # WARENAUSGANG (Excel: =WENN(ODER('Inbound (Material)'!KU68="Ausgefallen";'Inbound (Material)'!KU68="");0;WENN('Lieferant China (Sattel)'!P172-P87>=0;'Lieferant China (Sattel)'!P172-P87;'Lieferant China (Sattel)'!P172)))
-            # P172 = Warenbestand (aktueller Bestand), P87 = bereits verschickte Menge (kumuliert)
-            # Also: WENN(Warenbestand - bereits verschickt >= 0; Warenbestand - bereits verschickt; Warenbestand)
+            # WARENAUSGANG: Wenn Warenbestand - bereits verschickt >= 0: Warenbestand - bereits verschickt, sonst Warenbestand
             # Das bedeutet: Die verschickte Menge ist MIN(Warenbestand, bereits verschickt)
             planned_shipment_qty = shipment_results[day_idx]  # Bereits berechnete Versandmenge (aus Pool-Logik)
             
@@ -740,14 +763,14 @@ class ChinaTransportManager:
                         shipment_qty = 0
                         break
                 else:
-                    # Kein 100% Verlust - wende Excel-Formel an
-                    # Excel: WENN(Warenbestand - bereits verschickt >= 0; Warenbestand - bereits verschickt; Warenbestand)
+                    # Kein 100% Verlust - wende Formel an
+                    # Wenn Warenbestand - bereits verschickt >= 0: Warenbestand - bereits verschickt, sonst Warenbestand
                     if current_stock - cumulative_shipped >= 0:
                         shipment_qty = min(planned_shipment_qty, current_stock - cumulative_shipped)
                     else:
                         shipment_qty = min(planned_shipment_qty, current_stock)
             else:
-                # Kein Scenario Manager - wende Excel-Formel an
+                # Kein Scenario Manager - wende Formel an
                 if current_stock - cumulative_shipped >= 0:
                     shipment_qty = min(planned_shipment_qty, current_stock - cumulative_shipped)
                 else:
@@ -774,7 +797,12 @@ class ChinaTransportManager:
             }
             table_rows.append(daily_data)
         
-        return pd.DataFrame(table_rows)
+        result_df = pd.DataFrame(table_rows)
+        
+        # PERFORMANCE: Cache Ergebnis
+        self._supplier_log_cache[cache_key] = result_df
+        
+        return result_df
     
     def get_inbound_log_dataframe(self, saddle_shares_dict: Dict[str, float]) -> pd.DataFrame:
         """
@@ -848,7 +876,8 @@ class ChinaTransportManager:
         # PERFORMANCE: Begrenze auf maximal 500 Tage (statt 426) für schnellere Berechnung
         # Die Tabelle wird trotzdem bis Ende des Jahres berechnet, aber wir brechen früher ab
         # wenn keine Transporte mehr stattfinden
-        max_calculation_days = min(total_days, last_relevant_day + 1, 500)
+        # OPTIMIERUNG: Reduziere max_calculation_days weiter für bessere Performance
+        max_calculation_days = min(total_days, last_relevant_day + 1, 400)
 
         # 3. Die Simulation der "Eimer" am Hafen (Buckets)
         # WICHTIG: Verwende die GLEICHE Verteilungslogik wie in get_supplier_log_dataframe
@@ -859,7 +888,7 @@ class ChinaTransportManager:
         rows = []
         # OPTIMIERUNG: Frühzeitiges Beenden wenn keine Daten mehr kommen
         consecutive_empty_days = 0
-        max_consecutive_empty = 20  # OPTIMIERUNG: Reduziert von 30 auf 20 für schnellere Berechnung
+        max_consecutive_empty = 15  # OPTIMIERUNG: Reduziert von 20 auf 15 für schnellere Berechnung
 
         for day_idx in range(max_calculation_days):  # OPTIMIERUNG: Begrenze Schleife
             curr_date = start_date + timedelta(days=day_idx)
@@ -951,7 +980,7 @@ class ChinaTransportManager:
                         row[s] = qty
                         total_qty += qty
                 
-                # KRITISCH: Gesamtmenge aus Summe der Einzelpositionen berechnen (wie Excel)
+                # KRITISCH: Gesamtmenge aus Summe der Einzelpositionen berechnen
                 row['Menge Gesamt'] = int(round(total_qty))
                 
                 # Datums-Berechnung für Ankunft (wie gehabt)
@@ -983,9 +1012,8 @@ class ChinaTransportManager:
                 # Konvertiere Ankunft Schiff zu Tag-Index für weitere Berechnungen
                 day_ship_arr_idx = (date_ship_arr - date(self.workday_calculator.year, 1, 1)).days
                 
-                # KRITISCH: Excel-Formel für geplante/tatsächliche Ankunft: ARBEITSTAG(Ankunft Schiff; 2-1; Feiertage)
-                # $I$28 = 2 (LKW DE Dauer in AT), $J$28 = "AT" (Arbeitstage)
-                # Excel ARBEITSTAG: Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
+                # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 1 Arbeitstag
+                # Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
                 day_arr_de = self._add_workdays(day_ship_arr_idx, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
                 date_arr_de = self.workday_calculator.get_date_from_day(day_arr_de)
                 
