@@ -40,7 +40,8 @@ render_scenario_sidebar()
 
 # Berechne Planung basierend auf jährlichem Volumen
 yearly_volume = st.session_state.get('yearly_volume', 370000)
-workday_calc = WorkdayCalculator(year=2027)
+planning_year = st.session_state.get('planning_year', 2027)
+workday_calc = WorkdayCalculator(year=planning_year)
 # Zwei separate DemandCalculator-Instanzen: eine für geplant, eine für tatsächlich
 # (um Carry-Over-Logik nicht zu beeinflussen)
 demand_calculator_planned = DemandCalculator(yearly_volume, workday_calc)
@@ -144,8 +145,8 @@ with tab1:
     st.header("Wöchentliche Volumenplanung")
     
     # Erstelle wöchentliche Planung
-    start_date = date(2027, 1, 1)
-    end_date = date(2027, 12, 31)
+    start_date = date(planning_year, 1, 1)
+    end_date = date(planning_year, 12, 31)
     
     # KRITISCH: Berechne Nachfrage für ALLE Tage sequenziell (für korrekte Carry-Over-Logik)
     # Die DemandCalculator-Instanzen haben einen Zustand (product_remainders), der sequenziell aktualisiert werden muss
@@ -173,55 +174,11 @@ with tab1:
             break
     
     # Berechne Nachfrage für alle 365 Tage sequenziell (nur wenn nicht bereits vorhanden)
+    # HINWEIS: Dieser Fallback-Code sollte normalerweise nicht ausgeführt werden,
+    # da calculate_volume_planning_demand() bereits die korrekte Berechnung durchführt
     if not daily_demands_planned or len(daily_demands_planned) < 365:
-        daily_demands_planned = {}  # day -> {product -> demand}
-        daily_demands_actual = {}   # day -> {product -> demand}
-        
-        for day in range(365):
-            daily_demands_planned[day] = {}
-            daily_demands_actual[day] = {}
-        
-        is_workday = workday_calc.is_workday(day)
-        is_last_workday = (day == last_workday_of_year)
-        
-        if is_workday:
-            # Berechne Marketing-Add-ons (wenn vorhanden)
-            marketing_add_ons = {}
-            scenario_manager = st.session_state.get('scenario_manager', ScenarioManager())
-            marketing_scenarios = scenario_manager.get_marketing_scenarios(day)
-            
-            if marketing_scenarios:
-                month = MasterData.get_month_from_day(day)
-                base_daily_floats = demand_calculator_actual._calculate_monthly_base_daily_float(month)
-                
-                for scenario in marketing_scenarios:
-                    factor = scenario.demand_increase_factor
-                    for product in MasterData.BOM.keys():
-                        base_float = base_daily_floats.get(product, 0.0)
-                        add_on = base_float * (factor - 1.0)
-                        if product not in marketing_add_ons:
-                            marketing_add_ons[product] = 0.0
-                        marketing_add_ons[product] += add_on
-            
-            # Berechne Nachfrage für alle Produkte gleichzeitig (wichtig für korrekte Carry-Over-Logik)
-            # WICHTIG: Am letzten Arbeitstag müssen Reste aufsummiert werden
-            # Geplante Nachfrage (ohne Marketing)
-            planned_demands = demand_calculator_planned.calculate_daily_demand_per_product_dict(
-                day, {}, is_last_workday_of_year=is_last_workday
-            )
-            # Tatsächliche Nachfrage (mit Marketing)
-            actual_demands = demand_calculator_actual.calculate_daily_demand_per_product_dict(
-                day, marketing_add_ons, is_last_workday_of_year=is_last_workday
-            )
-            
-            for product in MasterData.BOM.keys():
-                daily_demands_planned[day][product] = planned_demands.get(product, 0)
-                daily_demands_actual[day][product] = actual_demands.get(product, 0)
-        else:
-            # An Feiertagen/Wochenenden: Alle Nachfragen sind 0
-            for product in MasterData.BOM.keys():
-                daily_demands_planned[day][product] = 0
-                daily_demands_actual[day][product] = 0
+        # Verwende die zentrale Funktion, die bereits die Korrektur enthält
+        daily_demands_planned, daily_demands_actual = calculate_volume_planning_demand()
     
     # WICHTIG: Speichere Nachfrage im Session State für Simulator
     # Der Simulator verwendet diese Daten als Basis, anstatt sie parallel zu berechnen
@@ -236,7 +193,7 @@ with tab1:
     for week_num in range(1, last_week + 1):  # Alle Wochen des Jahres
         # Finde ersten Tag der Woche (ISO-Woche)
         # ISO-Woche 1 beginnt am ersten Montag des Jahres oder früher
-        jan_1 = date(2027, 1, 1)
+        jan_1 = date(planning_year, 1, 1)
         jan_1_weekday = jan_1.weekday()  # 0=Montag, 6=Sonntag
         
         # Berechne Start der ersten ISO-Woche
@@ -258,8 +215,8 @@ with tab1:
         
         for day_offset in range(7):
             current_date = week_start + timedelta(days=day_offset)
-            # Nur Tage im Jahr 2027 berücksichtigen
-            if current_date.year == 2027:
+            # Nur Tage im Planungsjahr berücksichtigen
+            if current_date.year == planning_year:
                 day_of_year = (current_date - start_date).days
                 if 0 <= day_of_year < 365:
                     # Nutze bereits berechnete Nachfragen (sequenziell berechnet)
@@ -511,70 +468,14 @@ with tab2:
     # KRITISCH: Berechne Nachfrage für ALLE Tage sequenziell (für korrekte Carry-Over-Logik)
     # Die tägliche Planung muss die gleiche sequenzielle Berechnung wie die wöchentliche verwenden
     # WICHTIG: Nutze session_state, um zu prüfen, ob bereits berechnet wurde (Tabs werden separat ausgeführt)
+    # WICHTIG: Verwende die zentrale Funktion calculate_volume_planning_demand() für Konsistenz
+    # Diese Funktion berechnet die Daten einmalig und cached sie im Session State
+    # Die Korrektur-Logik ist bereits in dieser Funktion enthalten
     if 'daily_demands_planned_tab2' not in st.session_state:
-        # Berechne Nachfrage für alle 365 Tage sequenziell (wie in wöchentlicher Planung)
-        daily_demands_planned_tab2 = {}  # day -> {product -> demand}
-        daily_demands_actual_tab2 = {}   # day -> {product -> demand}
+        # Verwende die zentrale Funktion (bereits berechnet und korrigiert)
+        daily_demands_planned_tab2, daily_demands_actual_tab2 = calculate_volume_planning_demand()
         
-        # Finde letzten Arbeitstag des Jahres (für korrekte Rest-Aufsummierung)
-        last_workday_of_year_tab2 = None
-        for day in range(364, -1, -1):
-            if workday_calc.is_workday(day):
-                last_workday_of_year_tab2 = day
-                break
-        
-        # Erstelle separate DemandCalculator-Instanzen für tägliche Planung
-        demand_calculator_planned_tab2 = DemandCalculator(yearly_volume, workday_calc)
-        demand_calculator_actual_tab2 = DemandCalculator(yearly_volume, workday_calc)
-        
-        # Berechne Nachfrage für alle 365 Tage sequenziell
-        for day in range(365):
-            daily_demands_planned_tab2[day] = {}
-            daily_demands_actual_tab2[day] = {}
-            
-            is_workday = workday_calc.is_workday(day)
-            is_last_workday = (day == last_workday_of_year_tab2)
-            
-            if is_workday:
-                # Berechne Marketing-Add-ons (wenn vorhanden)
-                marketing_add_ons = {}
-                scenario_manager = st.session_state.get('scenario_manager', ScenarioManager())
-                marketing_scenarios = scenario_manager.get_marketing_scenarios(day)
-                
-                if marketing_scenarios:
-                    month = MasterData.get_month_from_day(day)
-                    base_daily_floats = demand_calculator_actual_tab2._calculate_monthly_base_daily_float(month)
-                    
-                    for scenario in marketing_scenarios:
-                        factor = scenario.demand_increase_factor
-                        for product in MasterData.BOM.keys():
-                            base_float = base_daily_floats.get(product, 0.0)
-                            add_on = base_float * (factor - 1.0)
-                            if product not in marketing_add_ons:
-                                marketing_add_ons[product] = 0.0
-                            marketing_add_ons[product] += add_on
-                
-                # Berechne Nachfrage für alle Produkte gleichzeitig (wichtig für korrekte Carry-Over-Logik)
-                # WICHTIG: Am letzten Arbeitstag müssen Reste aufsummiert werden
-                # Geplante Nachfrage (ohne Marketing)
-                planned_demands = demand_calculator_planned_tab2.calculate_daily_demand_per_product_dict(
-                    day, {}, is_last_workday_of_year=is_last_workday
-                )
-                # Tatsächliche Nachfrage (mit Marketing)
-                actual_demands = demand_calculator_actual_tab2.calculate_daily_demand_per_product_dict(
-                    day, marketing_add_ons, is_last_workday_of_year=is_last_workday
-                )
-                
-                for product in MasterData.BOM.keys():
-                    daily_demands_planned_tab2[day][product] = planned_demands.get(product, 0)
-                    daily_demands_actual_tab2[day][product] = actual_demands.get(product, 0)
-            else:
-                # An Feiertagen/Wochenenden: Alle Nachfragen sind 0
-                for product in MasterData.BOM.keys():
-                    daily_demands_planned_tab2[day][product] = 0
-                    daily_demands_actual_tab2[day][product] = 0
-        
-        # Speichere in session_state für Wiederverwendung
+        # Speichere Kopien für den Tab (um separate Instanzen zu haben, falls nötig)
         st.session_state.daily_demands_planned_tab2 = daily_demands_planned_tab2
         st.session_state.daily_demands_actual_tab2 = daily_demands_actual_tab2
     else:
@@ -587,27 +488,27 @@ with tab2:
     with col1:
         start_date_filter = st.date_input(
             "Start-Datum",
-            value=date(2027, 1, 1),
-            min_value=date(2027, 1, 1),
-            max_value=date(2027, 12, 31),
+            value=date(planning_year, 1, 1),
+            min_value=date(planning_year, 1, 1),
+            max_value=date(planning_year, 12, 31),
             key="daily_start_date"
         )
     with col2:
         end_date_filter = st.date_input(
             "End-Datum",
-            value=date(2027, 12, 31),
-            min_value=date(2027, 1, 1),
-            max_value=date(2027, 12, 31),
+            value=date(planning_year, 12, 31),
+            min_value=date(planning_year, 1, 1),
+            max_value=date(planning_year, 12, 31),
             key="daily_end_date"
         )
     
     # Konvertiere Datum zu Tag
-    start_day = (start_date_filter - date(2027, 1, 1)).days
-    end_day = (end_date_filter - date(2027, 1, 1)).days
+    start_day = (start_date_filter - date(planning_year, 1, 1)).days
+    end_day = (end_date_filter - date(planning_year, 1, 1)).days
     
     # Erstelle tägliche Planung
     daily_data = []
-    start_date = date(2027, 1, 1)
+    start_date = date(planning_year, 1, 1)
     
     # WICHTIG: Nutze die bereits sequenziell berechneten Nachfragen (für korrekte Carry-Over-Logik)
     for day in range(start_day, min(end_day + 1, 365)):

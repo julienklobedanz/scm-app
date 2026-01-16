@@ -28,7 +28,9 @@ Die Carry-Over-Logik ist ein zentrales Konzept, das sicherstellt, dass Reste vom
 
 4. **Reste am letzten Arbeitstag**: Am letzten Arbeitstag des Jahres werden alle Reste aufsummiert, um sicherzustellen, dass die Jahresgesamtsumme exakt dem Jahresvolumen entspricht.
 
-5. **Marketing-Add-ons**: Marketing-Add-ons werden nach der Rundung addiert und gehen nicht in den Rest ein. Das bedeutet, dass Marketing-Add-ons immer zusätzlich zur Basis-Nachfrage kommen.
+5. **Produkt-spezifische Korrektur**: Nach der sequenziellen Berechnung wird für jedes Produkt separat geprüft, ob die Summe der Nachfrage über das Jahr exakt der Zielsumme entspricht (`yearly_volume * sales_share`). Wenn nicht, wird die Differenz am letzten Arbeitstag des Jahres korrigiert. Dies stellt sicher, dass sowohl die Gesamtsumme (370.000) als auch die Einzelsummen pro Produkt (z.B. MTB Allrounder: 111.000) exakt stimmen, unabhängig von der Feiertagsverteilung im Jahr.
+
+6. **Marketing-Add-ons**: Marketing-Add-ons werden nach der Rundung addiert und gehen nicht in den Rest ein. Das bedeutet, dass Marketing-Add-ons immer zusätzlich zur Basis-Nachfrage kommen.
 
 ### Sequenzielle Berechnung
 
@@ -74,11 +76,12 @@ for day in range(365):
 
 #### Schritt 2: ISO-Kalenderwochen-Berechnung
 
-Die Seite berechnet die ISO-Kalenderwochen für das Jahr 2026. ISO-Woche 1 beginnt am ersten Montag des Jahres oder früher (wenn der 1. Januar ein Montag bis Donnerstag ist).
+Die Seite berechnet die ISO-Kalenderwochen für das gewählte Planungsjahr. ISO-Woche 1 beginnt am ersten Montag des Jahres oder früher (wenn der 1. Januar ein Montag bis Donnerstag ist).
 
 ```python
 # Berechne Start der ersten ISO-Woche
-jan_1 = date(2026, 1, 1)
+planning_year = st.session_state.get('planning_year', 2027)
+jan_1 = date(planning_year, 1, 1)
 jan_1_weekday = jan_1.weekday()  # 0=Montag, 6=Sonntag
 
 if jan_1_weekday <= 3:  # Mo-Do: Woche beginnt am Montag dieser Woche
@@ -98,7 +101,7 @@ for week_num in range(1, last_week + 1):
     # Aggregiere Nachfrage für alle 7 Tage der Woche
     for day_offset in range(7):
         current_date = week_start + timedelta(days=day_offset)
-        if current_date.year == 2026:
+        if current_date.year == planning_year:
             day_of_year = (current_date - start_date).days
             # Nutze bereits berechnete Nachfragen (sequenziell berechnet)
             day_planned = daily_demands_planned.get(day_of_year, {})
@@ -157,8 +160,9 @@ AUFRUNDEN(N8/H105/(Basisdaten!$E$9*Basisdaten!$E$13*Basisdaten!$E$10);0)
 Die Seite bietet Datumsfilter, um einen bestimmten Zeitraum anzuzeigen:
 
 ```python
-start_date_filter = st.date_input("Start-Datum", value=date(2026, 1, 1), ...)
-end_date_filter = st.date_input("End-Datum", value=date(2026, 12, 31), ...)
+planning_year = st.session_state.get('planning_year', 2027)
+start_date_filter = st.date_input("Start-Datum", value=date(planning_year, 1, 1), ...)
+end_date_filter = st.date_input("End-Datum", value=date(planning_year, 12, 31), ...)
 ```
 
 #### Schritt 2: Tägliche Nachfrage-Berechnung
@@ -231,6 +235,95 @@ sum_row[(product, 'Tatsächlicher Bedarf')] = display_df[(product, 'Tatsächlich
 1. **Tägliche Entwicklung (Tatsächlicher Bedarf)**: Ein gestapeltes Balkendiagramm zeigt die tägliche Nachfrage für alle Produkte.
 
 2. **Statistiken**: Metriken wie Durchschnitt, Gesamt, Maximum und Minimum für geplante und tatsächliche Nachfrage.
+
+## Planungsbeginn (Jahr-Auswahl)
+
+### Funktionsweise
+
+Die Anwendung unterstützt die Auswahl des Planungsjahres über ein Eingabefeld in der Sidebar (oberhalb des "Szenarien"-Bereichs). Das Feld trägt das Label **"Planungsbeginn"** und ermöglicht die Auswahl von Jahren zwischen 2020 und 2030.
+
+### Speicherung
+
+Das gewählte Jahr wird im Streamlit Session State gespeichert:
+- **Schlüssel**: `st.session_state.planning_year`
+- **Standardwert**: 2027
+- **Initialisierung**: In `ui/utils.py` → `initialize_session_state()`
+
+### Auswirkungen
+
+Wenn das Jahr geändert wird:
+1. **Volumenplanung wird zurückgesetzt**: `volume_planning_calculated = False`
+2. **Simulation wird zurückgesetzt**: `happy_path_run = False`, `results_df = None`
+3. **Feiertage werden neu geladen**: `WorkdayCalculator` lädt Feiertage für das neue Jahr
+4. **Alle Berechnungen verwenden das neue Jahr**: Alle Datumsberechnungen, Feiertagsprüfungen und Arbeitstagsberechnungen verwenden das gewählte Jahr
+
+### Cache-Mechanismus
+
+Die Volumenplanung wird nur neu berechnet, wenn:
+- Das Jahr geändert wurde (`volume_planning_year != planning_year`)
+- Die Volumenplanung noch nicht berechnet wurde (`volume_planning_calculated == False`)
+
+Das Jahr wird zusammen mit den berechneten Daten im Session State gespeichert:
+- `st.session_state.volume_planning_year`: Das Jahr, für das die Daten berechnet wurden
+- `st.session_state.daily_demands_planned`: Berechnete Nachfrage (ohne Marketing)
+- `st.session_state.daily_demands_actual`: Berechnete Nachfrage (mit Marketing)
+
+### Verwendung in der Anwendung
+
+Alle Komponenten, die das Jahr benötigen, greifen auf `st.session_state.planning_year` zu:
+- `WorkdayCalculator(year=planning_year)`: Arbeitstagsberechnung
+- `DemandCalculator(yearly_volume, workday_calc)`: Nachfrageberechnung
+- `Simulator.__init__()`: Simulation-Initialisierung
+- Alle Datumsberechnungen: `date(planning_year, 1, 1)`
+
+### Feiertage
+
+Die Feiertage werden dynamisch für das gewählte Jahr geladen:
+- **Deutschland**: `HolidaysConfig.get_holidays_for_year(year, 'DE')`
+- **China**: `HolidaysConfig.get_holidays_for_year(year, 'CN')`
+- Die `holidays`-Bibliothek unterstützt automatisch alle Jahre (2020-2030+)
+
+## Farbliche Markierung von Feiertagen
+
+### Implementierung
+
+In allen Listen und Tabellen werden Feiertage und Wochenenden farblich markiert:
+
+- **Wochenende**: Hintergrundfarbe `#ffebee` (helles Rot)
+- **Feiertag**: Hintergrundfarbe `#c8e6c9` (helles Grün)
+- **Nicht-Arbeitstag (Feiertag oder Wochenende)**: Hintergrundfarbe `#ffcccc` (in Volumenplanung)
+
+### Angewendet in:
+
+1. **Volumenplanung (Tägliche Planung)**: Zeile 625-637
+   - Wochenenden und Feiertage werden rot markiert (`#ffcccc`)
+   - Summenzeilen werden grau markiert (`#e0e0e0`)
+
+2. **Materiallager**: Zeile 271-291
+   - Wochenenden: `#ffebee`
+   - Feiertage: `#c8e6c9`
+
+3. **Produktion**: Zeile 148-162
+   - Wochenenden: `#ffebee`
+   - Feiertage: `#c8e6c9`
+
+4. **Fertigproduktelager**: Zeile 150-160
+   - Wochenenden: `#ffebee`
+   - Feiertage: `#c8e6c9`
+
+5. **Inbound**: Zeile 58-67
+   - Wochenenden: `#ffebee`
+
+6. **Lieferant China**: Zeile 79-88
+   - Wochenenden: `#ffebee`
+
+### Farblegende
+
+In den meisten Seiten wird eine Farblegende oben rechts angezeigt:
+```html
+<span style="background-color: #ffebee; padding: 2px 8px; border-radius: 3px;">Wochenende</span>
+<span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px;">Feiertag</span>
+```
 
 ## Behobene Probleme
 

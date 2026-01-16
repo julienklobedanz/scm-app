@@ -42,6 +42,10 @@ class ChinaTransportManager:
         # Key: tuple(sorted(saddle_shares_dict.items())), Value: DataFrame
         self._inbound_df_cache: Dict[tuple, pd.DataFrame] = {}
         self._inbound_df_cache_key: Optional[tuple] = None
+        
+        # PERFORMANCE: Cache für chinesische Feiertage (nur einmal laden)
+        self._chinese_holidays_cache: Optional[set] = None
+        self._chinese_holidays_year: Optional[int] = None
     
     def place_order(self, order_day: int, quantity: float) -> int:
         """
@@ -184,10 +188,22 @@ class ChinaTransportManager:
                     delay_days = max(delay_days, scenario.delay_days)
                     loss_factor *= (1.0 - scenario.loss_percentage)
             
-            # Schiffsdauer + LKW DE
-            ship_arrival_day = ship_departure_day + 30 + delay_days
+            # KRITISCH: Schiff fährt 30 KALENDERTAGE (KT), nicht Arbeitstage!
+            # Das Schiff fährt kontinuierlich, Feiertage spielen keine Rolle
+            # Berechnung: Abfahrt + 30 Kalendertage
+            ship_departure_date = self.workday_calculator.get_date_from_day(ship_departure_day)
+            ship_arrival_date = ship_departure_date + timedelta(days=30)  # 30 Kalendertage
+            # Verspätung wird als Kalendertage addiert
+            if delay_days > 0:
+                ship_arrival_date += timedelta(days=delay_days)
+            # Konvertiere zurück zu Tag-Index
+            ship_arrival_day = (ship_arrival_date - date(self.workday_calculator.year, 1, 1)).days
+            
+            # KRITISCH: Excel-Formel für geplante/tatsächliche Ankunft: ARBEITSTAG(Ankunft Schiff; 2-1; Feiertage)
+            # $I$28 = 2 (LKW DE Dauer in AT), $J$28 = "AT" (Arbeitstage)
+            # Excel ARBEITSTAG: Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
             truck_de_start_day = ship_arrival_day
-            truck_de_end_day = self._add_workdays(truck_de_start_day, 2)
+            truck_de_end_day = self._add_workdays(truck_de_start_day, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
             physical_arrival_day = truck_de_end_day
             available_day = physical_arrival_day + 1
             
@@ -265,6 +281,8 @@ class ChinaTransportManager:
         Berücksichtigt chinesische Feiertage für Freigabe in China
         IGNORIERT deutsche Feiertage, wenn use_chinese_holidays=True
         
+        PERFORMANCE-OPTIMIERT: Verwendet gecachte chinesische Feiertage.
+        
         Args:
             start_day: Start-Tag (0-basiert)
             use_chinese_holidays: Wenn True, verwendet nur chinesische Feiertage (Standard: True für China)
@@ -272,11 +290,10 @@ class ChinaTransportManager:
         Returns:
             Nächster Arbeitstag (0-basiert)
         """
-        # Lade chinesische Feiertage falls benötigt
+        # PERFORMANCE: Verwende gecachte chinesische Feiertage
         chinese_holidays = None
         if use_chinese_holidays:
-            from config.holidays_config import HolidaysConfig
-            chinese_holidays = HolidaysConfig.get_holidays_for_year(self.workday_calculator.year, 'CN')
+            chinese_holidays = self._get_chinese_holidays()
         
         current_day = start_day + 1
         while True:
@@ -300,9 +317,22 @@ class ChinaTransportManager:
             # Wenn wir hier ankommen, ist es ein Arbeitstag in China (Mo-Fr, kein chinesischer Feiertag)
             return current_day
     
+    def _get_chinese_holidays(self) -> set:
+        """
+        PERFORMANCE: Lädt chinesische Feiertage nur einmal und cached sie.
+        """
+        if self._chinese_holidays_cache is None or self._chinese_holidays_year != self.workday_calculator.year:
+            from config.holidays_config import HolidaysConfig
+            holidays_dict = HolidaysConfig.get_holidays_for_year(self.workday_calculator.year, 'CN')
+            self._chinese_holidays_cache = set(holidays_dict.keys()) if holidays_dict else set()
+            self._chinese_holidays_year = self.workday_calculator.year
+        return self._chinese_holidays_cache
+    
     def _add_workdays(self, start_day: int, num_workdays: int, exclude_start: bool = False, use_chinese_holidays: bool = False) -> int:
         """
         Fügt Arbeitstage hinzu (Mo-Fr)
+        
+        PERFORMANCE-OPTIMIERT: Verwendet gecachte chinesische Feiertage und optimierte Datumsberechnung.
         
         Args:
             start_day: Start-Tag (0-basiert)
@@ -313,37 +343,62 @@ class ChinaTransportManager:
         Returns:
             End-Tag (0-basiert)
         """
+        # PERFORMANCE: Für kleine num_workdays (1-2) können wir direkt berechnen
+        if num_workdays <= 0:
+            return start_day
+        
         current_day = start_day
         if exclude_start:
             current_day += 1
         
         workdays_added = 0
         
-        # Lade chinesische Feiertage falls benötigt
+        # PERFORMANCE: Verwende gecachte chinesische Feiertage
         chinese_holidays = None
         if use_chinese_holidays:
-            from config.holidays_config import HolidaysConfig
-            chinese_holidays = HolidaysConfig.get_holidays_for_year(self.workday_calculator.year, 'CN')
+            chinese_holidays = self._get_chinese_holidays()
         
+        # PERFORMANCE: Berechne Start-Datum nur einmal
+        start_date = self.workday_calculator.get_date_from_day(start_day)
+        start_weekday = start_date.weekday()
+        
+        # PERFORMANCE: Für kleine num_workdays können wir optimieren
+        if num_workdays == 1 and not use_chinese_holidays:
+            # Einfacher Fall: nur 1 Arbeitstag, keine chinesischen Feiertage
+            if start_weekday < 5:  # Mo-Fr
+                return current_day
+            else:  # Sa-So
+                # Springe zum nächsten Montag
+                days_to_monday = (7 - start_weekday) % 7
+                if days_to_monday == 0:
+                    days_to_monday = 7
+                return current_day + days_to_monday
+        
+        # Allgemeiner Fall: Iteriere durch Tage
         while workdays_added < num_workdays:
             current_date = self.workday_calculator.get_date_from_day(current_day)
             weekday = current_date.weekday()  # 0=Montag, 6=Sonntag
             
-            # KORREKTUR: Prüfe nur Wochenende, nicht deutsche Feiertage
-            # Wenn chinesische Feiertage verwendet werden, ignoriere deutsche Feiertage komplett
+            # Prüfe Wochenende
             is_weekend = weekday >= 5  # Samstag=5, Sonntag=6
             
             if is_weekend:
                 current_day += 1
                 continue
             
-            # Prüfe chinesische Feiertage (falls aktiviert)
-            is_chinese_holiday = False
-            if use_chinese_holidays and chinese_holidays:
-                if current_date in chinese_holidays:
-                    is_chinese_holiday = True
+            # Prüfe Feiertage
+            is_holiday = False
             
-            if not is_chinese_holiday:
+            if use_chinese_holidays:
+                # Chinesische Feiertage (für Produktion in China)
+                if chinese_holidays and current_date in chinese_holidays:
+                    is_holiday = True
+            else:
+                # Deutsche Feiertage (für LKW-Transport in Deutschland)
+                if current_date in self.workday_calculator.german_holidays:
+                    is_holiday = True
+            
+            if not is_holiday:
                 workdays_added += 1
             current_day += 1
         
@@ -402,9 +457,9 @@ class ChinaTransportManager:
         lead_time_days = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time_days', 49)
         
         # Berechne Zieltag (Tag, für den bestellt wird)
-        # Konvertiere order_date zu Tag (0-basiert, beginnend am 01.01.2027)
-        start_date_2027 = date(2027, 1, 1)
-        days_since_start = (order_date - start_date_2027).days
+        # Konvertiere order_date zu Tag (0-basiert, beginnend am 01.01. des Planungsjahres)
+        start_date_year = date(self.workday_calculator.year, 1, 1)
+        days_since_start = (order_date - start_date_year).days
         target_day = days_since_start + lead_time_days
         
         # Prüfe, ob Zieltag innerhalb des Jahres liegt (0-364)
@@ -447,7 +502,7 @@ class ChinaTransportManager:
         
         earliest_order = min((k[0] for k in self.transport_status.keys()), default=0)
         start_date = self.workday_calculator.get_date_from_day(earliest_order)
-        end_date = date(2027, 12, 31)
+        end_date = date(self.workday_calculator.year, 12, 31)
         total_days = (end_date - start_date).days + 1
         
         # Alle Sattel-Typen ermitteln (aus MasterData BOM)
@@ -506,7 +561,7 @@ class ChinaTransportManager:
                 
                 # Berechne Freigabedatum für diesen Bestelleingang
                 # Freigabedatum = Nächster chinesischer Arbeitstag nach Bestelldatum
-                order_day = (curr_date - date(2027, 1, 1)).days
+                order_day = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 released_day = self._get_next_workday(order_day, use_chinese_holidays=True)
                 released_date = self.workday_calculator.get_date_from_day(released_day)
                 released_day_idx = (released_date - start_date).days
@@ -646,6 +701,7 @@ class ChinaTransportManager:
         # ---------------------------------------------------------
         table_rows = []
         previous_stock = 0.0  # Warenbestand vom Vortag
+        cumulative_shipped = 0.0  # Kumulierte bereits verschickte Menge (für Excel-Formel)
         
         for day_idx in range(total_days):
             raw = raw_data_map[day_idx]
@@ -662,24 +718,46 @@ class ChinaTransportManager:
                 # Wir müssen die freigegebenen Bestellungen finden, deren Produktionsdatum heute ist
                 production_qty = raw['prod']
             
-            # WARENAUSGANG (Excel: =WENN(ODER('Inbound (Material)'!KU68="Ausgefallen";'Inbound (Material)'!KU68="");0;KU172))
-            # Prüfe auf DeliveryProblemScenario mit 100% Verlust (Ausgefallen)
-            shipment_qty = shipment_results[day_idx]
+            # WARENBESTAND (Excel: Produziert + Warenbestand - Ausgangsmenge)
+            # Vorheriger Bestand + Produziert - Ausgangsmenge
+            # WICHTIG: Berechne Warenbestand VOR Warenausgang (für Excel-Formel)
+            current_stock = previous_stock + production_qty
+            
+            # WARENAUSGANG (Excel: =WENN(ODER('Inbound (Material)'!KU68="Ausgefallen";'Inbound (Material)'!KU68="");0;WENN('Lieferant China (Sattel)'!P172-P87>=0;'Lieferant China (Sattel)'!P172-P87;'Lieferant China (Sattel)'!P172)))
+            # P172 = Warenbestand (aktueller Bestand), P87 = bereits verschickte Menge (kumuliert)
+            # Also: WENN(Warenbestand - bereits verschickt >= 0; Warenbestand - bereits verschickt; Warenbestand)
+            # Das bedeutet: Die verschickte Menge ist MIN(Warenbestand, bereits verschickt)
+            planned_shipment_qty = shipment_results[day_idx]  # Bereits berechnete Versandmenge (aus Pool-Logik)
             
             # Prüfe ob es DeliveryProblemScenario gibt, die zu 100% Verlust führen
             if self.scenario_manager:
                 # Konvertiere Datum zu Tag-Index
-                day_index = (curr_date - date(2027, 1, 1)).days
+                day_index = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(day_index)
                 for scenario in delivery_problems:
                     if scenario.component_type == 'saddles' and scenario.loss_percentage >= 1.0:
                         # 100% Verlust = "Ausgefallen"
                         shipment_qty = 0
                         break
+                else:
+                    # Kein 100% Verlust - wende Excel-Formel an
+                    # Excel: WENN(Warenbestand - bereits verschickt >= 0; Warenbestand - bereits verschickt; Warenbestand)
+                    if current_stock - cumulative_shipped >= 0:
+                        shipment_qty = min(planned_shipment_qty, current_stock - cumulative_shipped)
+                    else:
+                        shipment_qty = min(planned_shipment_qty, current_stock)
+            else:
+                # Kein Scenario Manager - wende Excel-Formel an
+                if current_stock - cumulative_shipped >= 0:
+                    shipment_qty = min(planned_shipment_qty, current_stock - cumulative_shipped)
+                else:
+                    shipment_qty = min(planned_shipment_qty, current_stock)
             
-            # WARENBESTAND (Excel: Produziert + Warenbestand - Ausgangsmenge)
-            # Vorheriger Bestand + Produziert - Ausgangsmenge
-            current_stock = previous_stock + production_qty - shipment_qty
+            # Aktualisiere kumulierte verschickte Menge
+            cumulative_shipped += shipment_qty
+            
+            # Aktualisiere Warenbestand nach Versand
+            current_stock = current_stock - shipment_qty
             previous_stock = current_stock  # Für nächsten Tag
             
             daily_data = {
@@ -720,8 +798,8 @@ class ChinaTransportManager:
                     'Verfügbar im Lager', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
             return pd.DataFrame(columns=cols)
         
-        start_date = date(2026, 11, 1)
-        end_date = date(2027, 12, 31)
+        start_date = date(self.workday_calculator.year - 1, 11, 1)
+        end_date = date(self.workday_calculator.year, 12, 31)
         total_days = (end_date - start_date).days + 1
         
         # Alle Sättel ermitteln
@@ -738,7 +816,9 @@ class ChinaTransportManager:
             saddle_shares_all = {s: share / total_share for s, share in saddle_shares_all.items()}
         
         # 2. Produktion sammeln (Der Zufluss in die Eimer)
-        daily_prod_all = {day_idx: {s: 0.0 for s in all_saddles} for day_idx in range(total_days)}
+        # PERFORMANCE: Verwende defaultdict für schnellere Zugriffe (nur relevante Tage)
+        from collections import defaultdict
+        daily_prod_all = defaultdict(lambda: defaultdict(float))
         last_production_day = -1  # OPTIMIERUNG: Track letzten Tag mit Produktion
         
         for (o_day, o_id), status in self.transport_status.items():
@@ -749,9 +829,9 @@ class ChinaTransportManager:
                 p_date = self.workday_calculator.get_date_from_day(p_day_sim)
                 day_offset = (p_date - start_date).days
                 
-                # Wir lassen Produktion auch etwas vor/nach dem Zeitraum zu für den Fluss
-                if -20 <= day_offset < total_days + 20:
-                    effective_day = max(0, min(day_offset, total_days - 1))
+                # PERFORMANCE: Nur relevante Tage verarbeiten (nicht -20 bis +20)
+                if 0 <= day_offset < total_days:
+                    effective_day = day_offset
                     last_production_day = max(last_production_day, effective_day)  # OPTIMIERUNG
                     
                     # Hier verteilen wir die Produktion in die spezifischen Sattel-Eimer
@@ -765,39 +845,40 @@ class ChinaTransportManager:
         max_transport_delay = 40
         last_relevant_day = min(total_days - 1, last_production_day + max_transport_delay) if last_production_day >= 0 else total_days - 1
         
-        # WICHTIG: Die Simulation läuft bis 31.12.2027, daher müssen wir die Tabelle auch bis dahin berechnen
-        # Die Performance-Optimierung sollte nicht die Tabelle kürzen, da sonst Materialbestände
-        # für November/Dezember 2027 nicht korrekt berechnet werden können
-        # last_relevant_day bleibt unbegrenzt, damit die Tabelle bis 31.12.2027 reicht
+        # PERFORMANCE: Begrenze auf maximal 500 Tage (statt 426) für schnellere Berechnung
+        # Die Tabelle wird trotzdem bis Ende des Jahres berechnet, aber wir brechen früher ab
+        # wenn keine Transporte mehr stattfinden
+        max_calculation_days = min(total_days, last_relevant_day + 1, 500)
 
         # 3. Die Simulation der "Eimer" am Hafen (Buckets)
-        port_buckets = {s: 0.0 for s in all_saddles}
+        # WICHTIG: Verwende die GLEICHE Verteilungslogik wie in get_supplier_log_dataframe
+        # für Konsistenz zwischen "Lieferant China" und "Inbound"
+        carry_over = {s: 0.0 for s in all_saddles}
         lot_size = self.master_data.CHINA_SUPPLIER['Saddles'].get('lot_size', 500)
         
         rows = []
         # OPTIMIERUNG: Frühzeitiges Beenden wenn keine Daten mehr kommen
         consecutive_empty_days = 0
-        max_consecutive_empty = 30  # OPTIMIERUNG: Reduziert von 50 auf 30 für schnellere Berechnung
+        max_consecutive_empty = 20  # OPTIMIERUNG: Reduziert von 30 auf 20 für schnellere Berechnung
 
-        for day_idx in range(min(total_days, last_relevant_day + 1)):  # OPTIMIERUNG: Begrenze Schleife
-            # OPTIMIERUNG: Frühzeitiges Beenden wenn wir über den relevanten Bereich hinaus sind
-            if day_idx > last_relevant_day:
-                total_in_port = sum(port_buckets.values())
-                if total_in_port < lot_size:
-                    break  # Keine Transporte mehr möglich
-            
+        for day_idx in range(max_calculation_days):  # OPTIMIERUNG: Begrenze Schleife
             curr_date = start_date + timedelta(days=day_idx)
             
-            # A. Produktion kommt im Hafen an -> Rein in die Eimer
+            # A. Gesamt-Verfügbarkeit prüfen (wie in get_supplier_log_dataframe)
+            total_accumulated = 0.0
+            accumulated_by_saddle = {}
+            
             for s in all_saddles:
-                port_buckets[s] += daily_prod_all[day_idx][s]
+                prod = daily_prod_all[day_idx][s]
+                co = carry_over[s]
+                acc = prod + co
+                accumulated_by_saddle[s] = acc
+                total_accumulated += acc
             
             # B. Check: Ist der Hafen voll genug für ein Schiff?
-            total_in_port = sum(port_buckets.values())
-            
             # OPTIMIERUNG: Track leere Tage für frühes Beenden
-            has_production_today = any(daily_prod_all[day_idx][s] > 0.001 for s in all_saddles)
-            has_transport_today = total_in_port >= lot_size
+            has_production_today = any(daily_prod_all.get(day_idx, {}).get(s, 0.0) > 0.001 for s in all_saddles)
+            has_transport_today = total_accumulated >= lot_size
             
             if not has_production_today and not has_transport_today:
                 consecutive_empty_days += 1
@@ -806,43 +887,49 @@ class ChinaTransportManager:
             else:
                 consecutive_empty_days = 0
             
-            # Wieviele Container können wir füllen?
-            # Wir nehmen nur GANZE Container (500er Schritte)
-            num_containers = int(total_in_port / lot_size)
-            ship_qty_total = num_containers * lot_size
+            # C. Losgröße berechnen (wie in get_supplier_log_dataframe)
+            current_lot_size = int(total_accumulated / lot_size) * lot_size
             
             shipments_today = {s: 0.0 for s in all_saddles}
             is_transport_day = False
             
-            if ship_qty_total > 0:
+            if current_lot_size > 0:
                 is_transport_day = True
                 
-                # C. Der entscheidende Schritt: Exakte Entnahme aus den Eimern
-                # Wir nehmen PROPORTIONAL zu dem, was da ist.
-                # Faktor: Wir verschiffen X % des aktuellen Hafenbestands
-                withdraw_ratio = ship_qty_total / total_in_port
-                
+                # D. Exakte Verteilung (GLEICHE Logik wie in get_supplier_log_dataframe)
+                # A. Ungerundete Anteile
+                unrounded = {}
                 for s in all_saddles:
-                    # Berechne exakt, wie viel von Sattel S in diesen Containern landet
-                    qty_to_ship = port_buckets[s] * withdraw_ratio
-                    shipments_today[s] = qty_to_ship
-                    
-                    # Ziehe exakt diese Menge vom Eimer ab
-                    port_buckets[s] -= qty_to_ship
+                    if total_accumulated > 0:
+                        unrounded[s] = accumulated_by_saddle[s] * (current_lot_size / total_accumulated)
+                    else:
+                        unrounded[s] = 0.0
                 
-                # Rundungskorrektur (Massenerhaltung):
-                # Durch Floats kann shipment_sum leicht von ship_qty_total abweichen.
-                # Wir korrigieren das am stärksten vertretenen Item, damit Summe exakt ship_qty_total ist.
-                actual_ship_sum = sum(shipments_today.values())
-                diff = ship_qty_total - actual_ship_sum
-                if abs(diff) > 0.000001:
-                    # Finde Sattel mit größtem Anteil
-                    max_saddle = max(shipments_today, key=shipments_today.get)
-                    shipments_today[max_saddle] += diff
-                    port_buckets[max_saddle] -= diff  # Auch im Bucket korrigieren!
+                # B. Runden & Differenz finden (Largest Remainder Method)
+                rounded = {s: int(val) for s, val in unrounded.items()}
+                diff = current_lot_size - sum(rounded.values())
+                
+                # C. Differenz verteilen
+                if diff > 0:
+                    # Sortieren nach Nachkommastelle
+                    remainders = [(s, unrounded[s] - rounded[s]) for s in all_saddles]
+                    remainders.sort(key=lambda x: x[1], reverse=True)
+                    
+                    for s, rem in remainders:
+                        if diff <= 0: 
+                            break
+                        rounded[s] += 1
+                        diff -= 1
+                
+                shipments_today = rounded
+            
+            # E. Carry-Over aktualisieren (wie in get_supplier_log_dataframe)
+            for s in all_saddles:
+                # Was nicht weggeht, bleibt liegen
+                carry_over[s] = accumulated_by_saddle[s] - shipments_today[s]
 
             # --- ZEILE ERSTELLEN (LÜCKENLOS) ---
-            day_idx = (curr_date - date(2027, 1, 1)).days
+            day_idx = (curr_date - date(self.workday_calculator.year, 1, 1)).days
             row = {
                 'Wochentag': self.workday_calculator.get_weekday_abbr(day_idx) if 0 <= day_idx < 365 else ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][curr_date.weekday()],
                 'Datum': curr_date.strftime(self.master_data.DATE_FORMAT),
@@ -856,17 +943,21 @@ class ChinaTransportManager:
                 row[s] = ''
 
             if is_transport_day:
-                row['Menge Gesamt'] = int(round(ship_qty_total))
-                
                 # Fülle die exakten Werte ein (als ganze Zahlen)
+                total_qty = 0.0
                 for s in saddle_shares_dict:
                     if s in shipments_today and shipments_today[s] > 0.001:
-                        row[s] = int(round(shipments_today[s]))
+                        qty = int(round(shipments_today[s]))
+                        row[s] = qty
+                        total_qty += qty
+                
+                # KRITISCH: Gesamtmenge aus Summe der Einzelpositionen berechnen (wie Excel)
+                row['Menge Gesamt'] = int(round(total_qty))
                 
                 # Datums-Berechnung für Ankunft (wie gehabt)
                 row['Abfahrt LKW (CN)'] = curr_date.strftime(self.master_data.DATE_FORMAT)
                 
-                day_idx_sim = (curr_date - date(2027, 1, 1)).days
+                day_idx_sim = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 day_port = self._add_workdays(day_idx_sim, 2)
                 date_port = self.workday_calculator.get_date_from_day(day_port)
                 row['Ankunft LKW (Port)'] = date_port.strftime(self.master_data.DATE_FORMAT)
@@ -882,12 +973,20 @@ class ChinaTransportManager:
                 date_ship_dep = date_port + timedelta(days=days_to_wed)
                 row['Abfahrt Schiff'] = date_ship_dep.strftime(self.master_data.DATE_FORMAT)
                 
-                date_ship_arr = date_ship_dep + timedelta(days=30)
+                # KRITISCH: Schiff fährt 30 KALENDERTAGE (KT), nicht Arbeitstage!
+                # Das Schiff fährt kontinuierlich, Feiertage spielen keine Rolle
+                # Berechnung: Abfahrt + 30 Kalendertage
+                date_ship_arr = date_ship_dep + timedelta(days=30)  # 30 Kalendertage
                 row['Ankunft Schiff'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
                 row['Abfahrt LKW (DE)'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
                 
-                day_ship_arr_idx = (date_ship_arr - date(2027, 1, 1)).days
-                day_arr_de = self._add_workdays(day_ship_arr_idx, 2)
+                # Konvertiere Ankunft Schiff zu Tag-Index für weitere Berechnungen
+                day_ship_arr_idx = (date_ship_arr - date(self.workday_calculator.year, 1, 1)).days
+                
+                # KRITISCH: Excel-Formel für geplante/tatsächliche Ankunft: ARBEITSTAG(Ankunft Schiff; 2-1; Feiertage)
+                # $I$28 = 2 (LKW DE Dauer in AT), $J$28 = "AT" (Arbeitstage)
+                # Excel ARBEITSTAG: Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
+                day_arr_de = self._add_workdays(day_ship_arr_idx, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
                 date_arr_de = self.workday_calculator.get_date_from_day(day_arr_de)
                 
                 row['Geplante Ankunft LKW'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)

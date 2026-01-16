@@ -47,10 +47,11 @@ if st.session_state.results_df is None:
 results_df = st.session_state.results_df
 
 # Zeitraum
-start_date = date(2026, 12, 31)
-end_date = date(2027, 12, 31)
-workday_calc = WorkdayCalculator(year=2027)
-start_date_simulation = date(2027, 1, 1)
+planning_year = st.session_state.get('planning_year', 2027)
+start_date = date(planning_year - 1, 12, 31)
+end_date = date(planning_year, 12, 31)
+workday_calc = WorkdayCalculator(year=planning_year)
+start_date_simulation = date(planning_year, 1, 1)
 
 def create_saddle_inventory_log():
     """Erstellt Sattel-Lager-Log synchronisiert mit Inbound-Daten"""
@@ -99,7 +100,7 @@ def create_saddle_inventory_log():
     # Die Schleife beginnt ab November, sammelt die ersten Lieferungen ein,
     # zieht die ersten Verbräuche ab, und kommt dann am 01.01.2027 mit dem korrekten Bestand an
     start_date_log = date(2026, 11, 1)
-    end_date_log = date(2027, 12, 31)
+    end_date_log = date(planning_year, 12, 31)
     total_days = (end_date_log - start_date_log).days + 1
     
     stock_by_saddle = {saddle_type: 0.0 for saddle_type in saddle_types}
@@ -276,6 +277,45 @@ for saddle_type in sorted(saddle_logs.keys()):
         return [''] * len(row)
 
     cols = ['Wochentag', 'Datum', 'Lagerzugang', 'Bestand morgens', 'Lagerabgang', 'Verlustmenge', 'Bestand abends']
+    df_display = df_filt[cols].copy()
+    
+    # Identifiziere numerische Spalten für Summenzeile
+    numeric_cols = ['Lagerzugang', 'Bestand morgens', 'Lagerabgang', 'Verlustmenge', 'Bestand abends']
+    
+    # Erstelle Summenzeile
+    if numeric_cols and len(df_display) > 0:
+        sum_row = {'Wochentag': 'Summe', 'Datum': ''}
+        for col in df_display.columns:
+            if col in numeric_cols:
+                sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
+            elif col not in sum_row:
+                sum_row[col] = ''
+        
+        # Füge Summenzeile als neue Zeile hinzu
+        sum_df = pd.DataFrame([sum_row])
+        df_display_with_sum = pd.concat([df_display, sum_df], ignore_index=True)
+        
+        # Erweitere Flags für Summenzeile
+        weekend_flags_extended = list(weekend_flags) + [False]
+        holiday_flags_extended = list(holiday_flags) + [False]
+    else:
+        df_display_with_sum = df_display
+        weekend_flags_extended = weekend_flags
+        holiday_flags_extended = holiday_flags
+    
+    # Styling-Funktion mit Summenzeile
+    def style_row_with_sum(row):
+        idx = row.name
+        # Summenzeile: grauer Hintergrund, fett
+        if idx >= len(weekend_flags):
+            return ['background-color: #e0e0e0; font-weight: bold'] * len(row)
+        # Normale Zeilen
+        if idx < len(weekend_flags_extended):
+            if weekend_flags_extended[idx]:
+                return ['background-color: #ffebee'] * len(row)
+            if holiday_flags_extended[idx]:
+                return ['background-color: #c8e6c9'] * len(row)
+        return [''] * len(row)
     
     # Farblegende
     col1, col2 = st.columns([1, 1])
@@ -287,5 +327,5 @@ for saddle_type in sorted(saddle_logs.keys()):
         </div>
         """, unsafe_allow_html=True)
     
-    st.dataframe(df_filt[cols].style.apply(style_row_safe, axis=1), width='stretch', hide_index=True)
+    st.dataframe(df_display_with_sum.style.apply(style_row_with_sum, axis=1), width='stretch', hide_index=True)
     st.divider()

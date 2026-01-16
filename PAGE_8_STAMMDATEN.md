@@ -80,7 +80,7 @@ Die Seite zeigt Beschaffungsparameter für China:
 Die Seite zeigt alle Feiertage für alle relevanten Länder:
 
 ```python
-all_holidays = HolidaysConfig.get_all_holidays(2026)
+all_holidays = HolidaysConfig.get_all_holidays(2027)
 ```
 
 **Länder**:

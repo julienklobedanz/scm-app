@@ -46,9 +46,10 @@ if st.session_state.results_df is None:
 results_df = st.session_state.results_df
 
 # Zeitraum
-start_date = date(2027, 1, 1)
-end_date = date(2027, 12, 31)
-workday_calc = WorkdayCalculator(year=2027)
+planning_year = st.session_state.get('planning_year', 2027)
+start_date = date(planning_year, 1, 1)
+end_date = date(planning_year, 12, 31)
+workday_calc = WorkdayCalculator(year=planning_year)
 
 # NEU: Lese Produktionslogs direkt aus dem ProductionPlanner
 def get_production_logs():
@@ -153,9 +154,55 @@ for product in sorted(production_logs.keys()):
                 return ['background-color: #c8e6c9'] * len(row)
         return [''] * len(row)
     
+    # Identifiziere numerische Spalten für Summenzeile
+    numeric_cols = []
+    for col in df_display.columns:
+        if col not in ['Wochentag', 'Datum', 'Materialien vollständig?']:
+            # Prüfe, ob Spalte numerische Werte enthält
+            try:
+                pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum()
+                numeric_cols.append(col)
+            except:
+                pass
+    
+    # Erstelle Summenzeile
+    if numeric_cols and len(df_display) > 0:
+        sum_row = {'Wochentag': 'Summe', 'Datum': ''}
+        for col in df_display.columns:
+            if col in numeric_cols:
+                sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
+            elif col not in sum_row:
+                sum_row[col] = ''
+        
+        # Füge Summenzeile als neue Zeile hinzu
+        sum_df = pd.DataFrame([sum_row])
+        df_display_with_sum = pd.concat([df_display, sum_df], ignore_index=True)
+        
+        # Erweitere Flags für Summenzeile
+        weekend_flags_extended = list(weekend_flags) + [False]
+        holiday_flags_extended = list(holiday_flags) + [False]
+    else:
+        df_display_with_sum = df_display
+        weekend_flags_extended = weekend_flags
+        holiday_flags_extended = holiday_flags
+    
+    # Styling-Funktion mit Summenzeile
+    def style_row_with_sum(row):
+        idx = row.name
+        # Summenzeile: grauer Hintergrund, fett
+        if idx >= len(weekend_flags):
+            return ['background-color: #e0e0e0; font-weight: bold'] * len(row)
+        # Normale Zeilen
+        if idx < len(weekend_flags_extended):
+            if weekend_flags_extended[idx]:
+                return ['background-color: #ffebee'] * len(row)
+            if holiday_flags_extended[idx]:
+                return ['background-color: #c8e6c9'] * len(row)
+        return [''] * len(row)
+    
     # Zeige Tabelle
     st.dataframe(
-        df_display.style.apply(style_row_safe, axis=1),
+        df_display_with_sum.style.apply(style_row_with_sum, axis=1),
         width='stretch',
         hide_index=True
     )

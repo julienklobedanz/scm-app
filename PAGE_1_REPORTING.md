@@ -2,7 +2,7 @@
 
 ## Übersicht
 
-Die Reporting-Seite bietet eine Übersicht über Lagerbestände und Produktionsleistung. Sie visualisiert sowohl Sattel-Bestände als auch Fahrrad-Bestände über das gesamte Jahr 2026.
+Die Reporting-Seite bietet eine Übersicht über Lagerbestände und Produktionsleistung. Sie visualisiert sowohl Sattel-Bestände als auch Fahrrad-Bestände über das gesamte Jahr 2027.
 
 ## Zweck und Funktionalität
 

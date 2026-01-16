@@ -84,7 +84,40 @@ for saddle_type in all_saddle_types:
                 return ['background-color: #ffebee' for _ in row]
             return styles
         
-        styled_df = df_display.style.apply(style_row, axis=1)
+        # Summenzeile hinzufügen
+        # Bestelleingang: Konvertiere leere Strings zu 0, dann summiere
+        bestelleingang_sum = 0
+        if 'Bestelleingang' in df_display.columns:
+            try:
+                bestelleingang_series = df_display['Bestelleingang'].replace('', 0)
+                bestelleingang_series = pd.to_numeric(bestelleingang_series, errors='coerce').fillna(0)
+                bestelleingang_sum = int(bestelleingang_series.sum())
+            except (ValueError, TypeError):
+                bestelleingang_sum = 0
+        
+        sum_row = {
+            'Wochentag': 'Summe',
+            'Datum': '',
+            'Bestelleingang': bestelleingang_sum,
+            'Freigabedatum': '',
+            'Freigegebene Bestellungen': int(pd.to_numeric(df_display['Freigegebene Bestellungen'], errors='coerce').fillna(0).sum()) if 'Freigegebene Bestellungen' in df_display.columns else 0,
+            'Störung': '',
+            'Produktionsdatum': '',
+            'Produktionsmenge': int(pd.to_numeric(df_display['Produktionsmenge'], errors='coerce').fillna(0).sum()) if 'Produktionsmenge' in df_display.columns else 0,
+            'Warenausgang': int(pd.to_numeric(df_display['Warenausgang'], errors='coerce').fillna(0).sum()) if 'Warenausgang' in df_display.columns else 0,
+            'Warenbestand': int(pd.to_numeric(df_display['Warenbestand'], errors='coerce').fillna(0).iloc[-1]) if len(df_display) > 0 and 'Warenbestand' in df_display.columns else 0
+        }
+        df_with_sum = pd.concat([df_display, pd.DataFrame([sum_row])], ignore_index=True)
+        
+        # Styling-Funktion für Summenzeile
+        def style_row_with_sum(row):
+            row_idx = row.name
+            if row_idx < len(df_display):
+                return style_row(row)
+            else:
+                return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+        
+        styled_df = df_with_sum.style.apply(style_row_with_sum, axis=1)
         st.dataframe(styled_df, width='stretch', hide_index=True)
     else:
         st.info(f"Keine Daten für {saddle_type} vorhanden.")

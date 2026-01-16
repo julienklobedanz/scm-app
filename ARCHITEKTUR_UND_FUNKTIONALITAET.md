@@ -111,8 +111,9 @@ Die Volumenplanung ist die **einzige Quelle** für Nachfrageberechnungen. Alle a
 **Detaillierter Ablauf:**
 
 1. **Initialisierung**: 
-   - `app.py` → `calculate_volume_planning_demand()` → Berechnet Nachfrage für alle 365 Tage
-   - `app.py` → `Simulator.__init__()` → Initialisierung aller Komponenten
+   - `app.py` → `initialize_session_state()` → Initialisiert `planning_year` (Standard: 2027)
+   - `app.py` → `calculate_volume_planning_demand()` → Berechnet Nachfrage für alle 365 Tage (verwendet `planning_year`)
+   - `app.py` → `Simulator.__init__()` → Initialisierung aller Komponenten (verwendet `planning_year`)
    - `Simulator.__init__()` → `_place_initial_orders()` → Verwendet Volumenplanung-Daten
    
 2. **Simulation**: 

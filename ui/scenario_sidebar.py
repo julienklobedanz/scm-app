@@ -25,6 +25,59 @@ def render_scenario_sidebar():
         st.session_state.scenario_manager = ScenarioManager()
     
     with st.sidebar:
+        # Jahr-Auswahl (Planungsbeginn) - oberhalb von Szenarien
+        if 'planning_year' not in st.session_state:
+            st.session_state.planning_year = 2027
+        
+        planning_year = st.number_input(
+            "Planungsbeginn",
+            min_value=2020,
+            max_value=2030,
+            value=st.session_state.planning_year,
+            step=1,
+            key="planning_year_input"
+        )
+        
+        # Wenn Jahr geändert wurde, setze volume_planning_calculated zurück, damit neu berechnet wird
+        # WICHTIG: Beende alte Simulation sauber und lade neue aus Cache, falls vorhanden
+        if planning_year != st.session_state.planning_year:
+            old_year = st.session_state.planning_year
+            
+            # KRITISCH: Beende alte Simulation sauber, wenn sie läuft
+            if st.session_state.get('simulation_running', False):
+                # Setze Flags zurück, um alte Simulation zu beenden
+                st.session_state.simulation_running = False
+                st.session_state.simulation_started = False
+                st.info(f"🔄 Jahr geändert: Alte Simulation für {old_year} wurde beendet. Neue Simulation für {planning_year} wird gestartet...")
+            
+            # Jahr ändern
+            st.session_state.planning_year = planning_year
+            
+            # Prüfe ob für das neue Jahr bereits ein Cache existiert
+            simulation_cache = st.session_state.get('simulation_cache', {})
+            if planning_year in simulation_cache and simulation_cache[planning_year].get('results_df') is not None:
+                # Lade aus Cache - KEINE neue Berechnung nötig!
+                cached_data = simulation_cache[planning_year]
+                st.session_state.results_df = cached_data['results_df']
+                st.session_state.kpis = cached_data.get('kpis')
+                st.session_state.simulator = cached_data.get('simulator')
+                st.session_state.happy_path_run = True
+                st.session_state.simulation_running = False
+                st.session_state.simulation_started = False
+                st.session_state.simulation_year = planning_year
+                st.success(f"✅ Simulation für {planning_year} wurde aus dem Cache geladen!")
+            else:
+                # Kein Cache vorhanden - setze Flags zurück für neue Berechnung
+                st.session_state.volume_planning_calculated = False
+                st.session_state.happy_path_run = False
+                st.session_state.results_df = None
+                st.session_state.simulation_year = None
+                st.info(f"🔄 Simulation für {planning_year} wird neu berechnet...")
+            
+            # WICHTIG: Kein st.rerun() hier - die Seite wird automatisch neu geladen
+        
+        st.divider()
+        
         st.header("🎭 Szenarien")
         st.caption("Standard-Szenario läuft permanent im Hintergrund. Zusätzliche Szenarien können parallel aktiviert werden.")
         
@@ -37,13 +90,14 @@ def render_scenario_sidebar():
             key="scenario_type_global"
         )
         
-        workday_calc = WorkdayCalculator(year=2027)
-        start_of_year = date(2027, 1, 1)
+        planning_year = st.session_state.get('planning_year', 2027)
+        workday_calc = WorkdayCalculator(year=planning_year)
+        start_of_year = date(planning_year, 1, 1)
         
         if scenario_type == "Marketingaktion":
             st.subheader("Marketingaktion")
-            start_date = st.date_input("Start-Datum", value=date(2027, 2, 19), min_value=start_of_year, max_value=date(2027, 12, 31), key="marketing_start_global")
-            end_date = st.date_input("End-Datum", value=date(2027, 3, 11), min_value=start_of_year, max_value=date(2027, 12, 31), key="marketing_end_global")
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 2, 19), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="marketing_start_global")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 3, 11), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="marketing_end_global")
             demand_factor = st.slider("Nachfrage-Erhöhung (Faktor)", 1.0, 3.0, 1.5, 0.1, key="marketing_factor_global")
             
             if st.button("➕ Marketingaktion hinzufügen", key="add_marketing_global"):
@@ -61,8 +115,8 @@ def render_scenario_sidebar():
         
         elif scenario_type == "Wasserschaden im Lager":
             st.subheader("Wasserschaden im Lager")
-            start_date = st.date_input("Start-Datum", value=date(2027, 4, 10), min_value=start_of_year, max_value=date(2027, 12, 31), key="warehouse_damage_start_global")
-            end_date = st.date_input("End-Datum", value=date(2027, 4, 20), min_value=start_of_year, max_value=date(2027, 12, 31), key="warehouse_damage_end_global")
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 4, 10), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="warehouse_damage_start_global")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 4, 20), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="warehouse_damage_end_global")
             stock_loss = st.slider("Lagerbestands-Verlust (%)", 0.0, 1.0, 0.5, 0.1, key="warehouse_damage_loss_global")
             
             if st.button("➕ Wasserschaden hinzufügen", key="add_warehouse_damage_global"):
@@ -81,8 +135,8 @@ def render_scenario_sidebar():
         
         elif scenario_type == "Maschinenausfall (China)":
             st.subheader("Maschinenausfall (China)")
-            start_date = st.date_input("Start-Datum", value=date(2027, 6, 1), min_value=start_of_year, max_value=date(2027, 12, 31), key="supplier_breakdown_start_global")
-            end_date = st.date_input("End-Datum", value=date(2027, 6, 10), min_value=start_of_year, max_value=date(2027, 12, 31), key="supplier_breakdown_end_global")
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 6, 1), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="supplier_breakdown_start_global")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 6, 10), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="supplier_breakdown_end_global")
             component = st.selectbox("Betroffene Komponente", ["saddles"], key="supplier_component_global")  # Nur Sättel
             
             if st.button("➕ Lieferantenausfall hinzufügen", key="add_supplier_breakdown_global"):
@@ -101,8 +155,8 @@ def render_scenario_sidebar():
         elif scenario_type == "Lieferprobleme (China)":
             st.subheader("Lieferprobleme (China)")
             st.info("Betroffene Komponente: Sättel")
-            start_date = st.date_input("Start-Datum", value=date(2027, 7, 19), min_value=start_of_year, max_value=date(2027, 12, 31), key="delivery_start_global")
-            end_date = st.date_input("End-Datum", value=date(2027, 7, 29), min_value=start_of_year, max_value=date(2027, 12, 31), key="delivery_end_global")
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 7, 19), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="delivery_start_global")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 7, 29), min_value=start_of_year, max_value=date(planning_year, 12, 31), key="delivery_end_global")
             loss = st.slider("Warenverlust (%)", 0.0, 1.0, 0.0, 0.1, key="delivery_loss_global")
             delay = st.number_input("Verspätung (Tage)", min_value=0, max_value=30, value=0, key="delivery_delay_global")
             

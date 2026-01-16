@@ -50,7 +50,13 @@ class Simulator:
         self.backlog.initialize_markets(self.master_data.MARKETS)
         
         # Initialisiere Services
-        self.workday_calculator = WorkdayCalculator(year=2027)
+        # Hole Jahr aus Session State, falls verfügbar (für Streamlit)
+        try:
+            import streamlit as st
+            planning_year = st.session_state.get('planning_year', 2027)
+        except (ImportError, RuntimeError):
+            planning_year = 2027  # Fallback wenn Streamlit nicht verfügbar
+        self.workday_calculator = WorkdayCalculator(year=planning_year)
         self.demand_calculator = DemandCalculator(yearly_volume, self.workday_calculator)
         # WICHTIG: china_transport_manager muss VOR production_planner erstellt werden,
         # damit production_planner Zugriff darauf hat

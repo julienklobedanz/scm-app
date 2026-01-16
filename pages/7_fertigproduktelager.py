@@ -46,9 +46,10 @@ if st.session_state.results_df is None:
 results_df = st.session_state.results_df
 
 # Zeitraum
-start_date = date(2027, 1, 1)
-end_date = date(2027, 12, 31)
-workday_calc = WorkdayCalculator(year=2027)
+planning_year = st.session_state.get('planning_year', 2027)
+start_date = date(planning_year, 1, 1)
+end_date = date(planning_year, 12, 31)
+workday_calc = WorkdayCalculator(year=planning_year)
 
 def create_finished_goods_log():
     """Erstellt Fertigproduktelager-Log für jedes Produkt"""
@@ -145,17 +146,46 @@ for product in sorted(fg_logs.keys()):
         </div>
         """, unsafe_allow_html=True)
     
+    # Identifiziere numerische Spalten für Summenzeile
+    numeric_cols = ['Lagerzugang', 'Bestand (morgens)', 'Lagerabgang', 'Bestand (abends)']
+    
+    # Erstelle Summenzeile
+    if numeric_cols and len(df_display) > 0:
+        sum_row = {'Wochentag': 'Summe', 'Datum': ''}
+        for col in df_display.columns:
+            if col in numeric_cols:
+                sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
+            elif col not in sum_row:
+                sum_row[col] = ''
+        
+        # Füge Summenzeile als neue Zeile hinzu
+        sum_df = pd.DataFrame([sum_row])
+        df_display_with_sum = pd.concat([df_display, sum_df], ignore_index=True)
+        
+        # Erweitere Flags für Summenzeile
+        weekend_flags_extended = list(weekend_flags) + [False]
+        holiday_flags_extended = list(holiday_flags) + [False]
+    else:
+        df_display_with_sum = df_display
+        weekend_flags_extended = weekend_flags
+        holiday_flags_extended = holiday_flags
+    
     # Zeige Tabelle mit Styling
     def style_row(row):
         row_idx = row.name
-        # Wochenende hat Priorität (wenn beides, dann Wochenende = rot)
-        if weekend_flags[row_idx]:
-            return ['background-color: #ffebee' for _ in row]
-        elif holiday_flags[row_idx]:
-            return ['background-color: #c8e6c9' for _ in row]
+        # Summenzeile: grauer Hintergrund, fett
+        if row_idx >= len(weekend_flags):
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+        # Normale Zeilen
+        if row_idx < len(weekend_flags_extended):
+            # Wochenende hat Priorität (wenn beides, dann Wochenende = rot)
+            if weekend_flags_extended[row_idx]:
+                return ['background-color: #ffebee' for _ in row]
+            elif holiday_flags_extended[row_idx]:
+                return ['background-color: #c8e6c9' for _ in row]
         return [''] * len(row)
     
-    styled_df = df_display.style.apply(style_row, axis=1)
+    styled_df = df_display_with_sum.style.apply(style_row, axis=1)
     st.dataframe(styled_df, width='stretch', hide_index=True)
     
     st.divider()

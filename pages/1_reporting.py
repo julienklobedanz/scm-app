@@ -44,7 +44,8 @@ if st.session_state.results_df is None:
     st.stop()
 
 results_df = st.session_state.results_df
-workday_calc = WorkdayCalculator(year=2027)
+planning_year = st.session_state.get('planning_year', 2027)
+workday_calc = WorkdayCalculator(year=planning_year)
 
 # ============================================================================
 # LAGER
