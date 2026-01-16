@@ -91,7 +91,7 @@ class ProcurementManager:
                     return  # Bestellung abbrechen
             
             # Bestelle genau den täglichen Bedarf für den Zukunftstag
-            # Analog zur Excel-Formel: Bestelle heute für den Bedarf in 49 Tagen
+            # Bestelle heute für den Bedarf in 49 Tagen
             # Der Simulator ruft diese Methode täglich auf, daher bestellen wir täglich
             # den Bedarf des jeweiligen Zukunftstags
             self.china_transport_manager.place_order(day, expected_demand)

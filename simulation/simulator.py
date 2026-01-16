@@ -89,24 +89,24 @@ class Simulator:
         """
         Initialisiert den Sattel-Bestand aus der Inbound-Tabelle.
         
-        OPTIMIERUNG: Berechnet nur die benötigten Daten bis zum 31.12.2026,
-        nicht die gesamte Tabelle bis 31.12.2027. Das spart erheblich Zeit.
+        OPTIMIERUNG: Berechnet nur die benötigten Daten bis zum Vorjahr,
+        nicht die gesamte Tabelle bis Jahresende. Das spart erheblich Zeit.
         
-        Diese Methode stellt sicher, dass der Simulator am 01.01.2027 mit dem exakt
+        Diese Methode stellt sicher, dass der Simulator am Jahresanfang mit dem exakt
         gleichen Bestand startet, den auch die Materiallager-Seite anzeigt.
         """
         from datetime import date
         
         # OPTIMIERUNG: Berechne Initialbestand direkt aus transport_status,
         # ohne die gesamte Inbound-Tabelle zu erstellen
-        # Das ist viel schneller, da wir nur bis 31.12.2025 benötigen
+        # Das ist viel schneller, da wir nur bis zum Vorjahr benötigen
         
-        cutoff_date = date(2026, 12, 31)
+        cutoff_date = date(self.workday_calculator.year - 1, 12, 31)
         initial_stock = 0.0
         
-        # Iteriere über alle Transporte und berechne nur die, die bis 31.12.2026 ankommen
+        # Iteriere über alle Transporte und berechne nur die, die bis zum Vorjahr ankommen
         for (order_day, order_id), status in self.china_transport_manager.transport_status.items():
-            # Prüfe ob die Ware bis 31.12.2026 verfügbar ist
+            # Prüfe ob die Ware bis zum Vorjahr verfügbar ist
             available_day = status.get('available_day')
             if available_day is None:
                 continue
@@ -148,7 +148,7 @@ class Simulator:
         OPTIMIERUNG: Verwendet Nachfrage aus Volumenplanung, falls verfügbar.
         Das ist schneller als eigene Berechnung.
         
-        Beispiel: Für Bedarf am 04.01.2027 (Tag 3) wird am 16.11.2026 (Tag -46) bestellt.
+        Beispiel: Für Bedarf am Tag 3 wird am Tag -46 (49 Tage vorher) bestellt.
         """
         # WICHTIG: Wir müssen den Bedarf für die gesamte Lead-Time vorbestellen,
         # damit am Tag 0 (Start der run-Schleife) nahtlos weitergemacht wird.
@@ -235,6 +235,7 @@ class Simulator:
             
             # 2. Berechne tägliche Nachfrage mit Carry-Over-Logik
             # Marketing-Add-ons berechnen (pro Produkt) - auf Float-Basis
+            # PERFORMANCE: Cache für Base_Daily_Float pro Monat
             marketing_add_ons = {}
             marketing_scenarios = self.scenario_manager.get_marketing_scenarios(day)
             
@@ -245,8 +246,14 @@ class Simulator:
                 is_weekend = self.workday_calculator.is_weekend(day)
                 
                 if not is_weekend:
-                    # Hole Base_Daily_Float für Add-on-Berechnung
-                    base_daily_floats = self.demand_calculator._calculate_monthly_base_daily_float(month)
+                    # PERFORMANCE: Verwende Cache für Base_Daily_Float (wird pro Monat gecacht)
+                    if not hasattr(self.demand_calculator, '_base_daily_float_cache'):
+                        self.demand_calculator._base_daily_float_cache = {}
+                    
+                    if month not in self.demand_calculator._base_daily_float_cache:
+                        self.demand_calculator._base_daily_float_cache[month] = self.demand_calculator._calculate_monthly_base_daily_float(month)
+                    
+                    base_daily_floats = self.demand_calculator._base_daily_float_cache[month]
                     
                     for scenario in marketing_scenarios:
                         factor = scenario.demand_increase_factor
@@ -260,15 +267,18 @@ class Simulator:
                             marketing_add_ons[product] += add_on
             
             # Prüfe, ob es der letzte Arbeitstag des Jahres ist (für Rest-Aufsummierung)
+            # PERFORMANCE: Cache für letzten Arbeitstag (wird nur einmal berechnet)
             is_last_workday_of_year = False
             if self.workday_calculator.is_workday(day):
-                # Prüfe, ob es nach diesem Tag noch Arbeitstage gibt
-                has_future_workdays = False
-                for future_day in range(day + 1, days):
-                    if self.workday_calculator.is_workday(future_day):
-                        has_future_workdays = True
-                        break
-                is_last_workday_of_year = not has_future_workdays
+                if not hasattr(self, '_last_workday_calculated'):
+                    # Berechne letzten Arbeitstag einmalig
+                    self._last_workday_calculated = None
+                    for future_day in range(days - 1, -1, -1):  # Rückwärts durchsuchen
+                        if self.workday_calculator.is_workday(future_day):
+                            self._last_workday_calculated = future_day
+                            break
+                
+                is_last_workday_of_year = (day == self._last_workday_calculated) if self._last_workday_calculated is not None else False
             
             # WICHTIG: Verwende Nachfrage aus Volumenplanung, falls vorhanden
             # Die Volumenplanung ist die Basis, der Simulator verarbeitet diese Daten weiter
@@ -349,7 +359,7 @@ class Simulator:
                     saddle_demand
                 )
                 
-                # PROAKTIVE LOGIK (Look-Ahead wie Excel): Schauen in die Zukunft statt in die Vergangenheit
+                # PROAKTIVE LOGIK (Look-Ahead): Schauen in die Zukunft statt in die Vergangenheit
                 # Bestelle heute für den Bedarf in 49 Tagen (Lead Time)
                 lead_time = 49
                 future_day = day + lead_time
@@ -368,7 +378,14 @@ class Simulator:
                     # KORREKTUR: Marketing wird auch an deutschen Feiertagen berücksichtigt, wenn es ein Wochentag ist
                     if future_marketing_scenarios and not self.workday_calculator.is_weekend(future_day):
                         month = self.master_data.get_month_from_day(future_day)
-                        base_daily_floats = self.demand_calculator._calculate_monthly_base_daily_float(month)
+                        # PERFORMANCE: Verwende Cache für Base_Daily_Float
+                        if not hasattr(self.demand_calculator, '_base_daily_float_cache'):
+                            self.demand_calculator._base_daily_float_cache = {}
+                        
+                        if month not in self.demand_calculator._base_daily_float_cache:
+                            self.demand_calculator._base_daily_float_cache[month] = self.demand_calculator._calculate_monthly_base_daily_float(month)
+                        
+                        base_daily_floats = self.demand_calculator._base_daily_float_cache[month]
                         
                         for scenario in future_marketing_scenarios:
                             factor = scenario.demand_increase_factor
@@ -410,12 +427,12 @@ class Simulator:
                     
                     # 4. Übergib den täglichen Bedarf des Zukunftstags (nicht kumulativ)
                     # Der ProcurementManager bestellt täglich basierend auf diesem Bedarf
-                    # Analog zur Excel-Formel: Wir schauen auf den Bedarf in 49 Tagen und bestellen heute dafür
+                    # Wir schauen auf den Bedarf in 49 Tagen und bestellen heute dafür
                     # WICHTIG: Dieser Bedarf stammt jetzt aus der Volumenplanung (Basis)
                     expected_future_demand = future_saddle_demand
                 
                 # KORREKTUR: Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen
-                # WICHTIG: Auch im Vorlauf (2026, negative Tage) wird bestellt, damit Start 2027 volle Lager hat
+                # WICHTIG: Auch im Vorlauf (negative Tage) wird bestellt, damit Jahresstart volle Lager hat
                 # Übergebe den proaktiven Bedarf an den Procurement Manager
                 if not self.workday_calculator.is_weekend(day):
                     self.procurement_manager.check_and_order(day, expected_future_demand)
