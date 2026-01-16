@@ -32,10 +32,24 @@ Die Methode im `ChinaTransportManager` erstellt eine Tabelle mit allen Inbound-D
 2. **Losgröße**: Verschiffung erfolgt nur, wenn die Losgröße erreicht ist (500 Einheiten).
 
 3. **Transportzeit**: Die Transportzeit per Schiff beträgt mehrere Tage.
+   - **KRITISCH: Excel-Formel korrigiert**: `=WENN(P57<>"";WENN(Lieferketten!$J$27="AT";ARBEITSTAG(P59;Lieferketten!$I$27-1;$E$56:$NU$56);P59+Lieferketten!$I$27-1);"")`
+   - **$I$27** = 30 (Schiffsdauer in KT)
+   - **$J$27** = "AT" (Arbeitstage)
+   - **Berechnung**: ARBEITSTAG(Abfahrt Schiff; 30-1; Feiertage) = ARBEITSTAG(Abfahrt Schiff; 29; Feiertage)
+   - **NICHT**: +30 Kalendertage, sondern 29 Arbeitstage!
 
 4. **Ankunft**: Die Ware kommt an deutschen Arbeitstagen im Lager Dortmund an.
+   - **KRITISCH: Excel-Formel korrigiert**: `=WENN(P57<>"";WENN(Lieferketten!$J$28="AT";ARBEITSTAG(P61;Lieferketten!$I$28-1;$E$13:$NU$13);P61+Lieferketten!$I$28-1);"")`
+   - **$I$28** = 2 (LKW DE Dauer in AT)
+   - **$J$28** = "AT" (Arbeitstage)
+   - **Berechnung**: ARBEITSTAG(Ankunft Schiff; 2-1; Feiertage) = ARBEITSTAG(Ankunft Schiff; 1; Feiertage)
+   - **NICHT**: +2 Arbeitstage, sondern 1 Arbeitstag!
 
 5. **Verfügbar im Lager**: Das Datum, an dem die Ware im Lager verfügbar ist.
+
+6. **Menge Gesamt**: Gesamtmenge pro Tag
+   - **KRITISCH**: Wird aus Summe der Einzelpositionen berechnet (nicht direkt aus ship_qty_total)
+   - **Berechnung**: Summe aller Sattel-Mengen pro Tag
 
 ### 2. Optimierungen
 
@@ -47,6 +61,8 @@ Die Methode `get_inbound_log_dataframe()` wurde optimiert, um die Performance zu
 ### 3. Visualisierung
 
 Die Seite zeigt eine große Tabelle (Höhe: 800px) mit allen Inbound-Daten. Wochenenden werden rot hinterlegt, um sie visuell hervorzuheben.
+
+**Summenzeile**: Am Ende der Tabelle wird eine Summenzeile angezeigt, die die Gesamtsummen aller numerischen Spalten (Menge Gesamt, individuelle Sattel-Mengen) zeigt.
 
 ## Abhängigkeiten
 

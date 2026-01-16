@@ -63,7 +63,36 @@ if not df.empty:
             return ['background-color: #ffebee' for _ in row]
         return styles
     
-    styled_df = df.style.apply(style_row, axis=1)
+    # Summenzeile hinzufügen
+    numeric_cols = ['Menge Gesamt'] + [col for col in df.columns if col in saddle_shares.keys()]
+    sum_row = {'Wochentag': 'Summe', 'Datum': ''}
+    for col in df.columns:
+        if col in numeric_cols:
+            # Nur summieren, wenn die Spalte numerische Werte enthält
+            try:
+                # Konvertiere zu numerisch, ignoriere nicht-numerische Werte
+                numeric_values = pd.to_numeric(df[col], errors='coerce')
+                sum_row[col] = int(numeric_values.sum()) if not numeric_values.isna().all() else 0
+            except (ValueError, TypeError):
+                sum_row[col] = 0
+        elif col not in ['Wochentag', 'Datum', 'Abfahrt LKW (CN)', 'Ankunft LKW (Port)', 
+                         'Abfahrt Schiff', 'Ankunft Schiff', 'Abfahrt LKW (DE)', 
+                         'Geplante Ankunft LKW', 'Tatsächliche Ankunft LKW', 'Verfügbar im Lager']:
+            sum_row[col] = ''
+        else:
+            sum_row[col] = ''
+    
+    df_with_sum = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
+    
+    # Styling-Funktion für Summenzeile
+    def style_row_with_sum(row):
+        row_idx = row.name
+        if row_idx < len(df):
+            return style_row(row)
+        else:
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+    
+    styled_df = df_with_sum.style.apply(style_row_with_sum, axis=1)
     st.dataframe(styled_df, width='stretch', hide_index=True, height=800)
 else:
     st.info("Keine Inbound-Daten vorhanden.")

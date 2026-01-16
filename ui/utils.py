@@ -33,6 +33,10 @@ def initialize_session_state():
         st.session_state.volume_planning_calculated = False
     if 'last_progress_update' not in st.session_state:
         st.session_state.last_progress_update = 0
+    if 'planning_year' not in st.session_state:
+        st.session_state.planning_year = 2027  # Standard-Jahr
+    if 'simulation_cache' not in st.session_state:
+        st.session_state.simulation_cache = {}  # Cache für Simulationen pro Jahr: {year: {'results_df': ..., 'kpis': ..., 'simulator': ...}}
 
 
 def create_simulator(scenario_manager=None):
@@ -68,9 +72,32 @@ def run_happy_path_simulation():
     
     WICHTIG: Die Simulation wird synchron ausgeführt, aber mit einem Progress-Indikator.
     """
-    # Prüfe ob Simulation bereits abgeschlossen ist
+    # WICHTIG: Prüfe Cache für das aktuelle Jahr
+    planning_year = st.session_state.get('planning_year', 2027)
+    simulation_cache = st.session_state.get('simulation_cache', {})
+    
+    # Prüfe ob Simulation für das aktuelle Jahr bereits im Cache ist
+    if planning_year in simulation_cache:
+        cached_data = simulation_cache[planning_year]
+        if cached_data.get('results_df') is not None:
+            # Lade aus Cache
+            st.session_state.results_df = cached_data['results_df']
+            st.session_state.kpis = cached_data.get('kpis')
+            st.session_state.simulator = cached_data.get('simulator')
+            st.session_state.happy_path_run = True
+            st.session_state.simulation_running = False
+            st.session_state.simulation_started = False
+            return
+    
+    # Fallback: Prüfe ob Simulation bereits abgeschlossen ist (für Kompatibilität)
     if st.session_state.get('happy_path_run', False) and st.session_state.get('results_df') is not None:
-        return
+        # Prüfe ob das Jahr übereinstimmt
+        cached_year = st.session_state.get('simulation_year', None)
+        if cached_year == planning_year:
+            return
+        # Jahr stimmt nicht überein - Simulation muss neu berechnet werden
+        st.session_state.happy_path_run = False
+        st.session_state.results_df = None
     
     # Prüfe ob Simulation bereits läuft (verhindert parallele Ausführung)
     if st.session_state.get('simulation_running', False):
@@ -104,11 +131,18 @@ def run_happy_path_simulation():
         return
     
     # Starte Simulation nur wenn alle Bedingungen erfüllt sind
-    if not st.session_state.get('happy_path_run', False) and st.session_state.get('results_df') is None:
+    # WICHTIG: Prüfe auch, ob das Jahr übereinstimmt (Cache ist jahr-spezifisch)
+    cached_year = st.session_state.get('simulation_year', None)
+    if (not st.session_state.get('happy_path_run', False) or cached_year != planning_year) and st.session_state.get('results_df') is None:
         try:
             # WICHTIG: Berechne Volumenplanung VOR der Simulation
             # Die Volumenplanung ist die Basis, der Simulator verwendet diese Daten
-            if not st.session_state.get('volume_planning_calculated', False):
+            # OPTIMIERUNG: Prüfe auch, ob das Jahr übereinstimmt (Cache ist jahr-spezifisch)
+            planning_year = st.session_state.get('planning_year', 2027)
+            cached_year = st.session_state.get('volume_planning_year', None)
+            
+            if (not st.session_state.get('volume_planning_calculated', False) or 
+                cached_year != planning_year):
                 calculate_volume_planning_demand()
             
             # Markiere Simulation als gestartet und laufend
@@ -135,13 +169,23 @@ def run_happy_path_simulation():
                 progress_placeholder.progress(0.3, text="Simulation läuft...")
                 results_df, kpis = simulator.run()
                 
-                # Speichere Ergebnisse
+                # Speichere Ergebnisse im Session State
                 st.session_state.results_df = results_df
                 st.session_state.kpis = kpis
                 st.session_state.simulator = simulator
                 st.session_state.happy_path_run = True
                 st.session_state.simulation_running = False
                 st.session_state.simulation_started = False
+                st.session_state.simulation_year = planning_year  # Speichere Jahr für Cache-Validierung
+                
+                # WICHTIG: Speichere auch im Cache für das Jahr
+                if 'simulation_cache' not in st.session_state:
+                    st.session_state.simulation_cache = {}
+                st.session_state.simulation_cache[planning_year] = {
+                    'results_df': results_df,
+                    'kpis': kpis,
+                    'simulator': simulator
+                }
                 
                 # Entferne Progress-Indikator
                 progress_placeholder.empty()

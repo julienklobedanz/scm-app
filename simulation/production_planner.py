@@ -44,6 +44,11 @@ class ProductionPlanner:
         # Kumulierter Verbrauch pro Sattel-Typ (für Bestandsreduktion in UI)
         # Key: saddle_name, Value: kumulierter Verbrauch bis Tag X
         self._consumption_by_saddle: Dict[str, float] = {}
+        
+        # Excel-Logik: "zu produzierende Mengen" mit Fertigstellungsdatum
+        # Key: (completion_day, product), Value: quantity
+        # Wird für "Tatsächliche PM" verwendet (1-Tag-Verzögerung)
+        self._scheduled_production: Dict[Tuple[int, str], float] = {}
     
     def plan_daily_production(
         self, 
@@ -134,51 +139,52 @@ class ProductionPlanner:
         
         daily_capacity = shifts * capacity_per_shift
         
-        # 4. Initialisiere Materialverfügbarkeit: VOLLER POOL-BESTAND (nicht aufgeteilt!)
-        # Der Simulator führt alle Sättel als einen Pool 'stock_saddles'
-        # Wir verwenden den vollen Bestand und ziehen dynamisch ab (First Come, First Served nach Priorität)
-        current_saddle_stock = max(0.0, self.inventory.stock_saddles)  # Stelle sicher, dass nie negativ
-        stock_saddles_morning = current_saddle_stock  # Speichere für Anzeige (Bestand zu Beginn des Tages)
+        # 4. Initialisiere Materialverfügbarkeit
+        current_saddle_stock = max(0.0, self.inventory.stock_saddles)
+        stock_saddles_morning = current_saddle_stock
         
-        # KRITISCH: Berechne tatsächlichen Bestand pro Sattel-Typ (für Materialprüfung)
-        # Dies ist wichtig, damit die Produktion nur stattfindet, wenn genug Material des spezifischen Typs vorhanden ist
+        # Berechne tatsächlichen Bestand pro Sattel-Typ (für Materialprüfung)
         saddle_shares = self.master_data.calculate_saddle_shares()
         
         # Hole tatsächlichen Bestand pro Sattel-Typ aus Inbound-Tabelle (mit Verbrauch)
         stock_by_saddle_type = {}
         if self.china_transport_manager and self.workday_calculator:
-            # Hole Bestand aus Inbound-Tabelle
             inbound_stocks = self._get_all_stocks_from_inbound_table(day, saddle_shares)
-            # Ziehe kumulierten Verbrauch ab
             for s_type in saddle_shares.keys():
                 inbound_stock = inbound_stocks.get(s_type, 0.0) or 0.0
                 consumption = self._consumption_by_saddle.get(s_type, 0.0)
                 stock_by_saddle_type[s_type] = max(0.0, inbound_stock - consumption)
         else:
-            # Fallback: Proportionale Aufteilung des Pool-Bestands
             for s_type, share in saddle_shares.items():
                 stock_by_saddle_type[s_type] = current_saddle_stock * share
-        
-        # Geschätzter Bestand pro Sattel-Typ (für Priorisierung)
-        estimated_saddles_by_type = stock_by_saddle_type.copy()
 
-        # 5. Priorisierung (Excel-Logik)
+        # 5. EXCEL-LOGIK: Anteilige Produktion berechnen
+        # Excel: =WENN(SUMME(DG157:DG164)>0; ABRUNDEN(DG157*(DG154/SUMME(DG157:DG164));0); 0)
         products_list = list(self.master_data.BOM.keys())
+        total_production_demand = sum(production_demand_by_product.values())
+        
+        proportional_production_by_product = {}
+        for product in products_list:
+            demand = production_demand_by_product.get(product, 0.0)
+            if total_production_demand > 0:
+                # Excel: ABRUNDEN(Produktionsbedarf * Kapazität / Gesamtbedarf; 0)
+                proportional = math.floor(demand * daily_capacity / total_production_demand)
+            else:
+                proportional = 0
+            proportional_production_by_product[product] = proportional
+        
+        # 6. EXCEL-LOGIK: Rang Unterstützung und Rang berechnen
+        # Excel: Rang_Unterstützung = Anteilige_Produktion + Zeile/1000000
+        # Excel: Rang = RANG.GLEICH(Rang_Unterstützung; Array; 0) [absteigend]
         rank_support_by_product = {}
         for idx, product in enumerate(products_list):
             row_number = idx + 1
-            # Materialverfügbarkeit (geschätzter Wert für Priorisierung)
-            s_type = self.master_data.BOM[product]['saddle']
-            material_avail = estimated_saddles_by_type.get(s_type, 0.0)
-            
-            # Excel: =ZEILE()/1000000 + Verfügbarkeit
-            # Höhere Verfügbarkeit -> Höherer Wert -> Besserer Rang?
-            # RANG.GLEICH in Excel (Standard ist absteigend): Höchster Wert = Rang 1.
-            rank_support = (row_number / 1000000.0) + material_avail
+            proportional = proportional_production_by_product.get(product, 0)
+            # Excel: =ZEILE()/1000000 + Anteilige_Produktion
+            rank_support = (row_number / 1000000.0) + proportional
             rank_support_by_product[product] = rank_support
         
-        # Sortiere Produkte nach Rang (Höchster Support-Wert zuerst)
-        # Wir simulieren RANG.GLEICH absteigend -> Sortierung: High to Low
+        # Sortiere Produkte nach Rang (Höchster Support-Wert zuerst = Rang 1)
         sorted_products = sorted(products_list, key=lambda p: rank_support_by_product[p], reverse=True)
         
         # Berechne Rangnummer für Reporting
@@ -186,83 +192,130 @@ class ProductionPlanner:
         for i, p in enumerate(sorted_products):
             rank_by_product[p] = i + 1
 
-        # 6. Produktion verteilen (Water-Filling Algorithmus mit dynamischem Pool)
-        production_by_product = {product: 0 for product in products_list}
-        remaining_capacity = daily_capacity
+        # 7. EXCEL-LOGIK: zu produzierende Mengen berechnen (mit dynamischer Materialreduktion)
+        # Excel: Für Rang 1-4: =MIN(Produktionsbedarf, Anteilige_Produktion, Minimale_Produktion)
+        # Excel: Für Rang 5-8: Zusätzlich + Rest mögliche Produktion (DG476)
+        # WICHTIG: Material wird dynamisch reduziert während der Berechnung (wie in Excel)
+        scheduled_production_by_product = {}
+        total_scheduled_so_far = 0.0
         
-        # Speichere Bestand pro Produkt für Anzeige (zu Beginn der Iteration)
+        # Speichere initiale Materialverfügbarkeit für Anzeige (vor Produktion)
         material_availability_report = {}
-        
-        # Iteriere nach Priorität
-        for product in sorted_products:
-            if remaining_capacity <= 0:
-                # Keine Kapazität mehr, aber speichere trotzdem den Bestand für Anzeige
-                material_availability_report[product] = current_saddle_stock
-                continue
-                
-            demand = production_demand_by_product[product]
-            if demand <= 0:
-                # Kein Bedarf, aber speichere trotzdem den Bestand für Anzeige
-                material_availability_report[product] = current_saddle_stock
-                continue
-            
-            # KRITISCH: Material-Check für spezifischen Sattel-Typ!
-            # Jedes Produkt benötigt einen spezifischen Satteltyp, nicht den Pool-Bestand
-            required_saddle_type = self.master_data.BOM[product]['saddle']
-            available_stock_for_saddle = stock_by_saddle_type.get(required_saddle_type, 0.0)
-            
-            # Material-Limit: Verfügbarer Bestand des spezifischen Satteltyps
-            # WICHTIG: Wenn kein Material des spezifischen Typs vorhanden ist, kann nichts produziert werden!
-            material_limit = max(0.0, available_stock_for_saddle)
-            
-            # Wieviel können wir bauen? (Minimum aus Bedarf, Kapazität, Material)
-            # Wir runden Material ab, da man keine halben Sättel verbauen kann
-            can_produce = min(demand, remaining_capacity, int(material_limit))
-            
-            # KRITISCH: Stelle sicher, dass can_produce nie negativ ist
-            can_produce = max(0, can_produce)
-            
-            # KRITISCH: Aktualisiere Bestand pro Sattel-Typ (nicht nur Pool-Bestand!)
-            # Ziehe verbrauchtes Material vom spezifischen Satteltyp ab
-            if can_produce > 0:
-                stock_by_saddle_type[required_saddle_type] = max(0.0, stock_by_saddle_type[required_saddle_type] - can_produce)
-            
-            # Produziere
-            production_by_product[product] = int(can_produce)
-            
-            # Ziehe Ressourcen ab (dynamisch aus dem Pool)
-            # WICHTIG: Nur abziehen, wenn tatsächlich produziert wurde
-            remaining_capacity -= can_produce
-            # Aktualisiere Pool-Bestand (für nachfolgende Produkte)
-            current_saddle_stock = max(0.0, current_saddle_stock - can_produce)  # Stelle sicher, dass nie negativ wird
-            
-            # Speichere Bestand für Anzeige (zu Beginn der Iteration, VOR Produktion)
-            material_availability_report[product] = material_limit
-        
-        # Stelle sicher, dass alle Produkte einen Eintrag haben (auch wenn sie nicht produziert wurden)
         for product in products_list:
-            if product not in material_availability_report:
-                material_availability_report[product] = current_saddle_stock
+            required_saddle_type = self.master_data.BOM[product]['saddle']
+            material_availability_report[product] = stock_by_saddle_type.get(required_saddle_type, 0.0)
         
-        # 7. Aktualisiere Backlog (AGGRESSIVE BACKLOG-RECOVERY)
-        # Backlog = (Tagesbedarf + Alter Backlog) - Tatsächlich Produziert
-        # Dies stellt sicher, dass der Backlog korrekt nachgehalten wird
+        for product in sorted_products:
+            demand = production_demand_by_product.get(product, 0.0)
+            proportional = proportional_production_by_product.get(product, 0)
+            rank = rank_by_product.get(product, 999)
+            
+            if demand <= 0:
+                scheduled_production_by_product[product] = 0.0
+                continue
+            
+            # KRITISCH: Berechne "Minimale Produktion" dynamisch (nach Materialverbrauch vorheriger Produkte)
+            # Excel: =MIN(Frame_Verfügbar, Sattel_Verfügbar, Gabel_Verfügbar)
+            required_saddle_type = self.master_data.BOM[product]['saddle']
+            saddle_available = stock_by_saddle_type.get(required_saddle_type, 0.0)
+            # Frames und Gabeln sind unbegrenzt (∞), daher nur Sattel-Limit
+            minimal = max(0.0, saddle_available)
+            
+            # Für Rang 1-4: MIN(Bedarf, Anteilige, Minimale)
+            if rank <= 4:
+                scheduled_qty = min(demand, proportional, minimal)
+            else:
+                # Für Rang 5-8: MIN(Bedarf, Anteilige, Minimale) + Rest-Verteilung
+                base_qty = min(demand, proportional, minimal)
+                
+                # Excel DG476: =WENN(Summe < Kapazität; MIN(Rest_Kapazität, Minimale, Rest_Bedarf); 0)
+                remaining_capacity = daily_capacity - total_scheduled_so_far
+                remaining_demand = demand - base_qty
+                
+                if total_scheduled_so_far < daily_capacity and remaining_capacity > 0:
+                    rest_production = min(remaining_capacity, minimal, remaining_demand)
+                    scheduled_qty = base_qty + rest_production
+                else:
+                    scheduled_qty = base_qty
+            
+            scheduled_qty = max(0.0, scheduled_qty)
+            scheduled_production_by_product[product] = scheduled_qty
+            total_scheduled_so_far += scheduled_qty
+            
+            # KRITISCH: Reduziere Material SOFORT (dynamisch, wie in Excel)
+            # Dies stellt sicher, dass nachfolgende Produkte den reduzierten Bestand sehen
+            if scheduled_qty > 0:
+                stock_by_saddle_type[required_saddle_type] = max(0.0, stock_by_saddle_type[required_saddle_type] - scheduled_qty)
+                # Aktualisiere kumulierten Verbrauch
+                self._consumption_by_saddle[required_saddle_type] = self._consumption_by_saddle.get(required_saddle_type, 0.0) + float(scheduled_qty)
+        
+        # Sicherheitsprüfung: Stelle sicher, dass die Summe nicht die Kapazität überschreitet
+        total_scheduled = sum(scheduled_production_by_product.values())
+        if total_scheduled > daily_capacity:
+            # Proportionale Reduktion, falls die Summe die Kapazität überschreitet
+            scale_factor = daily_capacity / total_scheduled if total_scheduled > 0 else 0
+            # WICHTIG: Bei Reduktion muss auch Material zurückgegeben werden
+            for product in sorted_products:
+                old_qty = scheduled_production_by_product.get(product, 0.0)
+                new_qty = old_qty * scale_factor
+                reduction = old_qty - new_qty
+                scheduled_production_by_product[product] = new_qty
+                
+                # Gebe reduziertes Material zurück
+                if reduction > 0:
+                    required_saddle_type = self.master_data.BOM[product]['saddle']
+                    stock_by_saddle_type[required_saddle_type] = stock_by_saddle_type.get(required_saddle_type, 0.0) + reduction
+                    self._consumption_by_saddle[required_saddle_type] = max(0.0, self._consumption_by_saddle.get(required_saddle_type, 0.0) - reduction)
+        
+        # 8. EXCEL-LOGIK: Tatsächliche PM = "zu produzierende Mengen" die HEUTE geplant werden
+        # WICHTIG: "Tatsächliche PM" sind die "zu produzierende Mengen", die heute geplant werden
+        # (NICHT die von gestern - das wäre "fertiggestellte PM")
+        production_by_product = {}
+        actual_pm_by_product = {}
+        
+        for product in products_list:
+            scheduled_qty = scheduled_production_by_product.get(product, 0.0)
+            actual_pm_by_product[product] = int(scheduled_qty)
+            production_by_product[product] = int(scheduled_qty)
+        
+        # Speichere "zu produzierende Mengen" mit Fertigstellungsdatum (für "fertiggestellte PM" am nächsten Tag)
+        completion_day = day + 1  # Fertigstellungsdatum = morgen (nächster Arbeitstag)
+        
+        # Finde nächsten Arbeitstag für Fertigstellung
+        if self.workday_calculator:
+            while completion_day < 365 and not self.workday_calculator.is_workday(completion_day):
+                completion_day += 1
+        
+        # Speichere "zu produzierende Mengen" mit Fertigstellungsdatum (für "fertiggestellte PM")
+        for product in products_list:
+            scheduled_qty = scheduled_production_by_product.get(product, 0.0)
+            if scheduled_qty > 0:
+                # Speichere mit Fertigstellungsdatum (wird morgen als "fertiggestellte PM" angezeigt)
+                self._scheduled_production[(completion_day, product)] = scheduled_qty
+        
+        # Speichere Bestand pro Produkt für Anzeige
+        material_availability_report = {}
+        for product in products_list:
+            required_saddle_type = self.master_data.BOM[product]['saddle']
+            material_availability_report[product] = stock_by_saddle_type.get(required_saddle_type, 0.0)
+        
+        # 7. EXCEL-LOGIK: Aktualisiere Backlog
+        # Excel-Formel: Backlog = geplante PM heute - tatsächliche PM heute + Backlog gestern
+        # WICHTIG: "geplante PM" = Tagesbedarf OHNE Backlog (nicht production_demand_by_product!)
         for product in self.master_data.BOM.keys():
-            # Tagesbedarf (ohne Backlog)
-            daily_target = product_demands.get(product, 0)
-            # Alter Backlog
+            # Geplante PM heute (Tagesbedarf OHNE Backlog)
+            planned_pm = product_demands.get(product, 0)
+            # Tatsächliche PM heute
+            actual_pm = production_by_product.get(product, 0)
+            # Backlog gestern
             old_backlog = self.backlog.get(product, 0.0)
-            # Gesamtziel (Tagesbedarf + Backlog)
-            total_target = daily_target + old_backlog
-            # Tatsächlich produziert
-            produced = production_by_product.get(product, 0)
-            # Neuer Backlog = Gesamtziel - Produziert
-            self.backlog[product] = max(0.0, total_target - produced)
+            # Neuer Backlog = geplante PM - tatsächliche PM + Backlog gestern
+            self.backlog[product] = max(0.0, planned_pm - actual_pm + old_backlog)
         
         # 8. Speichere Produktionsplan
         self.production_plan[day] = production_by_product
         
-        # 9. Logge für UI
+        # 11. Logge für UI
         self._log_production(
             day, 
             production_by_product,
@@ -272,7 +325,9 @@ class ProductionPlanner:
             rank_by_product,
             shifts,
             daily_capacity,
-            stock_saddles_morning  # Bestand zu Beginn des Tages (für proportionale Anzeige)
+            stock_saddles_morning,  # Bestand zu Beginn des Tages (für proportionale Anzeige)
+            proportional_production_by_product,  # Anteilige Produktion
+            scheduled_production_by_product  # zu produzierende Mengen
         )
         
         return production_by_product
@@ -287,7 +342,9 @@ class ProductionPlanner:
         rank_by_product: Dict[str, int],
         shifts: int,
         daily_capacity: float,
-        stock_saddles_morning: float = None
+        stock_saddles_morning: float = None,
+        proportional_production_by_product: Dict[str, int] = None,
+        scheduled_production_by_product: Dict[str, float] = None
     ) -> None:
         """Loggt Produktionsdaten für UI-Anzeige"""
         if not self.workday_calculator:
@@ -372,21 +429,22 @@ class ProductionPlanner:
         
         # Berechne Bestand morgens (vor der Produktion)
         # Bestand morgens = Inbound-Bestand - kumulierter Verbrauch bis zum VORHERIGEN Tag
-        # (Der Verbrauch des aktuellen Tages wird später hinzugefügt)
+        # WICHTIG: Der Verbrauch des aktuellen Tages wurde bereits in plan_daily_production aktualisiert
         stock_morning_by_saddle = {}
         for saddle_name in saddle_shares.keys():
             inbound_stock = stock_by_saddle.get(saddle_name, 0.0) or 0.0
             # Verbrauch bis zum VORHERIGEN Tag (noch ohne heutige Produktion)
-            consumption_before_today = self._consumption_by_saddle.get(saddle_name, 0.0)
+            # WICHTIG: Der heutige Verbrauch wurde bereits in plan_daily_production hinzugefügt,
+            # daher müssen wir ihn hier abziehen, um den Bestand morgens zu erhalten
+            consumption_total = self._consumption_by_saddle.get(saddle_name, 0.0)
+            # Berechne Verbrauch bis zum VORHERIGEN Tag
+            consumption_before_today = consumption_total
+            for product, qty in production_by_product.items():
+                if qty > 0:
+                    required_saddle = self.master_data.BOM[product]['saddle']
+                    if required_saddle == saddle_name:
+                        consumption_before_today -= float(qty)
             stock_morning_by_saddle[saddle_name] = max(0.0, inbound_stock - consumption_before_today)
-        
-        # Aktualisiere kumulierten Verbrauch pro Sattel-Typ (NACH der Bestandsberechnung)
-        # WICHTIG: Dies passiert NACH dem Berechnen des Bestands morgens,
-        # damit der Bestand morgens den Verbrauch bis zum VORHERIGEN Tag zeigt
-        for product, qty in production_by_product.items():
-            if qty > 0:
-                saddle_name = self.master_data.BOM[product]['saddle']
-                self._consumption_by_saddle[saddle_name] = self._consumption_by_saddle.get(saddle_name, 0.0) + float(qty)
         
         for product in self.master_data.BOM.keys():
             frame_name = self.master_data.BOM[product]['frame']
@@ -422,6 +480,10 @@ class ProductionPlanner:
                 finished_pm = 0
             backlog = self.backlog.get(product, 0.0)
             
+            # Excel-Logik: Zusätzliche Felder für Debugging/Validierung
+            proportional_pm = proportional_production_by_product.get(product, 0) if proportional_production_by_product else 0
+            scheduled_pm = scheduled_production_by_product.get(product, 0.0) if scheduled_production_by_product else 0.0
+            
             log_entry = {
                 'Wochentag': day_info['weekday_abbr'],
                 'Datum': current_date.strftime(self.master_data.DATE_FORMAT),
@@ -437,6 +499,8 @@ class ProductionPlanner:
                 'Backlog': int(round(backlog, 0)),
                 '_Produktionsbedarf': production_demand_by_product.get(product, 0),
                 '_Rang': rank_by_product.get(product, 0),
+                '_Anteilige_Produktion': int(round(proportional_pm)),
+                '_zu_produzierende_Mengen': int(round(scheduled_pm)),
                 'Is_Weekend': is_weekend,
                 'Is_Holiday': is_holiday
             }
@@ -451,7 +515,7 @@ class ProductionPlanner:
         Dies vermeidet mehrfache Berechnung (8 Produkte = 8x Aufruf).
         
         Args:
-            day: Tag-Index (0-basiert, 0 = 01.01.2026)
+            day: Tag-Index (0-basiert, 0 = 01.01.2027)
             saddle_shares: Dictionary mit Sattel-Shares (für get_inbound_log_dataframe)
             
         Returns:

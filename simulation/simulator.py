@@ -50,7 +50,13 @@ class Simulator:
         self.backlog.initialize_markets(self.master_data.MARKETS)
         
         # Initialisiere Services
-        self.workday_calculator = WorkdayCalculator(year=2026)
+        # Hole Jahr aus Session State, falls verfügbar (für Streamlit)
+        try:
+            import streamlit as st
+            planning_year = st.session_state.get('planning_year', 2027)
+        except (ImportError, RuntimeError):
+            planning_year = 2027  # Fallback wenn Streamlit nicht verfügbar
+        self.workday_calculator = WorkdayCalculator(year=planning_year)
         self.demand_calculator = DemandCalculator(yearly_volume, self.workday_calculator)
         # WICHTIG: china_transport_manager muss VOR production_planner erstellt werden,
         # damit production_planner Zugriff darauf hat
@@ -83,10 +89,10 @@ class Simulator:
         """
         Initialisiert den Sattel-Bestand aus der Inbound-Tabelle.
         
-        OPTIMIERUNG: Berechnet nur die benötigten Daten bis zum 31.12.2025,
-        nicht die gesamte Tabelle bis 31.12.2026. Das spart erheblich Zeit.
+        OPTIMIERUNG: Berechnet nur die benötigten Daten bis zum 31.12.2026,
+        nicht die gesamte Tabelle bis 31.12.2027. Das spart erheblich Zeit.
         
-        Diese Methode stellt sicher, dass der Simulator am 01.01.2026 mit dem exakt
+        Diese Methode stellt sicher, dass der Simulator am 01.01.2027 mit dem exakt
         gleichen Bestand startet, den auch die Materiallager-Seite anzeigt.
         """
         from datetime import date
@@ -95,12 +101,12 @@ class Simulator:
         # ohne die gesamte Inbound-Tabelle zu erstellen
         # Das ist viel schneller, da wir nur bis 31.12.2025 benötigen
         
-        cutoff_date = date(2025, 12, 31)
+        cutoff_date = date(2026, 12, 31)
         initial_stock = 0.0
         
-        # Iteriere über alle Transporte und berechne nur die, die bis 31.12.2025 ankommen
+        # Iteriere über alle Transporte und berechne nur die, die bis 31.12.2026 ankommen
         for (order_day, order_id), status in self.china_transport_manager.transport_status.items():
-            # Prüfe ob die Ware bis 31.12.2025 verfügbar ist
+            # Prüfe ob die Ware bis 31.12.2026 verfügbar ist
             available_day = status.get('available_day')
             if available_day is None:
                 continue
@@ -142,7 +148,7 @@ class Simulator:
         OPTIMIERUNG: Verwendet Nachfrage aus Volumenplanung, falls verfügbar.
         Das ist schneller als eigene Berechnung.
         
-        Beispiel: Für Bedarf am 04.01.2026 (Tag 3) wird am 16.11.2025 (Tag -46) bestellt.
+        Beispiel: Für Bedarf am 04.01.2027 (Tag 3) wird am 16.11.2026 (Tag -46) bestellt.
         """
         # WICHTIG: Wir müssen den Bedarf für die gesamte Lead-Time vorbestellen,
         # damit am Tag 0 (Start der run-Schleife) nahtlos weitergemacht wird.
@@ -349,11 +355,11 @@ class Simulator:
                 future_day = day + lead_time
                 
                 # Berechne erwartete Nachfrage für den Zukunftstag
-                # KORREKTUR: Keine Zyklik - nur für Jahr 2026 (0 <= future_day <= 364)
+                # KORREKTUR: Keine Zyklik - nur für Jahr 2027 (0 <= future_day <= 364)
                 # Für future_day > 364 (Jahr 2027): Bedarf = 0 (keine Bestellung für nächstes Jahr)
                 expected_future_demand = 0.0
                 
-                # Prüfe, ob der Zukunftstag noch im Jahr 2026 liegt
+                # Prüfe, ob der Zukunftstag noch im Jahr 2027 liegt
                 if 0 <= future_day <= 364:
                     # 1. Prüfe, ob Marketing an diesem Zukunftstag aktiv ist
                     future_marketing_add_ons = {}
@@ -409,7 +415,7 @@ class Simulator:
                     expected_future_demand = future_saddle_demand
                 
                 # KORREKTUR: Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen
-                # WICHTIG: Auch im Vorlauf (2025, negative Tage) wird bestellt, damit Start 2026 volle Lager hat
+                # WICHTIG: Auch im Vorlauf (2026, negative Tage) wird bestellt, damit Start 2027 volle Lager hat
                 # Übergebe den proaktiven Bedarf an den Procurement Manager
                 if not self.workday_calculator.is_weekend(day):
                     self.procurement_manager.check_and_order(day, expected_future_demand)

@@ -40,7 +40,7 @@ class DemandCalculator:
         
         # Zähle Arbeitstage im Monat
         num_workdays = 0
-        start_date = date(2026, 1, 1)
+        start_date = date(self.workday_calculator.year, 1, 1)
         days_in_month = self.master_data.DAYS_PER_MONTH[month]
         
         # Finde ersten Tag des Monats
@@ -143,7 +143,11 @@ class DemandCalculator:
         # Marketing-Add-on wird als Float addiert (kann auch Float sein in Excel)
         daily_target_float = rounded_base + marketing_add_on
         
-        # 4. Am letzten Arbeitstag des Jahres: Reste aufsummieren
+        # 4. Marketing-Add-on addieren (NACH der Rundung, wie in Excel)
+        # Marketing-Add-on wird als Float addiert (kann auch Float sein in Excel)
+        daily_target_float = rounded_base + marketing_add_on
+        
+        # 5. Am letzten Arbeitstag des Jahres: Reste aufsummieren
         # WICHTIG: Am letzten Arbeitstag müssen ALLE Reste aufsummiert werden
         # Excel-Formel: Am letzten Arbeitstag wird der Rest nicht verworfen, sondern addiert
         if is_last_workday_of_year:
@@ -151,11 +155,8 @@ class DemandCalculator:
             # Dies stellt sicher, dass alle Reste am Jahresende aufsummiert werden
             remainder_to_add = base_with_remainder - rounded_base
             daily_target_float = rounded_base + remainder_to_add + marketing_add_on
-        else:
-            # Normalfall: Marketing-Add-on nach der Rundung addieren
-            daily_target_float = rounded_base + marketing_add_on
         
-        # 5. Ergebnis abrunden (da wir Integer zurückgeben müssen)
+        # 6. Ergebnis abrunden (da wir Integer zurückgeben müssen)
         # WICHTIG: math.floor() für korrekte Abrundung
         # ABER: Am letzten Arbeitstag sollte das Ergebnis bereits ganzzahlig sein (Rest wurde addiert)
         daily_target_int = math.floor(daily_target_float)
@@ -184,22 +185,22 @@ class DemandCalculator:
     def get_demand_for_future_day(self, day_index: int, marketing_add_ons: Dict[str, float] = None) -> Dict[str, int]:
         """
         Berechnet die Nachfrage für einen zukünftigen Tag.
-        STRENGE LOGIK: Nur für Jahr 2026 (0 <= day_index <= 364).
+        STRENGE LOGIK: Nur für Jahr 2027 (0 <= day_index <= 364).
         Für Tag > 364 (Jahr 2027): Gib 0 zurück (keine Bestellung für nächstes Jahr).
         
         Args:
-            day_index: Tag-Index (0-basiert, 0 = 01.01.2026)
+            day_index: Tag-Index (0-basiert, 0 = 01.01.2027)
             marketing_add_ons: Optional dict mit Marketing-Add-ons pro Produkt
         
         Returns:
-            Dict mit Produktname -> Ganzzahlige Nachfrage (0 wenn außerhalb 2026)
+            Dict mit Produktname -> Ganzzahlige Nachfrage (0 wenn außerhalb 2027)
         """
-        # KORREKTUR: Keine Zyklik am Ende - nur für Jahr 2026 bestellen
+        # KORREKTUR: Keine Zyklik am Ende - nur für Jahr 2027 bestellen
         if day_index < 0 or day_index > 364:
-            # Außerhalb des Jahres 2026: Kein Bedarf
+            # Außerhalb des Jahres 2027: Kein Bedarf
             return {product: 0 for product in self.master_data.BOM.keys()}
         
-        # Innerhalb des Jahres 2026: Normaler Bedarf
+        # Innerhalb des Jahres 2027: Normaler Bedarf
         return self.calculate_daily_demand_per_product_dict(day_index, marketing_add_ons)
     
     def calculate_daily_demand_per_product_dict(

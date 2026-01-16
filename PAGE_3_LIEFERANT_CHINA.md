@@ -69,10 +69,12 @@ Die Methode im `ChinaTransportManager` erstellt eine Tabelle mit allen relevante
    - Wird in der Zeile des Produktionsdatums angezeigt
 
 7. **Warenausgang**: Wann und wie viel wurde zum Hafen versendet
-   - **Excel-Formel**: `=WENN(ODER('Inbound (Material)'!KU68="Ausgefallen";'Inbound (Material)'!KU68="");0;KU172)`
-   - **Berechnung**:
-     - Wenn DeliveryProblemScenario mit 100% Verlust ("Ausgefallen"): 0
-     - Sonst: Normale Ausgangsmenge (basierend auf Pool-Logik, >= 500)
+   - **KRITISCH: Excel-Formel korrigiert**: `=WENN(ODER('Inbound (Material)'!KU68="Ausgefallen";'Inbound (Material)'!KU68="");0;WENN('Lieferant China (Sattel)'!P172-P87>=0;'Lieferant China (Sattel)'!P172-P87;'Lieferant China (Sattel)'!P172))`
+   - **P172** = Warenbestand (aktueller Bestand)
+   - **P87** = bereits verschickte Menge (kumuliert)
+   - **Logik**: WENN(Warenbestand - bereits verschickt >= 0; Warenbestand - bereits verschickt; Warenbestand)
+   - **Das bedeutet**: Die verschickte Menge ist MIN(Warenbestand, bereits verschickt)
+   - Wenn DeliveryProblemScenario mit 100% Verlust ("Ausgefallen"): 0
    - Pool-Logik: Alle Sättel werden gesammelt, wenn Pool >= 500, wird verschifft (anteilig verteilt)
 
 8. **Warenbestand**: Aktueller Bestand im chinesischen Lager
@@ -93,6 +95,8 @@ Diese Methode berechnet, welcher Anteil der Gesamtnachfrage auf jeden Sattel-Typ
 ### 3. Visualisierung
 
 Für jeden Sattel-Typ wird eine separate Tabelle angezeigt. Wochenenden werden rot hinterlegt, um sie visuell hervorzuheben.
+
+**Summenzeile**: Am Ende jeder Tabelle wird eine Summenzeile angezeigt, die die Gesamtsummen aller numerischen Spalten (Bestelleingang, Freigegebene Bestellungen, Produktionsmenge, Warenausgang) zeigt. Der Warenbestand zeigt den Endbestand (letzter Wert).
 
 ## Abhängigkeiten
 

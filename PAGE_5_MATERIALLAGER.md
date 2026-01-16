@@ -77,13 +77,13 @@ Die Funktion nutzt die exakte Stücklisten-Logik, um den Verbrauch zu berechnen:
 
 ### 3. Vorlauf-Berechnung
 
-Die Funktion beginnt ab November 2025, um den Vorlauf (Initial Stock) mitzunehmen:
+Die Funktion beginnt ab November 2026, um den Vorlauf (Initial Stock) mitzunehmen:
 
 ```python
-start_date_log = date(2025, 11, 1)
+start_date_log = date(2026, 11, 1)
 ```
 
-Dies stellt sicher, dass die ersten Lieferungen erfasst werden und der Bestand am 01.01.2026 korrekt ist.
+Dies stellt sicher, dass die ersten Lieferungen erfasst werden und der Bestand am 01.01.2027 korrekt ist.
 
 ### 4. Visualisierung
 
