@@ -16,7 +16,7 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 
 st.set_page_config(page_title="Fertigproduktelager", layout="wide", page_icon="✅")
 
-# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+# CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
     /* Menüeinträge großgeschrieben und fett */
@@ -24,11 +24,22 @@ st.markdown("""
         font-weight: bold !important;
         text-transform: capitalize !important;
     }
+    /* Fixierte Summenzeile - letzte Zeile bleibt beim Scrollen sichtbar */
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
+        position: sticky !important;
+        bottom: 0 !important;
+        background-color: #e0e0e0 !important;
+        z-index: 100 !important;
+    }
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
+        background-color: #e0e0e0 !important;
+        font-weight: bold !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
-render_scenario_sidebar()
+render_scenario_sidebar(key_suffix="_fertigproduktelager")
 
 # Initialisiere Session State
 initialize_session_state()
@@ -55,13 +66,14 @@ def create_finished_goods_log():
     """Erstellt Fertigproduktelager-Log für jedes Produkt"""
     fg_logs = {product: [] for product in MasterData.BOM.keys()}
     
+    # OPTIMIERUNG: Direkte Berechnung statt get_day_info() (schneller)
     for day in range(365):
         current_date = workday_calc.get_date_from_day(day)
-        day_info = workday_calc.get_day_info(day)
-        weekday_name = day_info['weekday_name']
-        is_workday = day_info['is_workday']
-        is_holiday = day_info['is_holiday']
-        is_weekend = day_info['is_weekend']
+        weekday = current_date.weekday()
+        weekday_name = workday_calc.get_weekday_name(day)  # Nur Name, nicht alle Infos
+        is_weekend = weekday >= 5
+        is_workday = workday_calc.is_workday(day)  # Direkter Aufruf
+        is_holiday = not is_workday and not is_weekend  # Berechnet aus is_workday
         
         # Produktion und Versand
         actual_build = results_df.iloc[day]['Actual_Build']
@@ -95,10 +107,10 @@ def create_finished_goods_log():
             fg_logs[product].append({
                 'Wochentag': weekday_abbr,
                 'Datum': current_date.strftime(MasterData.DATE_FORMAT),
-                'Lagerzugang': round(total_receipt, 1),
-                'Bestand (morgens)': round(stock_morning, 1),
-                'Lagerabgang': round(total_dispatch, 1),
-                'Bestand (abends)': round(stock_evening, 1),
+                'Lagerzugang': int(round(total_receipt)),
+                'Bestand (morgens)': int(round(stock_morning)),
+                'Lagerabgang': int(round(total_dispatch)),
+                'Bestand (abends)': int(round(stock_evening)),
                 'Is_Weekend': is_weekend,
                 'Is_Holiday': is_holiday
             })

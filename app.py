@@ -37,7 +37,7 @@ st.title("📊 SCOR Metriken")
 st.markdown("Supply Chain Operations Reference (SCOR) Metriken")
 
 # Szenarien-Sidebar rendern
-render_scenario_sidebar()
+render_scenario_sidebar(key_suffix="_app")
 
 # Simulation ausführen (für manuellen Neustart)
 if st.session_state.get('run_simulation', False):
@@ -80,8 +80,8 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
         """Berechnet Inbound-Metriken für alle Lieferanten"""
         inbound_metrics = {}
         
-        # Lieferanten aus MasterData
-        suppliers = ['Deutschland', 'Spanien', 'China']
+        # Nur China (Deutschland und Spanien entfernt, da wir nur einen Lieferanten haben)
+        suppliers = ['China']
         
         for supplier in suppliers:
             if supplier == 'China':
@@ -147,17 +147,6 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
                     'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': round(avg_late_days, 2) if late_deliveries > 0 else 0.0,
                     'Anzahl von Tagen eines Maschinenausfalls': machine_downtime_days
                 }
-            else:
-                # Deutschland und Spanien: Aktuell keine Implementierung (Rahmen sind unbegrenzt)
-                inbound_metrics[supplier] = {
-                    'Anzahl Lieferungen': 0,
-                    'Anzahl Lieferungen mit Totalausfall': 0,
-                    'Anzahl Lieferungen mit Mengenverlust': 0,
-                    'verspätete Lieferungen': 0,
-                    'Perfekte Lieferungen in %': 100.0,
-                    'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': 0.0,
-                    'Anzahl von Tagen eines Maschinenausfalls': 0
-                }
         
         return inbound_metrics
     
@@ -173,81 +162,15 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     
     st.divider()
     
-    # 2. Perfect Order Fulfillment (Outbound)
-    st.header("Perfect Order Fulfillment (Outbound)")
-    
-    def calculate_outbound_metrics():
-        """Berechnet Outbound-Metriken für alle Märkte"""
-        outbound_metrics = {}
-        
-        # Märkte aus MasterData
-        market_names = {
-            'DE': 'Deutschland',
-            'USA': 'USA',
-            'FR': 'Frankreich',
-            'CN': 'China',
-            'CH': 'Schweiz',
-            'AT': 'Österreich'
-        }
-        
-        backlog = simulator.backlog
-        
-        # Zähle Versendungen pro Markt
-        shipments_by_market = {code: 0 for code in market_names.keys()}
-        
-        # Zähle alle Versendungen aus in_transit
-        for day, market_dict in backlog.in_transit.items():
-            for market_code in market_dict.keys():
-                if market_code in shipments_by_market:
-                    shipments_by_market[market_code] += 1
-        
-        # Fallback: Wenn keine Daten, schätze basierend auf Produktion
-        total_production_days = len(results_df[results_df['Actual_Build'] > 0])
-        
-        for market_code, market_name in market_names.items():
-            total_deliveries = shipments_by_market.get(market_code, 0)
-            
-            # Wenn keine Daten, schätze basierend auf Marktanteil
-            if total_deliveries == 0:
-                market_share = MasterData.MARKETS[market_code]['share']
-                total_deliveries = int(total_production_days * market_share)
-            
-            # Vereinfacht: Keine Fehler im Outbound (aktuell keine Szenarien)
-            total_failures = 0
-            quantity_losses = 0
-            late_deliveries = 0
-            perfect_deliveries_pct = 100.0
-            
-            outbound_metrics[market_name] = {
-                'Anzahl Lieferungen': total_deliveries,
-                'Anzahl Lieferungen mit Totalausfall': total_failures,
-                'Anzahl Lieferungen mit Mengenverlust': quantity_losses,
-                'verspätete Lieferungen': late_deliveries,
-                'Perfekte Lieferungen in %': perfect_deliveries_pct
-            }
-        
-        return outbound_metrics
-    
-    outbound_metrics = calculate_outbound_metrics()
-    outbound_df = pd.DataFrame(outbound_metrics).T
-    # Formatierung: Ganze Zahlen für Zählungen, 2 Dezimalstellen für %
-    for col in outbound_df.columns:
-        if '%' not in col:
-            outbound_df[col] = outbound_df[col].astype(int)
-        else:
-            outbound_df[col] = outbound_df[col].round(2)
-    st.dataframe(outbound_df, width='stretch')
-    
-    st.divider()
-    
-    # 3. Source Cycle Time
+    # 2. Source Cycle Time
     st.header("Source Cycle Time")
     
     def calculate_source_cycle_time():
         """Berechnet Source Cycle Time für alle Lieferanten"""
         source_metrics = {}
         
-        suppliers = ['Deutschland', 'Spanien', 'China']
+        # Nur China (Deutschland und Spanien entfernt, da wir nur einen Lieferanten haben)
+        suppliers = ['China']
         
         for supplier in suppliers:
             if supplier == 'China':
@@ -277,15 +200,6 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
                     'Langsamste Lieferung in Tagen': slowest,
                     'Durchschnittliche Lieferzeit in Tagen': round(avg, 2)
                 }
-            else:
-                # Deutschland und Spanien
-                lead_time = MasterData.SUPPLIERS[supplier]['lead_time']
-                source_metrics[supplier] = {
-                    'Vorlaufzeit in Tagen': lead_time,
-                    'Schnellste Lieferung in Tagen': lead_time,
-                    'Langsamste Lieferung in Tagen': lead_time,
-                    'Durchschnittliche Lieferzeit in Tagen': lead_time
-                }
         
         return source_metrics
     
@@ -301,117 +215,118 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     
     st.divider()
     
-    # 4. Delivery Cycle Time
-    st.header("Delivery Cycle Time")
+    # 3. Produktionsmetriken
+    st.header("Produktionsmetriken")
     
-    def calculate_delivery_cycle_time():
-        """Berechnet Delivery Cycle Time für alle Märkte"""
-        delivery_metrics = {}
+    def calculate_production_metrics():
+        """Berechnet Produktionsmetriken"""
+        # Hole Produktionslogs
+        planner = simulator.production_planner
+        if not hasattr(planner, 'production_logs') or not planner.production_logs:
+            return {}
         
-        market_names = {
-            'DE': 'Deutschland',
-            'USA': 'USA',
-            'FR': 'Frankreich',
-            'CN': 'China',
-            'CH': 'Schweiz',
-            'AT': 'Österreich'
+        production_logs = planner.production_logs
+        
+        # Berechne Gesamtmetriken
+        total_produced = 0.0
+        total_planned = 0.0
+        total_demand = 0.0
+        total_backlog_end = 0.0
+        days_with_production = 0
+        days_stopped_materials = 0
+        utilization_sum = 0.0
+        utilization_count = 0
+        
+        # OPTIMIERUNG: Nutze bereits berechnete Nachfrage aus Session State (nicht neu berechnen!)
+        daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+        # Falls nicht vorhanden, verwende leeres Dict (verhindert Neuberechnung)
+        if not daily_demands_actual:
+            daily_demands_actual = {}
+        
+        for day in range(365):
+            day_total_produced = 0.0
+            day_total_planned = 0.0
+            day_total_demand = 0.0
+            day_utilization = 0.0
+            day_materials_complete = True
+            
+            # Summiere über alle Produkte
+            for product, logs in production_logs.items():
+                if logs and day < len(logs):
+                    log_entry = logs[day]
+                    day_total_produced += log_entry.get('tatsächliche PM', 0.0)
+                    day_total_planned += log_entry.get('geplante PM', 0.0)
+                    
+                    # Auslastung (nur wenn geplante PM > 0)
+                    if log_entry.get('geplante PM', 0) > 0:
+                        util = log_entry.get('Auslastung (%)', 0.0)
+                        if isinstance(util, (int, float)) and util > 0:
+                            day_utilization = max(day_utilization, util)
+                    
+                    # Materialien vollständig?
+                    if log_entry.get('Materialien vollständig?', 'Ja') != 'Ja':
+                        day_materials_complete = False
+            
+            # Nachfrage für diesen Tag
+            day_demand = daily_demands_actual.get(day, {})
+            day_total_demand = sum(day_demand.values()) if isinstance(day_demand, dict) else 0.0
+            
+            total_produced += day_total_produced
+            total_planned += day_total_planned
+            total_demand += day_total_demand
+            
+            if day_total_produced > 0:
+                days_with_production += 1
+            
+            if not day_materials_complete:
+                days_stopped_materials += 1
+            
+            if day_utilization > 0:
+                utilization_sum += day_utilization
+                utilization_count += 1
+        
+        # Backlog am Ende (letzter Tag)
+        for product, logs in production_logs.items():
+            if logs and len(logs) > 0:
+                last_log = logs[-1]
+                total_backlog_end += last_log.get('Backlog', 0.0)
+        
+        # Berechne Durchschnitte
+        avg_utilization = (utilization_sum / utilization_count) if utilization_count > 0 else 0.0
+        avg_daily_production = (total_produced / days_with_production) if days_with_production > 0 else 0.0
+        
+        # Service Level
+        service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
+        
+        # Planabweichung
+        plan_deviation_pct = ((total_produced - total_planned) / total_planned * 100) if total_planned > 0 else 0.0
+        
+        return {
+            'Gesamtproduktion': int(round(total_produced)),
+            'Geplante Produktion': int(round(total_planned)),
+            'Gesamtnachfrage': int(round(total_demand)),
+            'Service Level (%)': round(service_level, 2),
+            'Planabweichung (%)': round(plan_deviation_pct, 2),
+            'Durchschnittliche Auslastung (%)': round(avg_utilization, 2),
+            'Durchschnittliche Tagesproduktion': int(round(avg_daily_production)),
+            'Produktionstage': days_with_production,
+            'Tage mit Materialmangel': days_stopped_materials,
+            'Backlog am Jahresende': int(round(total_backlog_end))
         }
-        
-        backlog = simulator.backlog
-        
-        for market_code, market_name in market_names.items():
-            transit_days = MasterData.MARKETS[market_code]['transit_days']
-            
-            # Analysiere tatsächliche Transit-Zeiten aus in_transit
-            delivery_times = []
-            for day, market_dict in backlog.in_transit.items():
-                if market_code in market_dict:
-                    # Transit-Zeit ist die Differenz zwischen Versand-Tag und Ankunft-Tag
-                    arrival_day = day
-                    # Versand-Tag müsste aus results_df kommen (wenn produziert wurde)
-                    # Vereinfacht: Nutze transit_days
-                    delivery_times.append(transit_days)
-            
-            if not delivery_times:
-                # Fallback: Nutze Standard-Transit-Zeit
-                delivery_times = [transit_days]
-            
-            fastest = min(delivery_times)
-            slowest = max(delivery_times)
-            avg = sum(delivery_times) / len(delivery_times)
-            
-            delivery_metrics[market_name] = {
-                'Schnellste Lieferung in Tagen': fastest,
-                'Langsamste Lieferung in Tagen': slowest,
-                'Durchschnittliche Lieferzeit in Tagen': round(avg, 2)
-            }
-        
-        return delivery_metrics
     
-    delivery_metrics = calculate_delivery_cycle_time()
-    delivery_df = pd.DataFrame(delivery_metrics).T
-    # Formatierung: Ganze Zahlen für Tage, 2 Dezimalstellen für Durchschnitt
-    for col in delivery_df.columns:
-        if 'durchschnittliche' in col.lower():
-            delivery_df[col] = delivery_df[col].round(2)
-        else:
-            delivery_df[col] = delivery_df[col].astype(int)
-    st.dataframe(delivery_df, width='stretch')
-    
-    st.divider()
-    
-    # 5. Order Fulfillment Cycle Time
-    st.header("Order Fulfillment Cycle Time")
-    st.markdown("Die gesamte Zeit von dem Zeitpunkt der Bestellung der Einzelteile bis hin zum Erreichen des Kunden im Zielland")
-    
-    def calculate_order_fulfillment_cycle_time():
-        """Berechnet Order Fulfillment Cycle Time (Source + Delivery)"""
-        fulfillment_metrics = {}
-        
-        market_names = {
-            'DE': 'Deutschland',
-            'USA': 'USA',
-            'FR': 'Frankreich',
-            'CN': 'China',
-            'CH': 'Schweiz',
-            'AT': 'Österreich'
-        }
-        
-        # Kombiniere Source Cycle Time (China) + Delivery Cycle Time
-        china_source_avg = source_metrics.get('China', {}).get('Durchschnittliche Lieferzeit in Tagen', 49)
-        
-        for market_code, market_name in market_names.items():
-            delivery_avg = delivery_metrics.get(market_name, {}).get('Durchschnittliche Lieferzeit in Tagen', MasterData.MARKETS[market_code]['transit_days'])
-            
-            # Order Fulfillment = Source (China) + Delivery
-            total_avg = china_source_avg + delivery_avg
-            
-            # Min/Max schätzen
-            china_fastest = source_metrics.get('China', {}).get('Schnellste Lieferung in Tagen', 49)
-            china_slowest = source_metrics.get('China', {}).get('Langsamste Lieferung in Tagen', 49)
-            delivery_fastest = delivery_metrics.get(market_name, {}).get('Schnellste Lieferung in Tagen', MasterData.MARKETS[market_code]['transit_days'])
-            delivery_slowest = delivery_metrics.get(market_name, {}).get('Langsamste Lieferung in Tagen', MasterData.MARKETS[market_code]['transit_days'])
-            
-            fastest = china_fastest + delivery_fastest
-            slowest = china_slowest + delivery_slowest
-            
-            fulfillment_metrics[market_name] = {
-                'Schnellste Lieferung in Tagen': fastest,
-                'Langsamste Lieferung in Tagen': slowest,
-                'Durchschnittliche Lieferzeit in Tagen': round(total_avg, 2)
-            }
-        
-        return fulfillment_metrics
-    
-    fulfillment_metrics = calculate_order_fulfillment_cycle_time()
-    fulfillment_df = pd.DataFrame(fulfillment_metrics).T
-    # Formatierung: Ganze Zahlen für Tage, 2 Dezimalstellen für Durchschnitt
-    for col in fulfillment_df.columns:
-        if 'durchschnittliche' in col.lower():
-            fulfillment_df[col] = fulfillment_df[col].round(2)
-        else:
-            fulfillment_df[col] = fulfillment_df[col].astype(int)
-    st.dataframe(fulfillment_df, width='stretch')
+    production_metrics = calculate_production_metrics()
+    if production_metrics:
+        # Erstelle DataFrame (eine Zeile)
+        production_df = pd.DataFrame([production_metrics])
+        # Formatierung: Ganze Zahlen für Zählungen, 2 Dezimalstellen für %
+        for col in production_df.columns:
+            if '%' in col or 'Auslastung' in col:
+                production_df[col] = production_df[col].round(2)
+            else:
+                production_df[col] = production_df[col].astype(int)
+        st.dataframe(production_df, width='stretch', hide_index=True)
+    else:
+        st.info("Keine Produktionsmetriken verfügbar.")
 
 else:
     st.info("🔄 Die Simulation wird automatisch gestartet...")

@@ -6,7 +6,7 @@ Wöchentliche und tägliche Volumenplanung
 import math
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+# import plotly.graph_objects as go  # Entfernt: Visualisierungen gehören in Reporting
 from datetime import date, timedelta
 from config.master_data import MasterData
 from config.holidays_config import HolidaysConfig
@@ -17,13 +17,24 @@ from ui.scenario_sidebar import render_scenario_sidebar
 
 st.set_page_config(page_title="Volumenplanung", layout="wide", page_icon="📅")
 
-# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+# CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
     /* Menüeinträge großgeschrieben und fett */
     [data-testid="stSidebarNav"] a {
         font-weight: bold !important;
         text-transform: capitalize !important;
+    }
+    /* Fixierte Summenzeile - letzte Zeile bleibt beim Scrollen sichtbar */
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
+        position: sticky !important;
+        bottom: 0 !important;
+        background-color: #e0e0e0 !important;
+        z-index: 100 !important;
+    }
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
+        background-color: #e0e0e0 !important;
+        font-weight: bold !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -36,7 +47,7 @@ st.title("📅 Volumenplanung")
 st.markdown("Wöchentliche und tägliche Volumenplanung basierend auf Saisonalität")
 
 # Szenarien-Sidebar rendern
-render_scenario_sidebar()
+render_scenario_sidebar(key_suffix="_volumenplanung")
 
 # Berechne Planung basierend auf jährlichem Volumen
 yearly_volume = st.session_state.get('yearly_volume', 370000)
@@ -367,100 +378,8 @@ with tab1:
     
     styled_weekly_df = display_weekly_df_with_sum.style.apply(style_weekly_row, axis=1)
     
-    # Zeige Tabelle
-    st.dataframe(styled_weekly_df, width='stretch', hide_index=True)
-    
-    # Visualisierung der Schichten
-    st.subheader("Schichten-Visualisierung")
-    fig_shifts = go.Figure()
-    
-    fig_shifts.add_trace(go.Bar(
-        x=weekly_df['Kalenderwoche'],
-        y=weekly_df['Schichten'],
-        name='Schichten',
-        marker_color='#1f77b4',
-        text=weekly_df['Schichten'],
-        textposition='auto'
-    ))
-    
-    fig_shifts.update_layout(
-        xaxis_title="Kalenderwoche",
-        yaxis_title="Anzahl Schichten",
-        height=300,
-        yaxis=dict(range=[0, 4], tickmode='linear', tick0=0, dtick=1)
-    )
-    st.plotly_chart(fig_shifts, width='stretch')
-    
-    # Vergleich aller Fahrräder über die Kalenderwochen
-    st.subheader("Fahrrad-Vergleich über Kalenderwochen")
-    fig_products = go.Figure()
-    
-    # Farben für die verschiedenen Produkte
-    product_colors = {
-        'MTB Allrounder': '#1f77b4',
-        'MTB Competition': '#ff7f0e',
-        'MTB Downhill': '#2ca02c',
-        'MTB Extreme': '#d62728',
-        'MTB Freeride': '#9467bd',
-        'MTB Marathon': '#8c564b',
-        'MTB Performance': '#e377c2',
-        'MTB Trail': '#7f7f7f'
-    }
-    
-    # Füge für jedes Produkt eine Linie hinzu (tatsächlicher Bedarf)
-    for product in MasterData.BOM.keys():
-        fig_products.add_trace(go.Scatter(
-            x=weekly_df['Kalenderwoche'],
-            y=weekly_df[f'{product}_tatsächlich'],
-            name=product,
-            mode='lines+markers',
-            line=dict(color=product_colors.get(product, '#1f77b4'), width=2),
-            marker=dict(size=4)
-        ))
-    
-    fig_products.update_layout(
-        xaxis_title="Kalenderwoche",
-        yaxis_title="Nachfrage (Einheiten)",
-        height=400,
-        hovermode='x unified',
-        legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=1,
-            xanchor="left",
-            x=1.02
-        )
-    )
-    st.plotly_chart(fig_products, width='stretch')
-    
-    # Zusätzlich: Stacked Bar Chart für besseren Vergleich
-    st.subheader("Fahrrad-Vergleich (Gestapelt)")
-    fig_stacked = go.Figure()
-    
-    # Erstelle gestapeltes Balkendiagramm (tatsächlicher Bedarf)
-    for product in MasterData.BOM.keys():
-        fig_stacked.add_trace(go.Bar(
-            x=weekly_df['Kalenderwoche'],
-            y=weekly_df[f'{product}_tatsächlich'],
-            name=product,
-            marker_color=product_colors.get(product, '#1f77b4')
-        ))
-    
-    fig_stacked.update_layout(
-        xaxis_title="Kalenderwoche",
-        yaxis_title="Nachfrage (Einheiten)",
-        height=400,
-        barmode='stack',
-        hovermode='x unified',
-        legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=1,
-            xanchor="left",
-            x=1.02
-        )
-    )
-    st.plotly_chart(fig_stacked, width='stretch')
+    # Zeige Tabelle (verlängert für bessere Übersicht)
+    st.dataframe(styled_weekly_df, width='stretch', hide_index=True, height=800)
 
 with tab2:
     st.header("Tägliche Volumenplanung")
@@ -510,14 +429,22 @@ with tab2:
     daily_data = []
     start_date = date(planning_year, 1, 1)
     
+    # OPTIMIERUNG: Cache Feiertage für das Jahr (nur einmal laden)
+    if 'german_holidays_cache' not in st.session_state or st.session_state.get('holidays_cache_year') != planning_year:
+        german_holidays = HolidaysConfig.get_holidays_for_year(planning_year, 'DE')
+        st.session_state.german_holidays_cache = set(german_holidays.keys()) if german_holidays else set()
+        st.session_state.holidays_cache_year = planning_year
+    else:
+        german_holidays = st.session_state.german_holidays_cache
+    
     # WICHTIG: Nutze die bereits sequenziell berechneten Nachfragen (für korrekte Carry-Over-Logik)
     for day in range(start_day, min(end_day + 1, 365)):
         current_date = start_date + timedelta(days=day)
         week_num = get_week_number(current_date)
         
-        # Prüfe ob Feiertag oder Wochenende
+        # OPTIMIERUNG: Prüfe ob Feiertag oder Wochenende (mit Cache)
         is_workday = workday_calc.is_workday(day)
-        is_holiday = HolidaysConfig.is_holiday(current_date, 'DE')
+        is_holiday = current_date in german_holidays  # Direkter Set-Lookup statt Funktionsaufruf
         is_weekend = current_date.weekday() >= 5  # Samstag=5, Sonntag=6
         is_non_workday = not is_workday or is_holiday or is_weekend
         
@@ -635,52 +562,8 @@ with tab2:
             return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
     
     styled_df = display_df_with_sum.style.apply(style_row_with_sum, axis=1)
-    st.dataframe(styled_df, width='stretch', hide_index=True)
-    
-    # Visualisierung: Gestapeltes Balkendiagramm (tatsächlicher Bedarf)
-    st.subheader("Tägliche Entwicklung (Tatsächlicher Bedarf)")
-    
-    # Farben für die verschiedenen Produkte (gleiche wie in wöchentlicher Planung)
-    product_colors = {
-        'MTB Allrounder': '#1f77b4',
-        'MTB Competition': '#ff7f0e',
-        'MTB Downhill': '#2ca02c',
-        'MTB Extreme': '#d62728',
-        'MTB Freeride': '#9467bd',
-        'MTB Marathon': '#8c564b',
-        'MTB Performance': '#e377c2',
-        'MTB Trail': '#7f7f7f'
-    }
-    
-    fig_daily = go.Figure()
-    
-    # Konvertiere Datum-Strings zu Datetime für x-Achse
-    x_axis = pd.to_datetime(daily_df['Datum'], format='%d.%m.%Y')
-    
-    # Füge für jedes Produkt einen gestapelten Balken hinzu (tatsächlicher Bedarf)
-    for product in MasterData.BOM.keys():
-        fig_daily.add_trace(go.Bar(
-            x=x_axis,
-            y=daily_df[f'{product}_tatsächlich'],
-            name=product,
-            marker_color=product_colors.get(product, '#1f77b4')
-        ))
-    
-    fig_daily.update_layout(
-        xaxis_title="Datum",
-        yaxis_title="Volumen (Einheiten)",
-        height=400,
-        barmode='stack',  # Gestapeltes Balkendiagramm
-        hovermode='x unified',
-        legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=1,
-            xanchor="left",
-            x=1.02
-        )
-    )
-    st.plotly_chart(fig_daily, width='stretch')
+    # Zeige Tabelle (verlängert für bessere Übersicht)
+    st.dataframe(styled_df, width='stretch', hide_index=True, height=800)
     
     # Statistiken
     st.subheader("Statistiken")

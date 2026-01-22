@@ -16,7 +16,7 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 
 st.set_page_config(page_title="Produktion", layout="wide", page_icon="🏭")
 
-# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+# CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
     /* Menüeinträge großgeschrieben und fett */
@@ -24,11 +24,22 @@ st.markdown("""
         font-weight: bold !important;
         text-transform: capitalize !important;
     }
+    /* Fixierte Summenzeile - letzte Zeile bleibt beim Scrollen sichtbar */
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
+        position: sticky !important;
+        bottom: 0 !important;
+        background-color: #e0e0e0 !important;
+        z-index: 100 !important;
+    }
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
+        background-color: #e0e0e0 !important;
+        font-weight: bold !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
-render_scenario_sidebar()
+render_scenario_sidebar(key_suffix="_produktion")
 
 # Initialisiere Session State
 initialize_session_state()
@@ -45,10 +56,10 @@ if st.session_state.results_df is None:
 
 results_df = st.session_state.results_df
 
-# Zeitraum
+# Zeitraum (erweitert um erste Tage von 2028)
 planning_year = st.session_state.get('planning_year', 2027)
 start_date = date(planning_year, 1, 1)
-end_date = date(planning_year, 12, 31)
+end_date = date(planning_year + 1, 1, 10)  # Erweitert bis 10.01.2028
 workday_calc = WorkdayCalculator(year=planning_year)
 
 # NEU: Lese Produktionslogs direkt aus dem ProductionPlanner
@@ -92,7 +103,7 @@ for product in sorted(production_logs.keys()):
         st.info(f"Keine Daten für {product} verfügbar.")
         continue
     
-    # Filtere auf den Standard-Zeitraum (2027)
+    # Filtere auf den Zeitraum (2027 + erste Tage 2028)
     df_prod_filtered = df_prod[
         (pd.to_datetime(df_prod['Datum'], format='%d.%m.%Y') >= pd.to_datetime(start_date)) &
         (pd.to_datetime(df_prod['Datum'], format='%d.%m.%Y') <= pd.to_datetime(end_date))

@@ -27,8 +27,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Szenarien-Sidebar rendern
-render_scenario_sidebar()
+# Szenarien-Sidebar rendern (mit eindeutigem Key-Suffix)
+render_scenario_sidebar(key_suffix="_reporting")
 
 # Initialisiere Session State
 initialize_session_state()
@@ -55,11 +55,17 @@ st.header("📦 Lager")
 # Berechne Sattel-Bestände (aus Materiallager-Logik)
 def get_saddle_inventory_data():
     """Holt Sattel-Bestandsdaten aus dem Materiallager"""
-    # Prüfe zuerst, ob die Daten bereits berechnet wurden
-    if 'material_inventory_data' in st.session_state:
+    # OPTIMIERUNG: Prüfe zuerst, ob die Daten bereits berechnet wurden
+    if 'material_inventory_data' in st.session_state and st.session_state.material_inventory_data:
         return st.session_state.material_inventory_data
     
-    # Wenn nicht vorhanden, berechne sie jetzt
+    # Wenn nicht vorhanden, versuche aus Cache zu laden (von Materiallager-Seite)
+    if 'saddle_logs_cache' in st.session_state:
+        # Materiallager wurde bereits berechnet, aber material_inventory_data fehlt
+        # Das sollte nicht passieren, aber als Fallback:
+        return {}
+    
+    # Wenn nicht vorhanden, berechne sie jetzt (nur wenn wirklich nötig)
     if 'simulator' in st.session_state and st.session_state.simulator:
         # Importiere die Funktion direkt (Dateiname ist 5_materiallager.py)
         import importlib.util
@@ -68,15 +74,18 @@ def get_saddle_inventory_data():
         try:
             # Lade Modul über Dateipfad (wegen Zahl im Namen)
             module_path = os.path.join(os.path.dirname(__file__), "5_materiallager.py")
-            spec = importlib.util.spec_from_file_location("materiallager_module", module_path)
+            spec = importlib.util.spec_from_file_location("materiallager_module_reporting", module_path)
             if spec and spec.loader:
                 materiallager_module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(materiallager_module)
-                materiallager_module.create_saddle_inventory_log()
+                # OPTIMIERUNG: Nur berechnen wenn nicht bereits gecacht
+                if 'material_inventory_data' not in st.session_state:
+                    materiallager_module.create_saddle_inventory_log()
                 if 'material_inventory_data' in st.session_state:
                     return st.session_state.material_inventory_data
         except Exception as e:
-            st.warning(f"Konnte Materiallager-Daten nicht laden: {e}")
+            # Stille Fehlerbehandlung - Daten werden später geladen
+            pass
     
     return {}
 
@@ -162,7 +171,7 @@ if saddle_inventory_data:
         hovermode='x unified',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    st.plotly_chart(fig_saddles, width='stretch')
+    st.plotly_chart(fig_saddles, width='stretch', key='chart_saddles')
 else:
     st.info("Keine Sattel-Bestandsdaten verfügbar.")
 
@@ -206,7 +215,7 @@ if bicycle_inventory_data:
         hovermode='x unified',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    st.plotly_chart(fig_bicycles, width='stretch')
+    st.plotly_chart(fig_bicycles, width='stretch', key='chart_bicycles')
 else:
     st.info("Keine Fahrrad-Bestandsdaten verfügbar.")
 
@@ -240,17 +249,22 @@ if not production_logs:
 st.subheader("Gesamtübersicht")
 
 # Berechne Gesamt-Backlog und Gesamt-Über-/Unterproduktion
+# OPTIMIERUNG: Cache für Datum-Berechnungen
 total_backlog_data = []
 total_deviation_data = []
 
+# OPTIMIERUNG: Berechne alle Daten auf einmal (nur einmal get_date_from_day pro Tag)
+date_cache = {day: workday_calc.get_date_from_day(day) for day in range(365)}
+
 for day in range(365):
-    current_date = workday_calc.get_date_from_day(day)
+    current_date = date_cache[day]
     
     # Gesamt-Backlog (Summe aller Produkte)
     total_backlog = 0.0
     total_planned = 0.0
     total_actual = 0.0
     
+    # OPTIMIERUNG: Direkter Zugriff statt get() wenn möglich
     for product, logs in production_logs.items():
         if logs and day < len(logs):
             log_entry = logs[day]
@@ -286,7 +300,7 @@ with col1:
         height=350,
         hovermode='x unified'
     )
-    st.plotly_chart(fig_total_backlog, width='stretch')
+    st.plotly_chart(fig_total_backlog, width='stretch', key='chart_total_backlog')
 
 with col2:
     st.write("**Über-/Unterproduktion**")
@@ -309,7 +323,7 @@ with col2:
         hovermode='x unified',
         showlegend=False
     )
-    st.plotly_chart(fig_total_deviation, width='stretch')
+    st.plotly_chart(fig_total_deviation, width='stretch', key='chart_total_deviation')
 
 st.divider()
 
@@ -326,8 +340,12 @@ for product in sorted(production_logs.keys()):
     backlog_data = []
     deviation_data = []
     
-    for day in range(min(365, len(production_logs[product]))):
-        current_date = workday_calc.get_date_from_day(day)
+    # OPTIMIERUNG: Cache für Datum-Berechnungen
+    max_day = min(365, len(production_logs[product]))
+    date_cache = {day: workday_calc.get_date_from_day(day) for day in range(max_day)}
+    
+    for day in range(max_day):
+        current_date = date_cache[day]
         log_entry = production_logs[product][day]
         
         backlog_data.append({
@@ -359,7 +377,7 @@ for product in sorted(production_logs.keys()):
             height=350,
             hovermode='x unified'
         )
-        st.plotly_chart(fig_product_backlog, width='stretch')
+        st.plotly_chart(fig_product_backlog, width='stretch', key=f'chart_product_backlog_{product}')
     
     with col2:
         fig_product_deviation = go.Figure()
@@ -381,6 +399,234 @@ for product in sorted(production_logs.keys()):
             hovermode='x unified',
             showlegend=False
         )
-        st.plotly_chart(fig_product_deviation, width='stretch')
+        st.plotly_chart(fig_product_deviation, width='stretch', key=f'chart_product_deviation_{product}')
+    
+    st.divider()
+    
+    # ============================================================================
+    # VOLUMENPLANUNG
+    # ============================================================================
+    st.header("📅 Volumenplanung")
+    
+    # Lade Volumenplanungsdaten
+    from ui.volume_planning_utils import calculate_volume_planning_demand
+    from datetime import timedelta
+    import math
+    
+    # Berechne Daten falls nicht vorhanden
+    if not st.session_state.get('volume_planning_calculated', False):
+        calculate_volume_planning_demand()
+    
+    daily_demands_planned = st.session_state.get('daily_demands_planned', {})
+    daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+    
+    if daily_demands_planned and daily_demands_actual:
+        # Wöchentliche Planung
+        st.subheader("Wöchentliche Volumenplanung")
+        
+        # Berechne wöchentliche Daten
+        start_date = date(planning_year, 1, 1)
+        end_date = date(planning_year, 12, 31)
+        
+        # Berechne letzte KW
+        last_week = 52
+        if end_date.isocalendar()[1] > 52:
+            last_week = end_date.isocalendar()[1]
+        
+        weekly_data = []
+        
+        for week_num in range(1, last_week + 1):
+            jan_1 = date(planning_year, 1, 1)
+            jan_1_weekday = jan_1.weekday()
+            
+            # KW 1 beginnt am 01.01. (oder nächster Montag)
+            if week_num == 1:
+                if jan_1_weekday == 0:
+                    week_start = jan_1
+                else:
+                    days_to_monday = (7 - jan_1_weekday) % 7
+                    if days_to_monday == 0:
+                        days_to_monday = 7
+                    week_start = jan_1 + timedelta(days=days_to_monday)
+            else:
+                if jan_1_weekday <= 3:
+                    first_monday = jan_1 - timedelta(days=jan_1_weekday)
+                else:
+                    first_monday = jan_1 + timedelta(days=7 - jan_1_weekday)
+                week_start = first_monday + timedelta(weeks=week_num - 1)
+            
+            week_demand_actual = {product: 0.0 for product in MasterData.BOM.keys()}
+            daily_demands_for_shifts = []
+            
+            for day_offset in range(7):
+                current_date = week_start + timedelta(days=day_offset)
+                if current_date.year == planning_year:
+                    day_of_year = (current_date - start_date).days
+                    if 0 <= day_of_year < 365:
+                        day_actual = daily_demands_actual.get(day_of_year, {})
+                        for product in MasterData.BOM.keys():
+                            week_demand_actual[product] += day_actual.get(product, 0)
+                        
+                        if workday_calc.is_workday(day_of_year):
+                            total_day = sum(day_actual.get(p, 0) for p in MasterData.BOM.keys())
+                            daily_demands_for_shifts.append(total_day)
+            
+            # Berechne Schichten
+            HOURS_PER_SHIFT = 8
+            CAPACITY_PER_HOUR = MasterData.GLOBAL_CONFIG['capacity_per_hour']
+            CAPACITY_PER_SHIFT = HOURS_PER_SHIFT * CAPACITY_PER_HOUR
+            
+            total_week_demand = sum(week_demand_actual.values())
+            if total_week_demand > 0 and daily_demands_for_shifts:
+                required_shifts_float = max(daily_demands_for_shifts) / CAPACITY_PER_SHIFT
+                required_shifts_int = math.ceil(required_shifts_float)
+                shifts = max(1, min(3, required_shifts_int))
+            else:
+                shifts = 0
+            
+            weekly_data.append({
+                'Kalenderwoche': week_num,
+                'Schichten': shifts,
+                **{f'{product}_tatsächlich': week_demand_actual[product] for product in MasterData.BOM.keys()}
+            })
+        
+        weekly_df = pd.DataFrame(weekly_data)
+        
+        # Visualisierung der Schichten
+        st.write("**Schichten-Visualisierung**")
+        fig_shifts = go.Figure()
+        fig_shifts.add_trace(go.Bar(
+            x=weekly_df['Kalenderwoche'],
+            y=weekly_df['Schichten'],
+            name='Schichten',
+            marker_color='#1f77b4',
+            text=weekly_df['Schichten'],
+            textposition='auto'
+        ))
+        fig_shifts.update_layout(
+            xaxis_title="Kalenderwoche",
+            yaxis_title="Anzahl Schichten",
+            height=300,
+            yaxis=dict(range=[0, 4], tickmode='linear', tick0=0, dtick=1)
+        )
+        st.plotly_chart(fig_shifts, width='stretch', key='chart_shifts')
+        
+        # Fahrrad-Vergleich über Kalenderwochen
+        st.write("**Fahrrad-Vergleich über Kalenderwochen**")
+        fig_products = go.Figure()
+        
+        product_colors = {
+            'MTB Allrounder': '#1f77b4',
+            'MTB Competition': '#ff7f0e',
+            'MTB Downhill': '#2ca02c',
+            'MTB Extreme': '#d62728',
+            'MTB Freeride': '#9467bd',
+            'MTB Marathon': '#8c564b',
+            'MTB Performance': '#e377c2',
+            'MTB Trail': '#7f7f7f'
+        }
+        
+        for product in MasterData.BOM.keys():
+            fig_products.add_trace(go.Scatter(
+                x=weekly_df['Kalenderwoche'],
+                y=weekly_df[f'{product}_tatsächlich'],
+                name=product,
+                mode='lines+markers',
+                line=dict(color=product_colors.get(product, '#1f77b4'), width=2),
+                marker=dict(size=4)
+            ))
+        
+        fig_products.update_layout(
+            xaxis_title="Kalenderwoche",
+            yaxis_title="Nachfrage (Einheiten)",
+            height=400,
+            hovermode='x unified',
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1,
+                xanchor="left",
+                x=1.02
+            )
+        )
+        st.plotly_chart(fig_products, width='stretch', key='chart_products')
+        
+        # Fahrrad-Vergleich (Gestapelt)
+        st.write("**Fahrrad-Vergleich (Gestapelt)**")
+        fig_stacked = go.Figure()
+        
+        for product in MasterData.BOM.keys():
+            fig_stacked.add_trace(go.Bar(
+                x=weekly_df['Kalenderwoche'],
+                y=weekly_df[f'{product}_tatsächlich'],
+                name=product,
+                marker_color=product_colors.get(product, '#1f77b4')
+            ))
+        
+        fig_stacked.update_layout(
+            xaxis_title="Kalenderwoche",
+            yaxis_title="Nachfrage (Einheiten)",
+            height=400,
+            barmode='stack',
+            hovermode='x unified',
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1,
+                xanchor="left",
+                x=1.02
+            )
+        )
+        st.plotly_chart(fig_stacked, width='stretch', key='chart_stacked')
+        
+        # Tägliche Planung
+        st.subheader("Tägliche Volumenplanung")
+        
+        # Berechne tägliche Daten
+        # OPTIMIERUNG: Cache für Datum-Berechnungen
+        date_cache = {day: workday_calc.get_date_from_day(day) for day in range(365)}
+        
+        daily_data = []
+        for day in range(365):
+            current_date = date_cache[day]
+            day_actual = daily_demands_actual.get(day, {})
+            
+            daily_row = {
+                'Datum': current_date,
+                **{f'{product}_tatsächlich': day_actual.get(product, 0) for product in MasterData.BOM.keys()}
+            }
+            daily_data.append(daily_row)
+        
+        daily_df = pd.DataFrame(daily_data)
+        
+        # Tägliche Entwicklung (Gestapeltes Balkendiagramm)
+        st.write("**Tägliche Entwicklung (Tatsächlicher Bedarf)**")
+        fig_daily = go.Figure()
+        
+        x_axis = pd.to_datetime(daily_df['Datum'])
+        
+        for product in MasterData.BOM.keys():
+            fig_daily.add_trace(go.Bar(
+                x=x_axis,
+                y=daily_df[f'{product}_tatsächlich'],
+                name=product,
+                marker_color=product_colors.get(product, '#1f77b4')
+            ))
+        
+        fig_daily.update_layout(
+            xaxis_title="Datum",
+            yaxis_title="Volumen (Einheiten)",
+            height=400,
+            barmode='stack',
+            hovermode='x unified',
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1,
+                xanchor="left",
+                x=1.02
+            )
+        )
+        st.plotly_chart(fig_daily, width='stretch', key='chart_daily')
     
     st.divider()
