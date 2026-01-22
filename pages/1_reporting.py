@@ -48,11 +48,66 @@ planning_year = st.session_state.get('planning_year', 2027)
 workday_calc = WorkdayCalculator(year=planning_year)
 
 # ============================================================================
-# LAGER
+# KPI-DASHBOARD PRODUKTION
 # ============================================================================
-st.header("📦 Lager")
+st.header("🏭 KPI-Dashboard Produktion")
 
-# Berechne Sattel-Bestände (aus Materiallager-Logik)
+# Hole KPIs aus Session State
+kpis = st.session_state.get('kpis', {})
+service_level = kpis.get('service_level', 0.0)
+total_demand = kpis.get('total_demand', 0.0)
+total_produced = kpis.get('total_produced', 0.0)
+
+# Falls KPIs nicht vorhanden, berechne sie aus results_df
+if not kpis or service_level == 0.0:
+    total_demand = results_df['Daily_Target'].sum() if 'Daily_Target' in results_df.columns else 0.0
+    total_produced = results_df['Actual_Build'].sum() if 'Actual_Build' in results_df.columns else 0.0
+    service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
+
+# Farblogik für Service Level
+if service_level >= 95.0:
+    service_level_color = "normal"  # Grün (Streamlit default)
+    service_level_delta = f"✅ Gut"
+elif service_level >= 90.0:
+    service_level_color = "normal"  # Gelb (könnte mit CSS angepasst werden)
+    service_level_delta = f"⚠️ Akzeptabel"
+else:
+    service_level_color = "inverse"  # Rot
+    service_level_delta = f"❌ Kritisch"
+
+# KPI-Kacheln
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        label="Service Level",
+        value=f"{service_level:.2f}%",
+        delta=service_level_delta,
+        delta_color=service_level_color
+    )
+
+with col2:
+    st.metric(
+        label="Gesamtnachfrage",
+        value=f"{int(round(total_demand)):,}".replace(",", "."),
+        help="Summe aller Nachfragen im Zeitraum"
+    )
+
+with col3:
+    st.metric(
+        label="Gesamtproduktion",
+        value=f"{int(round(total_produced)):,}".replace(",", "."),
+        help="Summe aller produzierten Einheiten im Zeitraum"
+    )
+
+st.divider()
+
+# ============================================================================
+# KPI-DASHBOARD MATERIALLAGER
+# ============================================================================
+st.header("📦 KPI-Dashboard Materiallager")
+
+# Berechne Sattel-Bestände (aus Materiallager-Logik) - Funktion muss vor Verwendung definiert sein
 def get_saddle_inventory_data():
     """Holt Sattel-Bestandsdaten aus dem Materiallager"""
     # OPTIMIERUNG: Prüfe zuerst, ob die Daten bereits berechnet wurden
@@ -88,6 +143,187 @@ def get_saddle_inventory_data():
             pass
     
     return {}
+
+# Hole Materiallager-Daten
+saddle_inventory_data = get_saddle_inventory_data()
+
+if saddle_inventory_data:
+    # Berechne KPIs für jedes Material (Satteltyp)
+    saddle_types = sorted(set(saddle for date_data in saddle_inventory_data.values() for saddle in date_data.keys()))
+    
+    # Filtere auf das Planungsjahr (nur 2027, nicht Vorjahr)
+    planning_year_dates = {d: data for d, data in saddle_inventory_data.items() if d.year == planning_year}
+    
+    if planning_year_dates:
+        # Berechne KPIs pro Satteltyp
+        kpi_data_by_saddle = {}
+        total_days = len(planning_year_dates)
+        
+        for saddle_type in saddle_types:
+            stocks = []
+            days_with_zero = 0
+            consumption_per_day = []
+            previous_stock = None
+            
+            for date_key in sorted(planning_year_dates.keys()):
+                stock = planning_year_dates[date_key].get(saddle_type, 0.0)
+                stocks.append(stock)
+                
+                if stock == 0:
+                    days_with_zero += 1
+                
+                # Verbrauch berechnen (Differenz zum Vortag, wenn Bestand gesunken ist)
+                if previous_stock is not None and stock < previous_stock:
+                    consumption = previous_stock - stock
+                    consumption_per_day.append(consumption)
+                previous_stock = stock
+            
+            # KPIs berechnen
+            avg_stock = sum(stocks) / len(stocks) if stocks else 0.0
+            min_stock = min(stocks) if stocks else 0.0
+            max_stock = max(stocks) if stocks else 0.0
+            avg_daily_consumption = sum(consumption_per_day) / len(consumption_per_day) if consumption_per_day else 0.0
+            avg_days_of_supply = (avg_stock / avg_daily_consumption) if avg_daily_consumption > 0 else 0.0
+            
+            kpi_data_by_saddle[saddle_type] = {
+                'avg_stock': avg_stock,
+                'min_stock': min_stock,
+                'max_stock': max_stock,
+                'days_with_zero': days_with_zero,
+                'avg_daily_consumption': avg_daily_consumption,
+                'avg_days_of_supply': avg_days_of_supply
+            }
+        
+        # Gesamt-KPIs (über alle Satteltypen)
+        total_avg_stock = sum(kpi['avg_stock'] for kpi in kpi_data_by_saddle.values())
+        total_min_stock = min(kpi['min_stock'] for kpi in kpi_data_by_saddle.values()) if kpi_data_by_saddle else 0.0
+        total_max_stock = sum(kpi['max_stock'] for kpi in kpi_data_by_saddle.values())
+        total_days_with_zero = 0
+        days_with_any_zero = 0
+        
+        # Tage mit "irgendein Material = 0"
+        for date_key in sorted(planning_year_dates.keys()):
+            has_any_zero = False
+            for saddle_type in saddle_types:
+                stock = planning_year_dates[date_key].get(saddle_type, 0.0)
+                if stock == 0:
+                    total_days_with_zero += 1
+                    has_any_zero = True
+            if has_any_zero:
+                days_with_any_zero += 1
+        
+        # KPI-Kacheln - Erste Zeile: Haupt-KPIs
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                label="Durchschnittlicher Lagerbestand (Gesamt)",
+                value=f"{int(round(total_avg_stock)):,}".replace(",", "."),
+                help="Durchschnittlicher Gesamtbestand über den Zeitraum (alle Satteltypen)"
+            )
+        
+        with col2:
+            st.metric(
+                label="Tage mit 0 Bestand (Gesamt)",
+                value=f"{days_with_any_zero}",
+                help="Anzahl Tage, an denen mindestens ein Materialtyp = 0 war"
+            )
+        
+        with col3:
+            st.metric(
+                label="Minimum / Maximum Bestand",
+                value=f"{int(round(total_min_stock)):,} / {int(round(total_max_stock)):,}".replace(",", "."),
+                help="Minimum und Maximum Gesamtbestand über den Zeitraum"
+            )
+        
+        st.divider()
+        
+        # Zweite Zeile: KPIs pro Satteltyp
+        st.subheader("KPIs pro Satteltyp")
+        
+        # Erstelle DataFrame für bessere Darstellung
+        kpi_rows = []
+        for saddle_type in sorted(saddle_types):
+            kpi = kpi_data_by_saddle[saddle_type]
+            kpi_rows.append({
+                'Satteltyp': saddle_type,
+                'Durchschnittlicher Bestand': int(round(kpi['avg_stock'])),
+                'Minimum Bestand': int(round(kpi['min_stock'])),
+                'Maximum Bestand': int(round(kpi['max_stock'])),
+                'Tage mit 0 Bestand': kpi['days_with_zero'],
+                'Ø Tagesverbrauch': int(round(kpi['avg_daily_consumption'])) if kpi['avg_daily_consumption'] > 0 else 0,
+                'Ø Reichweite (Tage)': f"{kpi['avg_days_of_supply']:.1f}" if kpi['avg_days_of_supply'] > 0 else "N/A"
+            })
+        
+        kpi_df = pd.DataFrame(kpi_rows)
+        st.dataframe(kpi_df, width='stretch', hide_index=True)
+        
+        # Optional: Zeitreihe "Bestand über Zeit"
+        st.subheader("Bestand über Zeit")
+        fig_material_stocks = go.Figure()
+        
+        saddle_colors = {
+            'Fizik Tundra': '#2ca02c',
+            'Raceline': '#9467bd',
+            'Spark': '#1f77b4',
+            'Speedline': '#d62728'
+        }
+        
+        for saddle_type in sorted(saddle_types):
+            dates = []
+            stocks = []
+            for date_key in sorted(planning_year_dates.keys()):
+                dates.append(date_key)
+                stocks.append(planning_year_dates[date_key].get(saddle_type, 0.0))
+            
+            fig_material_stocks.add_trace(go.Scatter(
+                x=dates,
+                y=stocks,
+                name=saddle_type,
+                line=dict(color=saddle_colors.get(saddle_type, '#808080'), width=2),
+                mode='lines'
+            ))
+        
+        fig_material_stocks.update_layout(
+            xaxis_title="Datum",
+            yaxis_title="Bestand (Einheiten)",
+            height=400,
+            hovermode='x unified',
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_material_stocks, width='stretch', key='chart_material_stocks_kpi')
+        
+        # Optional: Engpass-Zusammenfassung
+        st.subheader("Engpass-Analyse")
+        
+        # Sortiere nach Tagen mit 0 Bestand (häufigste Engpässe zuerst)
+        bottleneck_data = sorted(
+            [(saddle, kpi_data_by_saddle[saddle]['days_with_zero']) for saddle in saddle_types],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        if bottleneck_data:
+            bottleneck_df = pd.DataFrame([
+                {
+                    'Satteltyp': saddle,
+                    'Tage mit 0 Bestand': days_zero,
+                    'Engpass-Risiko': '🔴 Hoch' if days_zero > 30 else ('🟡 Mittel' if days_zero > 10 else '🟢 Niedrig')
+                }
+                for saddle, days_zero in bottleneck_data
+            ])
+            st.dataframe(bottleneck_df, width='stretch', hide_index=True)
+    else:
+        st.info("Keine Materiallager-Daten für das Planungsjahr verfügbar.")
+else:
+    st.info("Keine Materiallager-Daten verfügbar.")
+
+st.divider()
+
+# ============================================================================
+# LAGER
+# ============================================================================
+st.header("📦 Lager")
 
 # Berechne Fahrrad-Bestände (kumulativ)
 def get_bicycle_inventory_data():

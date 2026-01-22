@@ -134,9 +134,12 @@ def create_saddle_inventory_log():
         weekday_abbr = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][weekday]
         is_weekend = weekday >= 5
         # OPTIMIERUNG: Nur prüfen wenn innerhalb des Jahres
+        # Feiertag: Nicht Wochenende und nicht Arbeitstag
         is_holiday = False
         if 0 <= day < 365:
-            is_holiday = workday_calc.is_holiday(day)
+            # Prüfe direkt gegen deutsche Feiertage
+            if current_date in workday_calc.german_holidays:
+                is_holiday = True
         
         # Zugang (aus Inbound-Daten)
         receipt_by_saddle = receipts_by_date_and_saddle.get(current_date, {s: 0.0 for s in saddle_types})
