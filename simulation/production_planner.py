@@ -485,7 +485,7 @@ class ProductionPlanner:
                 'Wochentag': day_info['weekday_abbr'],
                 'Datum': current_date.strftime(self.master_data.DATE_FORMAT),
                 'Schichtanzahl': shifts,
-                'Auslastung (%)': round(utilization, 2) if abs(utilization) >= 0.01 else 0,
+                'Auslastung (%)': round(utilization, 2),
                 'Materialien vollständig?': materials_complete,
                 frame_name: '∞',
                 saddle_name: int(round(stock_saddle_specific)) if stock_saddle_specific > 0 else 0,
@@ -550,7 +550,7 @@ class ProductionPlanner:
                 stock_morning = 0.0
                 
                 for _, row in inbound_df.iterrows():
-                    avail_str = row.get('Verfügbar im Lager', '')
+                    avail_str = row.get('Verfügbar im Lager 🇩🇪', '')
                     if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
                         try:
                             avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()

@@ -88,12 +88,12 @@ def create_saddle_inventory_log():
         # Scanne die Inbound-Tabelle nach Wareneingängen
         if not inbound_df.empty:
             # Hole Spalten-Index für besseren Zugriff
-            avail_col_idx = inbound_df.columns.get_loc('Verfügbar im Lager')
+            avail_col_idx = inbound_df.columns.get_loc('Verfügbar im Lager 🇩🇪')
             saddle_col_indices = {s: inbound_df.columns.get_loc(s) for s in saddle_types if s in inbound_df.columns}
             
             # itertuples() gibt NamedTuples zurück, Zugriff über Index
             for row_tuple in inbound_df.itertuples(index=False, name=None):
-                # Datum "Verfügbar im Lager" lesen (Zugriff über Index)
+                # Datum "Verfügbar im Lager 🇩🇪" lesen (Zugriff über Index)
                 avail_str = row_tuple[avail_col_idx] if avail_col_idx < len(row_tuple) else None
                 if avail_str and isinstance(avail_str, str) and len(avail_str) > 0:
                     try:

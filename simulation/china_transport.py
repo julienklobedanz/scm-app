@@ -830,10 +830,10 @@ class ChinaTransportManager:
         
         # 1. Setup
         if not self.transport_status:
-            cols = ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW (Port)', 
-                    'Abfahrt Schiff', 'Ankunft Schiff', 'Abfahrt LKW 🇩🇪', 
-                    'Geplante Ankunft LKW', 'Tatsächliche Ankunft LKW', 
-                    'Verfügbar im Lager', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
+            cols = ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
+                    'Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 'Abfahrt LKW 🇩🇪', 
+                    'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪', 
+                    'Verfügbar im Lager 🇩🇪', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
             return pd.DataFrame(columns=cols)
         
         start_date = date(self.workday_calculator.year - 1, 11, 1)
@@ -980,10 +980,10 @@ class ChinaTransportManager:
             row = {
                 'Wochentag': self.workday_calculator.get_weekday_abbr(day_idx) if 0 <= day_idx < 365 else ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][curr_date.weekday()],
                 'Datum': curr_date.strftime(self.master_data.DATE_FORMAT),
-                'Abfahrt LKW 🇨🇳': '', 'Ankunft LKW (Port)': '', 
-                'Abfahrt Schiff': '', 'Ankunft Schiff': '', 'Abfahrt LKW 🇩🇪': '',
-                'Geplante Ankunft LKW': '', 'Tatsächliche Ankunft LKW': '', 
-                'Verfügbar im Lager': '', 'Menge Gesamt': '',
+                'Abfahrt LKW 🇨🇳': '', 'Ankunft LKW 🇨🇳': '', 
+                'Abfahrt Schiff 🇨🇳': '', 'Ankunft Schiff 🇩🇪': '', 'Abfahrt LKW 🇩🇪': '',
+                'Geplante Ankunft LKW 🇩🇪': '', 'Tatsächliche Ankunft LKW 🇩🇪': '', 
+                'Verfügbar im Lager 🇩🇪': '', 'Menge Gesamt': '',
                 'Is_Weekend': is_weekend,
                 'Is_Holiday': is_holiday
             }
@@ -1009,7 +1009,7 @@ class ChinaTransportManager:
                 day_idx_sim = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 day_port = self._add_workdays(day_idx_sim, 2)
                 date_port = self.workday_calculator.get_date_from_day(day_port)
-                row['Ankunft LKW (Port)'] = date_port.strftime(self.master_data.DATE_FORMAT)
+                row['Ankunft LKW 🇨🇳'] = date_port.strftime(self.master_data.DATE_FORMAT)
                 
                 wd = date_port.weekday()
                 if wd == 2:  # Wenn bereits Mittwoch
@@ -1020,13 +1020,13 @@ class ChinaTransportManager:
                         days_to_wed = 7
                 
                 date_ship_dep = date_port + timedelta(days=days_to_wed)
-                row['Abfahrt Schiff'] = date_ship_dep.strftime(self.master_data.DATE_FORMAT)
+                row['Abfahrt Schiff 🇨🇳'] = date_ship_dep.strftime(self.master_data.DATE_FORMAT)
                 
                 # KRITISCH: Schiff fährt 30 KALENDERTAGE (KT), nicht Arbeitstage!
                 # Das Schiff fährt kontinuierlich, Feiertage spielen keine Rolle
                 # Berechnung: Abfahrt + 30 Kalendertage
                 date_ship_arr = date_ship_dep + timedelta(days=30)  # 30 Kalendertage
-                row['Ankunft Schiff'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
+                row['Ankunft Schiff 🇩🇪'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
                 row['Abfahrt LKW 🇩🇪'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
                 
                 # Konvertiere Ankunft Schiff zu Tag-Index für weitere Berechnungen
@@ -1037,11 +1037,11 @@ class ChinaTransportManager:
                 day_arr_de = self._add_workdays(day_ship_arr_idx, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
                 date_arr_de = self.workday_calculator.get_date_from_day(day_arr_de)
                 
-                row['Geplante Ankunft LKW'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
-                row['Tatsächliche Ankunft LKW'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
+                row['Geplante Ankunft LKW 🇩🇪'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
+                row['Tatsächliche Ankunft LKW 🇩🇪'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
                 
                 date_avail = date_arr_de + timedelta(days=1)
-                row['Verfügbar im Lager'] = date_avail.strftime(self.master_data.DATE_FORMAT)
+                row['Verfügbar im Lager 🇩🇪'] = date_avail.strftime(self.master_data.DATE_FORMAT)
 
             rows.append(row)
             
@@ -1049,10 +1049,10 @@ class ChinaTransportManager:
         df = pd.DataFrame(rows)
         
         # Spalten sortieren
-        cols = ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW (Port)', 
-                'Abfahrt Schiff', 'Ankunft Schiff', 'Abfahrt LKW 🇩🇪', 
-                'Geplante Ankunft LKW', 'Tatsächliche Ankunft LKW', 
-                'Verfügbar im Lager', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
+        cols = ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
+                'Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 'Abfahrt LKW 🇩🇪', 
+                'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪', 
+                'Verfügbar im Lager 🇩🇪', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
         
         # Sicherstellen dass alle Cols da sind
         for c in cols:

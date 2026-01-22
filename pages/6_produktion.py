@@ -145,6 +145,15 @@ for product in sorted(production_logs.keys()):
     available_columns = [col for col in column_order if col in df_prod_filtered.columns]
     df_display = df_prod_filtered[available_columns].copy()
     
+    # Formatierung: Auslastung auf 2 Nachkommastellen
+    if 'Auslastung (%)' in df_display.columns:
+        # Konvertiere zu numerisch und formatiere auf 2 Nachkommastellen
+        df_display['Auslastung (%)'] = pd.to_numeric(df_display['Auslastung (%)'], errors='coerce').round(2)
+        # Stelle sicher, dass NaN-Werte als leere Strings angezeigt werden
+        df_display['Auslastung (%)'] = df_display['Auslastung (%)'].apply(
+            lambda x: f"{x:.2f}" if pd.notna(x) else ""
+        )
+    
     # Farblegende oben rechts
     col1, col2 = st.columns([1, 1])
     with col2:
@@ -181,7 +190,16 @@ for product in sorted(production_logs.keys()):
         sum_row = {'Wochentag': 'Summe', 'Datum': ''}
         for col in df_display.columns:
             if col in numeric_cols:
-                sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
+                # Für Auslastung: Durchschnitt statt Summe
+                if col == 'Auslastung (%)':
+                    # Konvertiere String-Werte zurück zu Float für Berechnung
+                    numeric_values = df_display[col].apply(
+                        lambda x: float(x) if isinstance(x, str) and x.strip() != '' else (float(x) if pd.notna(x) else 0)
+                    )
+                    avg_utilization = numeric_values.mean()
+                    sum_row[col] = f"{avg_utilization:.2f}" if pd.notna(avg_utilization) else ""
+                else:
+                    sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
             elif col not in sum_row:
                 sum_row[col] = ''
         

@@ -102,9 +102,9 @@ if not df.empty:
                 sum_row[col] = int(numeric_values.sum()) if not numeric_values.isna().all() else 0
             except (ValueError, TypeError):
                 sum_row[col] = 0
-        elif col not in ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW (Port)', 
-                         'Abfahrt Schiff', 'Ankunft Schiff', 'Abfahrt LKW 🇩🇪', 
-                         'Geplante Ankunft LKW', 'Tatsächliche Ankunft LKW', 'Verfügbar im Lager']:
+        elif col not in ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
+                         'Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 'Abfahrt LKW 🇩🇪', 
+                         'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪', 'Verfügbar im Lager 🇩🇪']:
             sum_row[col] = ''
         else:
             sum_row[col] = ''
