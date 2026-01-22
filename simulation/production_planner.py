@@ -531,36 +531,41 @@ class ProductionPlanner:
             return stock_by_saddle
         
         try:
-            # PERFORMANCE-OPTIMIERUNG: Berechne direkt aus transport_status statt DataFrame-Iteration
-            # Das ist 100× schneller, da wir nicht über alle Zeilen iterieren müssen
-            from collections import defaultdict
-            stock_by_saddle_calc = defaultdict(float)
+            # KRITISCH: Verwende die Inbound-Tabelle, um die KORREKTEN Mengen pro Sattel-Typ zu erhalten
+            # Die Inbound-Tabelle enthält bereits die spezifischen Mengen pro Sattel-Typ (nicht die Gesamtmenge verteilt)
+            # PERFORMANCE: Verwende gecachte Inbound-Tabelle
+            inbound_df = self.china_transport_manager.get_inbound_log_dataframe(saddle_shares)
+            
+            if inbound_df.empty:
+                # Cache leeres Ergebnis
+                self._inbound_stock_cache[day] = stock_by_saddle
+                return stock_by_saddle
             
             # Konvertiere Tag-Index zu Datum
             target_date = self.workday_calculator.get_date_from_day(day)
             
-            # Iteriere über transport_status und summiere alle Transporte, die bis target_date verfügbar sind
-            for (order_day, order_id), status in self.china_transport_manager.transport_status.items():
-                available_day = status.get('available_day')
-                if available_day is None:
-                    continue
-                
-                try:
-                    avail_date = self.workday_calculator.get_date_from_day(available_day)
-                    if avail_date <= target_date:
-                        # Berechne die Verteilung auf Sattel-Typen basierend auf Shares
-                        qty = status.get('actual_quantity', status.get('quantity', 0.0))
-                        if qty > 0:
-                            # Verteile die Menge auf alle Sattel-Typen basierend auf ihren Shares
-                            for saddle_name, share in saddle_shares.items():
-                                stock_by_saddle_calc[saddle_name] += qty * share
-                except Exception:
-                    continue
-            
-            # Konvertiere zu dict und setze None für 0-Werte
+            # Berechne Bestand morgens für ALLE Sattel-Typen auf einmal
+            # Bestand morgens = Summe aller Verfügbar <= target_date
             for saddle_name in saddle_shares.keys():
-                stock_val = stock_by_saddle_calc.get(saddle_name, 0.0)
-                stock_by_saddle[saddle_name] = stock_val if stock_val > 0 else None
+                stock_morning = 0.0
+                
+                for _, row in inbound_df.iterrows():
+                    avail_str = row.get('Verfügbar im Lager', '')
+                    if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
+                        try:
+                            avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()
+                            
+                            if avail_date <= target_date:
+                                qty_val = row.get(saddle_name, 0)
+                                if qty_val and str(qty_val).strip() != '':
+                                    try:
+                                        stock_morning += float(qty_val)
+                                    except (ValueError, TypeError):
+                                        pass
+                        except (ValueError, TypeError):
+                            continue
+                
+                stock_by_saddle[saddle_name] = stock_morning if stock_morning > 0 else None
             
             # Cache Ergebnis
             self._inbound_stock_cache[day] = stock_by_saddle
