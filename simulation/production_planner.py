@@ -485,7 +485,7 @@ class ProductionPlanner:
                 'Wochentag': day_info['weekday_abbr'],
                 'Datum': current_date.strftime(self.master_data.DATE_FORMAT),
                 'Schichtanzahl': shifts,
-                'Auslastung (%)': int(round(utilization)) if abs(utilization) < 0.05 else round(utilization, 1),
+                'Auslastung (%)': round(utilization, 2) if abs(utilization) >= 0.01 else 0,
                 'Materialien vollständig?': materials_complete,
                 frame_name: '∞',
                 saddle_name: int(round(stock_saddle_specific)) if stock_saddle_specific > 0 else 0,

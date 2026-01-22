@@ -16,7 +16,7 @@ from ui.scenario_sidebar import render_scenario_sidebar
 
 st.set_page_config(page_title="Materiallager", layout="wide", page_icon="📦")
 
-# CSS für Menü-Formatierung (Großbuchstaben und Fett)
+# CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
     /* Menüeinträge großgeschrieben und fett */
@@ -24,10 +24,21 @@ st.markdown("""
         font-weight: bold !important;
         text-transform: capitalize !important;
     }
+    /* Fixierte Summenzeile - letzte Zeile bleibt beim Scrollen sichtbar */
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
+        position: sticky !important;
+        bottom: 0 !important;
+        background-color: #e0e0e0 !important;
+        z-index: 100 !important;
+    }
+    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
+        background-color: #e0e0e0 !important;
+        font-weight: bold !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-render_scenario_sidebar()
+render_scenario_sidebar(key_suffix="_materiallager")
 
 # Init Session State
 from ui.utils import initialize_session_state, run_happy_path_simulation
@@ -73,27 +84,35 @@ def create_saddle_inventory_log():
         # Rufe die Inbound-Tabelle ab (enthält die korrekte 500er Logik und Termine)
         inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
         
+        # OPTIMIERUNG: Verwende itertuples() statt iterrows() (3-5× schneller)
         # Scanne die Inbound-Tabelle nach Wareneingängen
-        for _, row in inbound_df.iterrows():
-            # Datum "Verfügbar im Lager" lesen
-            avail_str = row.get('Verfügbar im Lager')
-            if avail_str and isinstance(avail_str, str) and len(avail_str) > 0:
-                try:
-                    avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
-                    
-                    if avail_date not in receipts_by_date_and_saddle:
-                        receipts_by_date_and_saddle[avail_date] = {s: 0.0 for s in saddle_types}
-                    
-                    # Mengen pro Sattel auslesen und addieren
-                    for saddle in saddle_types:
-                        qty_val = row.get(saddle)
-                        if qty_val and str(qty_val).strip() != '':
-                            try:
-                                receipts_by_date_and_saddle[avail_date][saddle] += float(qty_val)
-                            except ValueError:
-                                pass
-                except ValueError:
-                    continue
+        if not inbound_df.empty:
+            # Hole Spalten-Index für besseren Zugriff
+            avail_col_idx = inbound_df.columns.get_loc('Verfügbar im Lager')
+            saddle_col_indices = {s: inbound_df.columns.get_loc(s) for s in saddle_types if s in inbound_df.columns}
+            
+            # itertuples() gibt NamedTuples zurück, Zugriff über Index
+            for row_tuple in inbound_df.itertuples(index=False, name=None):
+                # Datum "Verfügbar im Lager" lesen (Zugriff über Index)
+                avail_str = row_tuple[avail_col_idx] if avail_col_idx < len(row_tuple) else None
+                if avail_str and isinstance(avail_str, str) and len(avail_str) > 0:
+                    try:
+                        avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+                        
+                        if avail_date not in receipts_by_date_and_saddle:
+                            receipts_by_date_and_saddle[avail_date] = {s: 0.0 for s in saddle_types}
+                        
+                        # Mengen pro Sattel auslesen und addieren
+                        for saddle, col_idx in saddle_col_indices.items():
+                            if col_idx < len(row_tuple):
+                                qty_val = row_tuple[col_idx]
+                                if qty_val and str(qty_val).strip() != '':
+                                    try:
+                                        receipts_by_date_and_saddle[avail_date][saddle] += float(qty_val)
+                                    except (ValueError, TypeError):
+                                        pass
+                    except (ValueError, TypeError):
+                        continue
 
     # 2. Materiallager berechnen
     # Startdatum: Früher ansetzen, um Vorlauf (Initial Stock) mitzunehmen!
@@ -110,17 +129,14 @@ def create_saddle_inventory_log():
         current_date = start_date_log + timedelta(days=day_offset)
         day = (current_date - start_date_simulation).days
         
-        # Wochentag / Feiertag
+        # Wochentag / Feiertag - OPTIMIERUNG: Direkte Berechnung statt get_day_info()
+        weekday = current_date.weekday()
+        weekday_abbr = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][weekday]
+        is_weekend = weekday >= 5
+        # OPTIMIERUNG: Nur prüfen wenn innerhalb des Jahres
+        is_holiday = False
         if 0 <= day < 365:
-            day_info = workday_calc.get_day_info(day)
-            weekday_abbr = day_info['weekday_abbr']
-            is_weekend = day_info['is_weekend']
-            is_holiday = day_info['is_holiday']
-        else:
-            weekday = current_date.weekday()
-            weekday_abbr = workday_calc.get_weekday_abbr(day) if 0 <= day < 365 else ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][weekday]
-            is_weekend = weekday >= 5
-            is_holiday = False
+            is_holiday = workday_calc.is_holiday(day)
         
         # Zugang (aus Inbound-Daten)
         receipt_by_saddle = receipts_by_date_and_saddle.get(current_date, {s: 0.0 for s in saddle_types})
@@ -251,9 +267,28 @@ def create_saddle_inventory_log():
     st.session_state.material_inventory_data = material_inventory_data
     return {s: pd.DataFrame(l) for s, l in saddle_logs.items()}
 
-# Render
-with st.spinner("🔄 Berechne Materiallager..."):
-    saddle_logs = create_saddle_inventory_log()
+# Render - OPTIMIERUNG: Nur berechnen wenn noch nicht im Cache
+# Prüfe auch, ob Simulation geändert wurde (dann Cache invalidieren)
+simulation_hash = None
+if 'simulator' in st.session_state and st.session_state.simulator:
+    # Erstelle Hash aus Simulator-Status (für Cache-Invalidierung)
+    try:
+        import hashlib
+        simulator_state = str(id(st.session_state.simulator)) + str(len(st.session_state.simulator.china_transport_manager.transport_status))
+        simulation_hash = hashlib.md5(simulator_state.encode()).hexdigest()
+    except:
+        simulation_hash = None
+
+cache_key = f"material_inventory_{simulation_hash}" if simulation_hash else "material_inventory_default"
+
+if cache_key not in st.session_state or 'saddle_logs_cache' not in st.session_state:
+    with st.spinner("🔄 Berechne Materiallager..."):
+        saddle_logs = create_saddle_inventory_log()
+        st.session_state.saddle_logs_cache = saddle_logs
+        st.session_state[cache_key] = True
+else:
+    # Verwende gecachte Daten
+    saddle_logs = st.session_state.saddle_logs_cache
 
 for saddle_type in sorted(saddle_logs.keys()):
     st.subheader(f"📋 {saddle_type}")
