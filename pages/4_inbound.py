@@ -49,6 +49,11 @@ st.markdown("Überwachung der Verschiffungen und Zuläufe zum Lager Dortmund.")
 # Initialisiere Session State
 initialize_session_state()
 
+# WICHTIG: Stelle sicher, dass daily_demands_actual aktualisiert wird, wenn sich Szenarien ändern
+# Dies ist notwendig, damit die Inbound-Tabelle korrekt aktualisiert wird
+from ui.volume_planning_utils import calculate_volume_planning_demand
+calculate_volume_planning_demand()
+
 # Happy Path: Automatische Simulation wenn noch keine Ergebnisse vorhanden
 run_happy_path_simulation()
 

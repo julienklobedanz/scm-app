@@ -878,8 +878,63 @@ class ChinaTransportManager:
         pro Satteltyp am Hafen. Wir verschiffen nur das, was wirklich produziert wurde.
         Damit ist mathematisch garantiert: Summe(Inbound) == Summe(Produktion).
         """
+        # WICHTIG: Cache-Key muss Szenarien und daily_demands_actual berücksichtigen,
+        # damit der Cache invalidiert wird wenn Marketing-Szenarien hinzugefügt werden
+        # Verwende die gleiche Logik wie bei get_supplier_log_dataframe()
+        try:
+            import streamlit as st
+            # Hole Szenario-Fingerprint (ähnlich wie in get_supplier_log_dataframe)
+            scenario_manager = getattr(self, 'scenario_manager', None)
+            if scenario_manager:
+                from models.scenarios import (
+                    StandardScenario,
+                    MarketingCampaignScenario,
+                    WarehouseDamageScenario,
+                    SupplierBreakdownScenario,
+                    DeliveryProblemScenario,
+                )
+                scenario_items = []
+                for s in getattr(scenario_manager, "scenarios", []):
+                    if isinstance(s, StandardScenario):
+                        continue
+                    base = (
+                        s.__class__.__name__,
+                        getattr(s, "active", True),
+                        getattr(s, "start_day", None),
+                        getattr(s, "end_day", None),
+                    )
+                    if isinstance(s, MarketingCampaignScenario):
+                        extra = (getattr(s, "demand_increase_factor", None),)
+                    elif isinstance(s, WarehouseDamageScenario):
+                        extra = (
+                            getattr(s, "stock_loss_percentage", None),
+                            getattr(s, "affected_component", None),
+                        )
+                    elif isinstance(s, SupplierBreakdownScenario):
+                        extra = (getattr(s, "component_type", None),)
+                    elif isinstance(s, DeliveryProblemScenario):
+                        extra = (
+                            getattr(s, "loss_percentage", None),
+                            getattr(s, "delay_days", None),
+                            getattr(s, "component_type", None),
+                        )
+                    else:
+                        extra = tuple(sorted(vars(s).items()))
+                    scenario_items.append(base + extra)
+                scenario_fingerprint = tuple(sorted(scenario_items))
+            else:
+                scenario_fingerprint = ()
+            
+            # Hole Cache-Key für daily_demands_actual (wenn vorhanden)
+            volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
+            
+            # Erweitere Cache-Key um Szenarien und daily_demands_actual Cache-Key
+            cache_key = (tuple(sorted(saddle_shares_dict.items())), scenario_fingerprint, volume_planning_cache_key)
+        except (ImportError, AttributeError):
+            # Fallback: Wenn Streamlit nicht verfügbar, verwende einfachen Key
+            cache_key = tuple(sorted(saddle_shares_dict.items()))
+        
         # Cache Check
-        cache_key = tuple(sorted(saddle_shares_dict.items()))
         if cache_key == self._inbound_df_cache_key and cache_key in self._inbound_df_cache:
             return self._inbound_df_cache[cache_key]
         
@@ -909,29 +964,48 @@ class ChinaTransportManager:
             saddle_shares_all = {s: share / total_share for s, share in saddle_shares_all.items()}
         
         # 2. Produktion sammeln (Der Zufluss in die Eimer)
+        # WICHTIG: Berechne Produktion direkt aus Bestelleingang-Werten (dynamisch),
+        # anstatt aus statischem transport_status zu lesen.
+        # Das stellt sicher, dass Marketing-Szenarien berücksichtigt werden.
         # PERFORMANCE: Verwende defaultdict für schnellere Zugriffe (nur relevante Tage)
         from collections import defaultdict
         daily_prod_all = defaultdict(lambda: defaultdict(float))
         last_production_day = -1  # OPTIMIERUNG: Track letzten Tag mit Produktion
         
-        for (o_day, o_id), status in self.transport_status.items():
-            p_day_sim = status.get('production_end_day')
-            qty_produced = status.get('actual_quantity', status.get('quantity', 0.0))
+        # Berechne Produktion für jeden Sattel-Typ aus Bestelleingang-Werten
+        for saddle_name, saddle_share in saddle_shares_dict.items():
+            # Hole Supplier-Log für diesen Sattel-Typ (enthält bereits Marketing)
+            supplier_df = self.get_supplier_log_dataframe(saddle_name, saddle_share)
             
-            if p_day_sim is not None and qty_produced > 0:
-                p_date = self.workday_calculator.get_date_from_day(p_day_sim)
-                day_offset = (p_date - start_date).days
+            if supplier_df.empty:
+                continue
+            
+            # Iteriere über alle Zeilen und sammle Produktionsmengen
+            for _, row in supplier_df.iterrows():
+                production_date_str = row.get('Produktionsdatum', '')
+                production_qty = row.get('Produktionsmenge', 0)
                 
-                # PERFORMANCE: Nur relevante Tage verarbeiten (nicht -20 bis +20)
-                if 0 <= day_offset < total_days:
-                    effective_day = day_offset
-                    last_production_day = max(last_production_day, effective_day)  # OPTIMIERUNG
-                    
-                    # Hier verteilen wir die Produktion in die spezifischen Sattel-Eimer
-                    for s in all_saddles:
-                        s_share = saddle_shares_all.get(s, 0.0)
-                        # Exakte Zuteilung in den Eimer
-                        daily_prod_all[effective_day][s] += qty_produced * s_share
+                if production_date_str and production_qty:
+                    try:
+                        from datetime import datetime
+                        prod_date = datetime.strptime(production_date_str, self.master_data.DATE_FORMAT).date()
+                        day_offset = (prod_date - start_date).days
+                        
+                        # PERFORMANCE: Nur relevante Tage verarbeiten
+                        if 0 <= day_offset < total_days:
+                            effective_day = day_offset
+                            last_production_day = max(last_production_day, effective_day)  # OPTIMIERUNG
+                            
+                            # Konvertiere production_qty zu float (falls string)
+                            try:
+                                qty = float(production_qty) if isinstance(production_qty, str) else float(production_qty)
+                            except (ValueError, TypeError):
+                                qty = 0.0
+                            
+                            # Exakte Zuteilung in den Eimer für diesen Sattel-Typ
+                            daily_prod_all[effective_day][saddle_name] += qty
+                    except (ValueError, TypeError):
+                        continue
 
         # OPTIMIERUNG: Bestimme letzten relevanten Tag
         # Maximal ~40 Tage nach letzter Produktion können noch Transporte ankommen

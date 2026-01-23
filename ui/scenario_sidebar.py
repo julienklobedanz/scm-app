@@ -147,6 +147,25 @@ def render_scenario_sidebar(key_suffix=""):
                 with col2:
                     if st.button("🗑️", key=f"remove_{original_idx}_global{key_suffix}"):
                         st.session_state.scenario_manager.scenarios.pop(original_idx)
+                        # WICHTIG: Invalidiere alle Caches, die von Szenarien abhängen
+                        # 1. Invalidiere volume_planning Cache
+                        st.session_state.volume_planning_calculated = False
+                        st.session_state.volume_planning_cache_key = None
+                        # 2. Invalidiere Materiallager Cache
+                        if 'saddle_logs_cache' in st.session_state:
+                            del st.session_state.saddle_logs_cache
+                        # 3. Invalidiere Caches in ChinaTransportManager (wenn Simulator vorhanden)
+                        if 'simulator' in st.session_state and st.session_state.simulator:
+                            if hasattr(st.session_state.simulator, 'china_transport_manager'):
+                                manager = st.session_state.simulator.china_transport_manager
+                                manager._supplier_log_cache = {}
+                                manager._inbound_df_cache = {}
+                                manager._inbound_df_cache_key = None
+                        # 4. Invalidiere Produktionslogs Cache
+                        if 'production_logs_cache' in st.session_state:
+                            del st.session_state.production_logs_cache
+                        if 'production_logs_cache_key' in st.session_state:
+                            del st.session_state.production_logs_cache_key
                         st.rerun()
         else:
             st.caption("Keine zusätzlichen Szenarien aktiv")

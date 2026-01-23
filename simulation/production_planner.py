@@ -296,85 +296,8 @@ class ProductionPlanner:
             required_saddle_type = self.master_data.BOM[product]['saddle']
             material_availability_report[product] = stock_by_saddle_type.get(required_saddle_type, 0.0)
         
-        # 7. Aktualisiere Backlog
-        # Backlog = geplante PM heute - tatsächliche PM heute + Backlog gestern
-        # WICHTIG: "geplante PM" = Tagesbedarf OHNE Backlog (nicht production_demand_by_product!)
-        for product in self.master_data.BOM.keys():
-            # Geplante PM heute (Tagesbedarf OHNE Backlog)
-            planned_pm = product_demands.get(product, 0)
-            # Tatsächliche PM heute
-            actual_pm = production_by_product.get(product, 0)
-            # Backlog gestern
-            old_backlog = self.backlog.get(product, 0.0)
-            # Neuer Backlog = geplante PM - tatsächliche PM + Backlog gestern
-            self.backlog[product] = max(0.0, planned_pm - actual_pm + old_backlog)
-        
-        # 8. Speichere Produktionsplan
-        self.production_plan[day] = production_by_product
-        
-        # 11. Logge für UI
-        self._log_production(
-            day, 
-            production_by_product,
-            product_demands,
-            production_demand_by_product,
-            material_availability_report, # Start-Verfügbarkeit
-            rank_by_product,
-            shifts,
-            daily_capacity,
-            stock_saddles_morning,  # Bestand zu Beginn des Tages (für proportionale Anzeige)
-            proportional_production_by_product,  # Anteilige Produktion
-            scheduled_production_by_product  # zu produzierende Mengen
-        )
-        
-        return production_by_product
-    
-    def _log_production(
-        self,
-        day: int,
-        production_by_product: Dict[str, int],
-        product_demands: Dict[str, int],
-        production_demand_by_product: Dict[str, float],
-        material_availability_by_product: Dict[str, float],
-        rank_by_product: Dict[str, int],
-        shifts: int,
-        daily_capacity: float,
-        stock_saddles_morning: float = None,
-        proportional_production_by_product: Dict[str, int] = None,
-        scheduled_production_by_product: Dict[str, float] = None
-    ) -> None:
-        """Loggt Produktionsdaten für UI-Anzeige"""
-        if not self.workday_calculator:
-            return
-        
-        current_date = self.workday_calculator.get_date_from_day(day)
-        # Hole alle Tag-Informationen auf einmal
-        day_info = self.workday_calculator.get_day_info(day) if self.workday_calculator else {
-            'weekday_name': 'Unbekannt',
-            'weekday_abbr': '??',
-            'is_workday': False,
-            'is_weekend': False,
-            'is_holiday': False
-        }
-        weekday_name = day_info['weekday_name']
-        is_workday = day_info['is_workday']
-        is_holiday = day_info['is_holiday']
-        is_weekend = day_info['is_weekend']
-        
-        actual_build_total = sum(production_by_product.values())
-        utilization = (actual_build_total / daily_capacity * 100) if daily_capacity > 0 else 0
-        
-        # Berechne Sattel-Shares für proportionale Anzeige (konsistent mit Materiallager)
-        saddle_shares = self.master_data.calculate_saddle_shares()
-        
-        # OPTIMIERUNG: Berechne Bestände für alle Sattel-Typen auf einmal (Caching)
-        # Dies vermeidet mehrfache Berechnung der Inbound-Tabelle
-        stock_by_saddle = self._get_all_stocks_from_inbound_table(day, saddle_shares)
-        
-        # Hole fertiggestellte PM vom vorherigen ARBEITSTAG (für alle Produkte)
-        # WICHTIG: Dies muss VOR der Aktualisierung des Verbrauchs passieren,
-        # damit wir die fertiggestellte PM vom vorherigen Tag haben
-        # WICHTIG: Fertiggestellte PM wird nur angezeigt, wenn der vorherige Tag ein Arbeitstag war
+        # WICHTIG: Berechne fertiggestellte PM VOR Backlog-Berechnung
+        # Fertiggestellte PM = Produktion vom vorherigen ARBEITSTAG, die heute fertiggestellt wird
         finished_pm_by_product = {}
         if day > 0 and self.workday_calculator:
             prev_day = day - 1
@@ -421,6 +344,92 @@ class ProductionPlanner:
                         finished_pm_by_product[product] = 0
         else:
             # Tag 0 oder kein WorkdayCalculator: keine fertiggestellte PM (noch nichts produziert)
+            for product in self.master_data.BOM.keys():
+                finished_pm_by_product[product] = 0
+        
+        # 7. Aktualisiere Backlog
+        # Backlog = geplante PM heute - fertiggestellte PM heute + Backlog gestern
+        # WICHTIG: "geplante PM" = Tagesbedarf OHNE Backlog (nicht production_demand_by_product!)
+        # WICHTIG: "fertiggestellte PM" = Produktion, die HEUTE fertiggestellt wird (von gestern produziert)
+        # Das ist die Produktion, die tatsächlich zur Bedarfsdeckung beiträgt
+        for product in self.master_data.BOM.keys():
+            # Geplante PM heute (Tagesbedarf OHNE Backlog)
+            planned_pm = product_demands.get(product, 0)
+            # Fertiggestellte PM heute (Produktion von gestern, die heute fertiggestellt wird)
+            finished_pm = finished_pm_by_product.get(product, 0)
+            # Backlog gestern
+            old_backlog = self.backlog.get(product, 0.0)
+            # Neuer Backlog = geplante PM - fertiggestellte PM + Backlog gestern
+            self.backlog[product] = max(0.0, planned_pm - finished_pm + old_backlog)
+        
+        # 8. Speichere Produktionsplan
+        self.production_plan[day] = production_by_product
+        
+        # 11. Logge für UI
+        self._log_production(
+            day, 
+            production_by_product,
+            product_demands,
+            production_demand_by_product,
+            material_availability_report, # Start-Verfügbarkeit
+            rank_by_product,
+            shifts,
+            daily_capacity,
+            stock_saddles_morning,  # Bestand zu Beginn des Tages (für proportionale Anzeige)
+            proportional_production_by_product,  # Anteilige Produktion
+            scheduled_production_by_product,  # zu produzierende Mengen
+            finished_pm_by_product  # Fertiggestellte PM (bereits berechnet)
+        )
+        
+        return production_by_product
+    
+    def _log_production(
+        self,
+        day: int,
+        production_by_product: Dict[str, int],
+        product_demands: Dict[str, int],
+        production_demand_by_product: Dict[str, float],
+        material_availability_by_product: Dict[str, float],
+        rank_by_product: Dict[str, int],
+        shifts: int,
+        daily_capacity: float,
+        stock_saddles_morning: float = None,
+        proportional_production_by_product: Dict[str, int] = None,
+        scheduled_production_by_product: Dict[str, float] = None,
+        finished_pm_by_product: Dict[str, int] = None
+    ) -> None:
+        """Loggt Produktionsdaten für UI-Anzeige"""
+        if not self.workday_calculator:
+            return
+        
+        current_date = self.workday_calculator.get_date_from_day(day)
+        # Hole alle Tag-Informationen auf einmal
+        day_info = self.workday_calculator.get_day_info(day) if self.workday_calculator else {
+            'weekday_name': 'Unbekannt',
+            'weekday_abbr': '??',
+            'is_workday': False,
+            'is_weekend': False,
+            'is_holiday': False
+        }
+        weekday_name = day_info['weekday_name']
+        is_workday = day_info['is_workday']
+        is_holiday = day_info['is_holiday']
+        is_weekend = day_info['is_weekend']
+        
+        actual_build_total = sum(production_by_product.values())
+        utilization = (actual_build_total / daily_capacity * 100) if daily_capacity > 0 else 0
+        
+        # Berechne Sattel-Shares für proportionale Anzeige (konsistent mit Materiallager)
+        saddle_shares = self.master_data.calculate_saddle_shares()
+        
+        # OPTIMIERUNG: Berechne Bestände für alle Sattel-Typen auf einmal (Caching)
+        # Dies vermeidet mehrfache Berechnung der Inbound-Tabelle
+        stock_by_saddle = self._get_all_stocks_from_inbound_table(day, saddle_shares)
+        
+        # WICHTIG: Verwende fertiggestellte PM, die bereits in plan_daily_production berechnet wurde
+        # Falls nicht übergeben, berechne es hier (Fallback)
+        if finished_pm_by_product is None:
+            finished_pm_by_product = {}
             for product in self.master_data.BOM.keys():
                 finished_pm_by_product[product] = 0
         

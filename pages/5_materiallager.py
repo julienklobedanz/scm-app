@@ -42,14 +42,39 @@ render_scenario_sidebar(key_suffix="_materiallager")
 
 # Init Session State
 from ui.utils import initialize_session_state, run_happy_path_simulation
+from ui.volume_planning_utils import calculate_volume_planning_demand
 
 initialize_session_state()
+
+# WICHTIG: Stelle sicher, dass daily_demands_actual aktualisiert wird, wenn sich Szenarien ändern
+# Dies ist notwendig, damit der Materialverbrauch korrekt berechnet wird
+calculate_volume_planning_demand()
 
 st.title("📦 Materiallager")
 st.markdown("Übersicht über Sattelzugänge, Bestände und Verluste")
 
 # Happy Path Simulation
 run_happy_path_simulation()
+
+# WICHTIG: Stelle sicher, dass production_logs_cache berechnet wurde
+# Dies ist notwendig, damit der Materialverbrauch aus den dynamisch aktualisierten "tatsächlichen PM" berechnet werden kann
+if 'production_logs_cache' not in st.session_state:
+    # Importiere get_production_logs aus Produktionsseite
+    try:
+        import sys
+        import os
+        produktion_path = os.path.join(os.path.dirname(__file__), "6_produktion.py")
+        if os.path.exists(produktion_path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("produktion_module", produktion_path)
+            if spec and spec.loader:
+                produktion_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(produktion_module)
+                # Berechne production_logs_cache (wird gecacht)
+                produktion_module.get_production_logs()
+    except Exception:
+        # Stille Fehlerbehandlung - production_logs_cache wird später geladen
+        pass
 
 if st.session_state.results_df is None:
     st.warning("⚠️ Keine Simulationsergebnisse verfügbar.")
@@ -149,53 +174,61 @@ def create_saddle_inventory_log():
         stock_evening = {}
         issue_by_saddle = {s: 0.0 for s in saddle_types}
         
-        # Verbrauch (Produktion DE) - Exakte Stücklisten-Logik
+        # Verbrauch (Produktion DE) - Dynamische Berechnung mit Marketing-Berücksichtigung
+        # WICHTIG: Berechne Produktion dynamisch aus daily_demands_actual (enthält Marketing),
+        # anstatt aus statischen production_logs zu lesen. Das stellt sicher, dass Marketing
+        # sofort berücksichtigt wird, ohne dass die Simulation neu gestartet werden muss.
+        production_by_product = {}
         if 0 <= day < len(results_df):
             actual_build = results_df.iloc[day]['Actual_Build']
             
-            # Neue (exakte) Logik: Rekonstruiere Produktionsmengen pro Produkt
-            # Wir nutzen den DemandCalculator des Simulators, um die Nachfrage pro Produkt zu erhalten
-            # und verteilen dann die tatsächliche Produktion proportional
+            # Berechne Produktionsmengen pro Produkt dynamisch (mit Marketing)
             product_demands = {}
             if st.session_state.simulator and hasattr(st.session_state.simulator, 'demand_calculator'):
                 demand_calc = st.session_state.simulator.demand_calculator
                 
-                # Berechne Marketing-Add-ons (wie im Simulator)
-                marketing_add_ons = {}
-                scenario_manager = st.session_state.get('scenario_manager', None)
-                if scenario_manager:
-                    marketing_scenarios = scenario_manager.get_marketing_scenarios(day)
-                    if marketing_scenarios:
-                        month = MasterData.get_month_from_day(day)
-                        is_workday = workday_calc.is_workday(day)
-                        
-                        if is_workday:
-                            # Verwende die private Methode (ist in Python trotzdem aufrufbar)
-                            base_daily_floats = demand_calc._calculate_monthly_base_daily_float(month)
+                # WICHTIG: Verwende daily_demands_actual (enthält bereits Marketing)
+                # Das ist die Single Source of Truth für Nachfrage mit Marketing
+                daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+                if day in daily_demands_actual:
+                    # Verwende direkt daily_demands_actual (mit Marketing bereits enthalten)
+                    product_demands = daily_demands_actual[day]
+                else:
+                    # Fallback: Berechne Marketing-Add-ons manuell (wie vorher)
+                    marketing_add_ons = {}
+                    scenario_manager = st.session_state.get('scenario_manager', None)
+                    if scenario_manager:
+                        marketing_scenarios = scenario_manager.get_marketing_scenarios(day)
+                        if marketing_scenarios:
+                            month = MasterData.get_month_from_day(day)
+                            is_workday = workday_calc.is_workday(day)
                             
-                            for scenario in marketing_scenarios:
-                                factor = scenario.demand_increase_factor
-                                for product in MasterData.BOM.keys():
-                                    base_float = base_daily_floats.get(product, 0.0)
-                                    add_on = base_float * (factor - 1.0)
-                                    if product not in marketing_add_ons:
-                                        marketing_add_ons[product] = 0.0
-                                    marketing_add_ons[product] += add_on
-                
-                # Prüfe, ob es der letzte Arbeitstag des Jahres ist
-                is_last_workday_of_year = False
-                if workday_calc.is_workday(day):
-                    has_future_workdays = False
-                    for future_day in range(day + 1, 365):
-                        if workday_calc.is_workday(future_day):
-                            has_future_workdays = True
-                            break
-                    is_last_workday_of_year = not has_future_workdays
-                
-                # Berechne Nachfrage pro Produkt (wie im Simulator)
-                product_demands = demand_calc.calculate_daily_demand_per_product_dict(
-                    day, marketing_add_ons, is_last_workday_of_year
-                )
+                            if is_workday:
+                                base_daily_floats = demand_calc._calculate_monthly_base_daily_float(month)
+                                
+                                for scenario in marketing_scenarios:
+                                    factor = scenario.demand_increase_factor
+                                    for product in MasterData.BOM.keys():
+                                        base_float = base_daily_floats.get(product, 0.0)
+                                        add_on = base_float * (factor - 1.0)
+                                        if product not in marketing_add_ons:
+                                            marketing_add_ons[product] = 0.0
+                                        marketing_add_ons[product] += add_on
+                    
+                    # Prüfe, ob es der letzte Arbeitstag des Jahres ist
+                    is_last_workday_of_year = False
+                    if workday_calc.is_workday(day):
+                        has_future_workdays = False
+                        for future_day in range(day + 1, 365):
+                            if workday_calc.is_workday(future_day):
+                                has_future_workdays = True
+                                break
+                        is_last_workday_of_year = not has_future_workdays
+                    
+                    # Berechne Nachfrage pro Produkt (mit Marketing)
+                    product_demands = demand_calc.calculate_daily_demand_per_product_dict(
+                        day, marketing_add_ons, is_last_workday_of_year
+                    )
             else:
                 # Fallback: Verwende PRODUCT_SALES_SHARES (alte Logik)
                 total_share = sum(MasterData.PRODUCT_SALES_SHARES.values())
@@ -208,7 +241,6 @@ def create_saddle_inventory_log():
             
             # Verteile die tatsächliche Produktion proportional zur Nachfrage
             total_demand = sum(product_demands.values())
-            production_by_product = {}
             
             if total_demand > 0 and actual_build > 0:
                 # Sortiere Produkte deterministisch
@@ -228,15 +260,47 @@ def create_saddle_inventory_log():
             else:
                 for product in MasterData.BOM.keys():
                     production_by_product[product] = 0
-            
-            # Jetzt: Für jedes produzierte Produkt den entsprechenden Sattel aus der BOM abziehen
-            # Exakte Stücklisten-Logik: 1 Bike = 1 Sattel (gemäß BOM)
-            for product_name, qty in production_by_product.items():
-                if qty > 0 and product_name in MasterData.BOM:
-                    required_saddle = MasterData.BOM[product_name]['saddle']
-                    # 1 Bike = 1 Sattel (exakte Stücklisten-Logik)
-                    if required_saddle in issue_by_saddle:
-                        issue_by_saddle[required_saddle] += qty
+        
+        # WICHTIG: Verwende dynamisch aktualisierte "tatsächliche PM" aus production_logs
+        # statt production_by_product, um Materialverbrauch korrekt zu berechnen
+        # Dies stellt sicher, dass der Materialverbrauch mit der tatsächlichen Produktion übereinstimmt
+        # (die in pages/6_produktion.py dynamisch aktualisiert wird)
+        production_by_product_from_logs = {}
+        if 'production_logs_cache' in st.session_state:
+            production_logs_cache = st.session_state.production_logs_cache
+            for product_name in MasterData.BOM.keys():
+                if product_name in production_logs_cache:
+                    df = production_logs_cache[product_name]
+                    if not df.empty and 'Datum' in df.columns and 'tatsächliche PM' in df.columns:
+                        # Suche Zeile für aktuelles Datum
+                        current_date_str = current_date.strftime(MasterData.DATE_FORMAT)
+                        matching_rows = df[df['Datum'] == current_date_str]
+                        if not matching_rows.empty:
+                            # Verwende dynamisch aktualisierte "tatsächliche PM"
+                            actual_pm = matching_rows.iloc[0].get('tatsächliche PM', 0)
+                            try:
+                                production_by_product_from_logs[product_name] = int(actual_pm) if actual_pm > 0 else 0
+                            except (ValueError, TypeError):
+                                production_by_product_from_logs[product_name] = 0
+                        else:
+                            production_by_product_from_logs[product_name] = 0
+                    else:
+                        production_by_product_from_logs[product_name] = 0
+                else:
+                    production_by_product_from_logs[product_name] = 0
+        else:
+            # Fallback: Verwende production_by_product (alte Logik)
+            production_by_product_from_logs = production_by_product
+        
+        # Jetzt: Für jedes produzierte Produkt den entsprechenden Sattel aus der BOM abziehen
+        # Exakte Stücklisten-Logik: 1 Bike = 1 Sattel (gemäß BOM)
+        # WICHTIG: Verwende production_by_product_from_logs (dynamisch aktualisiert) statt production_by_product
+        for product_name, qty in production_by_product_from_logs.items():
+            if qty > 0 and product_name in MasterData.BOM:
+                required_saddle = MasterData.BOM[product_name]['saddle']
+                # 1 Bike = 1 Sattel (exakte Stücklisten-Logik)
+                if required_saddle in issue_by_saddle:
+                    issue_by_saddle[required_saddle] += qty
 
         for s in saddle_types:
             # Morgens = Gestern Abend + Zugang Heute
@@ -271,7 +335,13 @@ def create_saddle_inventory_log():
     return {s: pd.DataFrame(l) for s, l in saddle_logs.items()}
 
 # Render - OPTIMIERUNG: Nur berechnen wenn noch nicht im Cache
-# Prüfe auch, ob Simulation geändert wurde (dann Cache invalidieren)
+# WICHTIG: Cache-Key muss Szenarien und volume_planning_cache_key berücksichtigen,
+# damit der Cache invalidiert wird wenn Marketing-Szenarien hinzugefügt werden
+from ui.volume_planning_utils import calculate_volume_planning_demand
+calculate_volume_planning_demand()  # Stelle sicher, dass daily_demands_actual aktualisiert ist
+
+# Erweitere Cache-Key um Szenarien und volume_planning_cache_key
+volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
 simulation_hash = None
 if 'simulator' in st.session_state and st.session_state.simulator:
     # Erstelle Hash aus Simulator-Status (für Cache-Invalidierung)
@@ -282,13 +352,27 @@ if 'simulator' in st.session_state and st.session_state.simulator:
     except:
         simulation_hash = None
 
-cache_key = f"material_inventory_{simulation_hash}" if simulation_hash else "material_inventory_default"
+# Cache-Key erweitert um volume_planning_cache_key (enthält bereits Szenario-Fingerprint)
+cache_key = f"material_inventory_{simulation_hash}_{volume_planning_cache_key}" if simulation_hash else f"material_inventory_default_{volume_planning_cache_key}"
+
+# WICHTIG: Prüfe ob Cache-Key sich geändert hat (z.B. durch Szenario-Deaktivierung)
+# Wenn ja, lösche alten Cache
+last_cache_key = st.session_state.get('material_inventory_last_cache_key', None)
+if last_cache_key is not None and last_cache_key != cache_key:
+    # Cache-Key hat sich geändert → lösche alten Cache
+    if 'saddle_logs_cache' in st.session_state:
+        del st.session_state.saddle_logs_cache
+    # Lösche auch alle alten Cache-Keys
+    for key in list(st.session_state.keys()):
+        if key.startswith('material_inventory_') and key != 'material_inventory_last_cache_key':
+            del st.session_state[key]
 
 if cache_key not in st.session_state or 'saddle_logs_cache' not in st.session_state:
     with st.spinner("🔄 Berechne Materiallager..."):
         saddle_logs = create_saddle_inventory_log()
         st.session_state.saddle_logs_cache = saddle_logs
         st.session_state[cache_key] = True
+        st.session_state.material_inventory_last_cache_key = cache_key
 else:
     # Verwende gecachte Daten
     saddle_logs = st.session_state.saddle_logs_cache

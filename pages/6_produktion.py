@@ -44,6 +44,31 @@ render_scenario_sidebar(key_suffix="_produktion")
 # Initialisiere Session State
 initialize_session_state()
 
+# WICHTIG: Stelle sicher, dass daily_demands_actual aktualisiert wird, wenn sich Szenarien ändern
+# Dies ist notwendig, damit die Produktion korrekt aktualisiert wird
+from ui.volume_planning_utils import calculate_volume_planning_demand
+calculate_volume_planning_demand()
+
+# WICHTIG: Stelle sicher, dass Materiallager-Daten verfügbar sind (für Sattel-Bestände)
+# Diese werden benötigt, um die Sattel-Bestände in der Produktionstabelle korrekt anzuzeigen
+if 'material_inventory_data' not in st.session_state:
+    # Importiere create_saddle_inventory_log aus Materiallager-Seite
+    try:
+        import sys
+        import os
+        materiallager_path = os.path.join(os.path.dirname(__file__), "5_materiallager.py")
+        if os.path.exists(materiallager_path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("materiallager_module", materiallager_path)
+            if spec and spec.loader:
+                materiallager_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(materiallager_module)
+                # Berechne Materiallager-Daten (wird gecacht)
+                materiallager_module.create_saddle_inventory_log()
+    except Exception:
+        # Stille Fehlerbehandlung - Materiallager-Daten werden später geladen
+        pass
+
 st.title("🏭 Produktion")
 st.markdown("Übersicht über Produktionsplanung, tatsächliche Produktion und Materialverfügbarkeit")
 
@@ -63,6 +88,7 @@ end_date = date(planning_year + 1, 1, 10)  # Erweitert bis 10.01.2028
 workday_calc = WorkdayCalculator(year=planning_year)
 
 # NEU: Lese Produktionslogs direkt aus dem ProductionPlanner
+# WICHTIG: Cache-Key erweitert um Szenarien, damit Cache invalidiert wird wenn Marketing hinzugefügt wird
 def get_production_logs():
     """Liest Produktionslogs direkt aus dem ProductionPlanner (Single Source of Truth)"""
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
@@ -75,13 +101,257 @@ def get_production_logs():
         st.warning("⚠️ Keine Produktionslogs verfügbar. Bitte führen Sie die Simulation erneut aus.")
         return {}
     
-    # Konvertiere Logs zu DataFrames
+    # WICHTIG: Hole Cache-Key für Szenarien (für Cache-Invalidierung)
+    volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
+    
+    # Erweitere Cache-Key um Szenarien
+    cache_key = f"production_logs_{volume_planning_cache_key}"
+    
+    # Prüfe Cache
+    if cache_key in st.session_state and 'production_logs_cache' in st.session_state:
+        cached_key = st.session_state.get('production_logs_cache_key', None)
+        if cached_key == cache_key:
+            return st.session_state.production_logs_cache
+    
+    # Konvertiere Logs zu DataFrames (ERSTE RUNDE: Nur konvertieren, noch keine dynamischen Updates)
     production_logs = {}
     for product, logs in planner.production_logs.items():
         if logs:
             production_logs[product] = pd.DataFrame(logs)
         else:
             production_logs[product] = pd.DataFrame()
+    
+    # ZWEITE RUNDE: Dynamische Updates (nachdem alle DataFrames erstellt sind)
+    # WICHTIG: Überschreibe "tatsächliche PM" dynamisch (mit Marketing)
+    # Das stellt sicher, dass Marketing sofort berücksichtigt wird
+    # PROBLEM: results_df['Actual_Build'] ist statisch (wird während Simulation berechnet)
+    # LÖSUNG: Berechne Produktion direkt aus daily_demands_actual, berücksichtige Materialverfügbarkeit
+    daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+    material_inventory_data = st.session_state.get('material_inventory_data', {})
+    
+    if daily_demands_actual:
+        for product, df in production_logs.items():
+            if df.empty or 'Datum' not in df.columns or 'tatsächliche PM' not in df.columns:
+                continue
+            
+            saddle_name = MasterData.BOM[product]['saddle']
+            
+            # Iteriere über alle Zeilen und aktualisiere dynamisch
+            for idx, row in df.iterrows():
+                date_str = row.get('Datum', '')
+                if date_str:
+                    try:
+                        from datetime import datetime, timedelta
+                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
+                        # Konvertiere Datum zu Tag-Index
+                        day = (row_date - date(planning_year, 1, 1)).days
+                        
+                        if day in daily_demands_actual:
+                            # Hole Nachfrage mit Marketing
+                            product_demands = daily_demands_actual[day]
+                            product_demand = product_demands.get(product, 0)
+                            
+                            # Hole Materialverfügbarkeit aus production_logs (Sattel-Bestand morgens)
+                            saddle_stock_morning = row.get(saddle_name, 0)
+                            
+                            # Hole Kapazität (Schichtanzahl * Kapazität pro Schicht)
+                            shifts = row.get('Schichtanzahl', 0)
+                            working_hours = MasterData.GLOBAL_CONFIG.get('working_hours_per_shift', 8)
+                            capacity_per_hour = MasterData.GLOBAL_CONFIG.get('capacity_per_hour', 130)
+                            daily_capacity = shifts * working_hours * capacity_per_hour
+                            
+                            # Berechne Gesamtnachfrage (für proportionale Verteilung)
+                            total_demand = sum(product_demands.values())
+                            
+                            # Berechne "tatsächliche PM" dynamisch:
+                            # 1. Anteilige Produktion basierend auf Nachfrage
+                            if total_demand > 0 and daily_capacity > 0:
+                                proportional_share = product_demand / total_demand
+                                proportional_pm = int(daily_capacity * proportional_share)
+                            else:
+                                proportional_pm = 0
+                            
+                            # 2. Begrenze durch Materialverfügbarkeit (Sattel)
+                            # Konvertiere saddle_stock_morning zu float (falls string oder '∞')
+                            try:
+                                if isinstance(saddle_stock_morning, str):
+                                    if saddle_stock_morning == '∞':
+                                        saddle_available = float('inf')
+                                    else:
+                                        saddle_available = float(saddle_stock_morning)
+                                else:
+                                    saddle_available = float(saddle_stock_morning)
+                            except (ValueError, TypeError):
+                                saddle_available = 0.0
+                            
+                            # 3. Tatsächliche PM = MIN(Proportional, Materialverfügbar, Nachfrage)
+                            if saddle_available == float('inf'):
+                                # Unbegrenzt verfügbar
+                                dynamic_pm = min(proportional_pm, product_demand)
+                            else:
+                                # Begrenzt durch Material
+                                dynamic_pm = min(proportional_pm, int(saddle_available), product_demand)
+                            
+                            # Überschreibe "tatsächliche PM" mit dynamisch berechnetem Wert
+                            df.at[idx, 'tatsächliche PM'] = max(0, dynamic_pm)
+                            
+                            # WICHTIG: Aktualisiere Sattel-Bestand dynamisch aus Materiallager
+                            # WICHTIG: material_inventory_data enthält bereits den "Bestand morgens" pro Tag
+                            # Dieser Bestand ist der GESAMTBESTAND für diesen Sattel-Typ (nicht pro Produkt)
+                            # Wenn mehrere Produkte denselben Sattel verwenden, zeigen alle den gleichen Gesamtbestand
+                            if row_date in material_inventory_data:
+                                # Hole "Bestand morgens" direkt aus material_inventory_data
+                                # Dieser Wert ist bereits korrekt berechnet (inkl. Zugang und Verbrauch bis zum VORHERIGEN Tag)
+                                stock_morning = material_inventory_data[row_date].get(saddle_name, 0.0)
+                                
+                                # Überschreibe Sattel-Bestand mit Wert aus Materiallager (Bestand morgens, vor Produktion)
+                                df.at[idx, saddle_name] = int(round(stock_morning)) if stock_morning > 0 else 0
+                    except (ValueError, TypeError) as e:
+                        # Bei Fehler: Behalte ursprünglichen Wert
+                        pass
+        
+        # DRITTE RUNDE: Aktualisiere "fertiggestellte PM" dynamisch (NACH Aktualisierung aller "tatsächliche PM")
+        # WICHTIG: "fertiggestellte PM" = "tatsächliche PM" vom VORHERIGEN ARBEITSTAG
+        # Das stellt sicher, dass "fertiggestellte PM" konsistent mit der neuen "tatsächlichen PM" ist
+        for product, df in production_logs.items():
+            if df.empty or 'Datum' not in df.columns or 'tatsächliche PM' not in df.columns or 'fertiggestellte PM' not in df.columns:
+                continue
+            
+            # Sortiere DataFrame nach Datum (wichtig für korrekte Reihenfolge)
+            # WICHTIG: Reset Index nach Sortierung, damit wir über die Zeilen in sortierter Reihenfolge iterieren können
+            df_sorted = df.copy()
+            df_sorted['_date_parsed'] = pd.to_datetime(df_sorted['Datum'], format=MasterData.DATE_FORMAT)
+            df_sorted = df_sorted.sort_values('_date_parsed').reset_index(drop=True)
+            
+            # Erstelle Mapping: Datum -> Index in sortiertem DataFrame
+            date_to_idx = {}
+            for idx, row in df_sorted.iterrows():
+                date_str = row.get('Datum', '')
+                if date_str:
+                    try:
+                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
+                        date_to_idx[row_date] = idx
+                    except (ValueError, TypeError):
+                        pass
+            
+            # Iteriere über alle Zeilen und aktualisiere "fertiggestellte PM"
+            for idx, row in df_sorted.iterrows():
+                date_str = row.get('Datum', '')
+                if date_str:
+                    try:
+                        from datetime import datetime, timedelta
+                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
+                        
+                        # Finde vorherigen Arbeitstag
+                        prev_date = row_date - timedelta(days=1)
+                        prev_workday_found = False
+                        
+                        # Suche rückwärts nach dem letzten Arbeitstag (maximal 7 Tage)
+                        search_date = prev_date
+                        for _ in range(7):
+                            if search_date < date(planning_year, 1, 1):
+                                break
+                            
+                            # Prüfe ob dieses Datum im DataFrame existiert
+                            if search_date in date_to_idx:
+                                prev_idx = date_to_idx[search_date]
+                                prev_row = df_sorted.iloc[prev_idx]
+                                
+                                # Prüfe ob es ein Arbeitstag war (Schichtanzahl > 0)
+                                prev_shifts = prev_row.get('Schichtanzahl', 0)
+                                if prev_shifts > 0:  # Arbeitstag
+                                    # Hole "tatsächliche PM" vom vorherigen Arbeitstag (bereits dynamisch aktualisiert)
+                                    prev_actual_pm = prev_row.get('tatsächliche PM', 0)
+                                    # Überschreibe "fertiggestellte PM" mit diesem Wert
+                                    df_sorted.at[idx, 'fertiggestellte PM'] = int(round(prev_actual_pm)) if prev_actual_pm > 0 else 0
+                                    prev_workday_found = True
+                                    break
+                            
+                            search_date -= timedelta(days=1)
+                        
+                        # Wenn kein vorheriger Arbeitstag gefunden, setze "fertiggestellte PM" auf 0
+                        if not prev_workday_found:
+                            df_sorted.at[idx, 'fertiggestellte PM'] = 0
+                    except (ValueError, TypeError) as e:
+                        # Bei Fehler: Behalte ursprünglichen Wert
+                        pass
+            
+            # Entferne temporäre Spalte und aktualisiere production_logs
+            if '_date_parsed' in df_sorted.columns:
+                df_sorted = df_sorted.drop(columns=['_date_parsed'])
+            production_logs[product] = df_sorted
+    
+    # VIERTE RUNDE: Aktualisiere Backlog dynamisch (NACH Aktualisierung aller "fertiggestellte PM")
+    # WICHTIG: Backlog = geplante PM (mit Marketing) - fertiggestellte PM + Backlog vom Vortag
+    # Das stellt sicher, dass der Backlog konsistent mit der neuen "fertiggestellten PM" ist
+    if daily_demands_actual:
+        for product, df in production_logs.items():
+            if df.empty or 'Datum' not in df.columns or 'fertiggestellte PM' not in df.columns or 'geplante PM' not in df.columns or 'Backlog' not in df.columns:
+                continue
+            
+            # Sortiere DataFrame nach Datum (wichtig für korrekte Reihenfolge)
+            df_sorted = df.copy()
+            df_sorted['_date_parsed'] = pd.to_datetime(df_sorted['Datum'], format=MasterData.DATE_FORMAT)
+            df_sorted = df_sorted.sort_values('_date_parsed').reset_index(drop=True)
+            
+            # Iteriere über alle Zeilen und aktualisiere Backlog
+            for idx, row in df_sorted.iterrows():
+                date_str = row.get('Datum', '')
+                if date_str:
+                    try:
+                        from datetime import datetime, timedelta
+                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
+                        day = (row_date - date(planning_year, 1, 1)).days
+                        
+                        if day in daily_demands_actual:
+                            # Geplante PM (mit Marketing) = Nachfrage aus daily_demands_actual
+                            product_demands = daily_demands_actual[day]
+                            planned_pm = product_demands.get(product, 0)
+                            
+                            # Fertiggestellte PM (bereits dynamisch aktualisiert)
+                            finished_pm = row.get('fertiggestellte PM', 0)
+                            try:
+                                finished_pm = int(finished_pm) if finished_pm > 0 else 0
+                            except (ValueError, TypeError):
+                                finished_pm = 0
+                            
+                            # Backlog vom Vortag
+                            prev_backlog = 0.0
+                            if idx > 0:
+                                # Verwende Backlog vom vorherigen Tag (bereits aktualisiert)
+                                prev_row = df_sorted.iloc[idx - 1]
+                                prev_backlog = prev_row.get('Backlog', 0)
+                                try:
+                                    prev_backlog = float(prev_backlog) if prev_backlog > 0 else 0.0
+                                except (ValueError, TypeError):
+                                    prev_backlog = 0.0
+                            # else: Erster Tag im DataFrame - Backlog vom Vortag ist 0 (kein vorheriger Tag)
+                            
+                            # Neuer Backlog = geplante PM - fertiggestellte PM + Backlog vom Vortag
+                            new_backlog = max(0.0, planned_pm - finished_pm + prev_backlog)
+                            df_sorted.at[idx, 'Backlog'] = int(round(new_backlog))
+                            
+                            # Aktualisiere auch "geplante PM" mit Marketing-Wert (falls unterschiedlich)
+                            current_planned_pm = row.get('geplante PM', 0)
+                            try:
+                                current_planned_pm = int(current_planned_pm) if current_planned_pm > 0 else 0
+                            except (ValueError, TypeError):
+                                current_planned_pm = 0
+                            
+                            if planned_pm != current_planned_pm:
+                                df_sorted.at[idx, 'geplante PM'] = int(planned_pm)
+                    except (ValueError, TypeError) as e:
+                        # Bei Fehler: Behalte ursprünglichen Wert
+                        pass
+            
+            # Entferne temporäre Spalte und aktualisiere production_logs
+            if '_date_parsed' in df_sorted.columns:
+                df_sorted = df_sorted.drop(columns=['_date_parsed'])
+            production_logs[product] = df_sorted
+    
+    # Cache Ergebnis
+    st.session_state.production_logs_cache = production_logs
+    st.session_state.production_logs_cache_key = cache_key
     
     return production_logs
 
