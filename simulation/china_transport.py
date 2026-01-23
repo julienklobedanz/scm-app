@@ -486,9 +486,64 @@ class ChinaTransportManager:
         Erstellt den DataFrame für Page 3 (Lieferant China) für einen spezifischen Sattel.
         
         PERFORMANCE: Verwendet Cache, um wiederholte Berechnungen zu vermeiden.
+        WICHTIG: Cache wird invalidiert wenn sich Szenarien oder daily_demands_actual ändern.
         """
+        # WICHTIG: Cache-Key muss Szenarien und daily_demands_actual berücksichtigen,
+        # damit der Cache invalidiert wird wenn Marketing-Szenarien hinzugefügt werden
+        try:
+            import streamlit as st
+            # Hole Szenario-Fingerprint (ähnlich wie in calculate_volume_planning_demand)
+            scenario_manager = getattr(self, 'scenario_manager', None)
+            if scenario_manager:
+                from models.scenarios import (
+                    StandardScenario,
+                    MarketingCampaignScenario,
+                    WarehouseDamageScenario,
+                    SupplierBreakdownScenario,
+                    DeliveryProblemScenario,
+                )
+                scenario_items = []
+                for s in getattr(scenario_manager, "scenarios", []):
+                    if isinstance(s, StandardScenario):
+                        continue
+                    base = (
+                        s.__class__.__name__,
+                        getattr(s, "active", True),
+                        getattr(s, "start_day", None),
+                        getattr(s, "end_day", None),
+                    )
+                    if isinstance(s, MarketingCampaignScenario):
+                        extra = (getattr(s, "demand_increase_factor", None),)
+                    elif isinstance(s, WarehouseDamageScenario):
+                        extra = (
+                            getattr(s, "stock_loss_percentage", None),
+                            getattr(s, "affected_component", None),
+                        )
+                    elif isinstance(s, SupplierBreakdownScenario):
+                        extra = (getattr(s, "component_type", None),)
+                    elif isinstance(s, DeliveryProblemScenario):
+                        extra = (
+                            getattr(s, "loss_percentage", None),
+                            getattr(s, "delay_days", None),
+                            getattr(s, "component_type", None),
+                        )
+                    else:
+                        extra = tuple(sorted(vars(s).items()))
+                    scenario_items.append(base + extra)
+                scenario_fingerprint = tuple(sorted(scenario_items))
+            else:
+                scenario_fingerprint = ()
+            
+            # Hole Cache-Key für daily_demands_actual (wenn vorhanden)
+            volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
+            
+            # Erweitere Cache-Key um Szenarien und daily_demands_actual Cache-Key
+            cache_key = (saddle_name, saddle_share, scenario_fingerprint, volume_planning_cache_key)
+        except (ImportError, AttributeError):
+            # Fallback: Wenn Streamlit nicht verfügbar, verwende einfachen Key
+            cache_key = (saddle_name, saddle_share)
+        
         # PERFORMANCE: Cache-Check
-        cache_key = (saddle_name, saddle_share)
         if cache_key in self._supplier_log_cache:
             return self._supplier_log_cache[cache_key]
         

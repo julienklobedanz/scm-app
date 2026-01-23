@@ -7,7 +7,14 @@ import streamlit as st
 from simulation.workday_calculator import WorkdayCalculator
 from simulation.demand_calculator import DemandCalculator
 from config.master_data import MasterData
-from models.scenarios import ScenarioManager
+from models.scenarios import (
+    ScenarioManager,
+    StandardScenario,
+    MarketingCampaignScenario,
+    WarehouseDamageScenario,
+    SupplierBreakdownScenario,
+    DeliveryProblemScenario,
+)
 
 
 def calculate_volume_planning_demand():
@@ -21,12 +28,57 @@ def calculate_volume_planning_demand():
         - daily_demands_actual: dict[day] -> dict[product] -> demand (mit Marketing)
     """
     # Prüfe ob bereits berechnet (mit strikter Prüfung, um Endlosschleifen zu vermeiden)
-    # WICHTIG: Prüfe auch, ob das Jahr übereinstimmt (Cache ist jahr-spezifisch)
+    # WICHTIG: Cache ist abhängig von Jahr, yearly_volume und aktiven Szenarien
     planning_year = st.session_state.get('planning_year', 2027)
-    cached_year = st.session_state.get('volume_planning_year', None)
-    
-    if (st.session_state.get('volume_planning_calculated', False) and 
-        cached_year == planning_year):
+    yearly_volume = st.session_state.get('yearly_volume', 370000)
+
+    def _scenario_fingerprint(scenario_manager: ScenarioManager) -> tuple:
+        """
+        Erzeugt einen stabilen Fingerprint der aktiven Szenarien.
+        Wichtig für Cache-Invalidierung: Wenn sich Szenarien ändern, muss neu berechnet werden.
+        """
+        items: list[tuple] = []
+        for s in getattr(scenario_manager, "scenarios", []):
+            if isinstance(s, StandardScenario):
+                continue
+            # Basisschlüssel
+            base = (
+                s.__class__.__name__,
+                getattr(s, "active", True),
+                getattr(s, "start_day", None),
+                getattr(s, "end_day", None),
+            )
+
+            # Szenario-spezifische Parameter
+            if isinstance(s, MarketingCampaignScenario):
+                extra = (getattr(s, "demand_increase_factor", None),)
+            elif isinstance(s, WarehouseDamageScenario):
+                extra = (
+                    getattr(s, "stock_loss_percentage", None),
+                    getattr(s, "affected_component", None),
+                )
+            elif isinstance(s, SupplierBreakdownScenario):
+                extra = (getattr(s, "component_type", None),)
+            elif isinstance(s, DeliveryProblemScenario):
+                extra = (
+                    getattr(s, "loss_percentage", None),
+                    getattr(s, "delay_days", None),
+                    getattr(s, "component_type", None),
+                )
+            else:
+                # Fallback für zukünftige Szenarien
+                extra = tuple(sorted(vars(s).items()))
+
+            items.append(base + extra)
+
+        # Reihenfolge stabilisieren
+        return tuple(sorted(items))
+
+    scenario_manager = st.session_state.get('scenario_manager', ScenarioManager())
+    cache_key = (planning_year, yearly_volume, _scenario_fingerprint(scenario_manager))
+    cached_key = st.session_state.get('volume_planning_cache_key', None)
+
+    if st.session_state.get('volume_planning_calculated', False) and cached_key == cache_key:
         daily_demands_planned = st.session_state.get('daily_demands_planned', {})
         daily_demands_actual = st.session_state.get('daily_demands_actual', {})
         # WICHTIG: Prüfe nicht nur ob die Dictionaries existieren, sondern auch ob sie vollständig sind
@@ -34,8 +86,6 @@ def calculate_volume_planning_demand():
             return daily_demands_planned, daily_demands_actual
     
     # Berechne Nachfrage
-    yearly_volume = st.session_state.get('yearly_volume', 370000)
-    planning_year = st.session_state.get('planning_year', 2027)
     workday_calc = WorkdayCalculator(year=planning_year)
     
     # Zwei separate DemandCalculator-Instanzen: eine für geplant, eine für tatsächlich
@@ -53,7 +103,6 @@ def calculate_volume_planning_demand():
             break
     
     # Berechne Nachfrage für alle 365 Tage sequenziell
-    scenario_manager = st.session_state.get('scenario_manager', ScenarioManager())
     
     for day in range(365):
         daily_demands_planned[day] = {}
@@ -100,35 +149,40 @@ def calculate_volume_planning_demand():
                 daily_demands_actual[day][product] = 0
     
     # KRITISCH: Korrigiere Summe pro Produkt auf exakt yearly_volume * sales_share (unabhängig von Feiertagsverteilung)
-    # Dies stellt sicher, dass jedes Produkt seine exakte Zielsumme erreicht, auch wenn Reste durch Rundung verloren gehen
-    # WICHTIG: Die Korrektur muss pro Produkt erfolgen, nicht nur für die Gesamtsumme!
+    # Dies stellt sicher, dass jedes Produkt seine exakte Zielsumme erreicht, auch wenn Reste durch Rundung verloren gehen.
+    #
+    # WICHTIG: Diese Korrektur darf NUR für die geplante Nachfrage gelten.
+    # Für die tatsächliche Nachfrage (mit Marketing/Szenarien) würde eine erzwungene Zielsumme sonst zu
+    # negativen Rest-Korrekturen am Jahresende führen und Szenario-Effekte "wegkorrigieren".
+    #
     # OPTIMIERUNG: Berechne Summen effizienter (nur einmal über alle Tage iterieren)
     if last_workday_of_year is not None:
-        for demands_dict in [daily_demands_planned, daily_demands_actual]:
-            # Berechne alle Produktsummen in einem Durchgang (effizienter)
-            product_sums = {product: 0 for product in MasterData.BOM.keys()}
-            for day in range(365):
-                for product in MasterData.BOM.keys():
-                    product_sums[product] += demands_dict[day].get(product, 0)
-            
-            # Korrigiere jedes Produkt
+        demands_dict = daily_demands_planned
+        # Berechne alle Produktsummen in einem Durchgang (effizienter)
+        product_sums = {product: 0 for product in MasterData.BOM.keys()}
+        for day in range(365):
             for product in MasterData.BOM.keys():
-                # Berechne Zielsumme für dieses Produkt: yearly_volume * sales_share
-                sales_share = MasterData.PRODUCT_SALES_SHARES.get(product, 0.0)
-                target_sum = int(yearly_volume * sales_share)
-                
-                # Berechne Differenz
-                difference = target_sum - product_sums[product]
-                
-                # Wenn Differenz != 0, korrigiere am letzten Arbeitstag
-                if difference != 0:
-                    demands_dict[last_workday_of_year][product] = demands_dict[last_workday_of_year].get(product, 0) + difference
+                product_sums[product] += demands_dict[day].get(product, 0)
+        
+        # Korrigiere jedes Produkt
+        for product in MasterData.BOM.keys():
+            # Berechne Zielsumme für dieses Produkt: yearly_volume * sales_share
+            sales_share = MasterData.PRODUCT_SALES_SHARES.get(product, 0.0)
+            target_sum = int(yearly_volume * sales_share)
+            
+            # Berechne Differenz
+            difference = target_sum - product_sums[product]
+            
+            # Wenn Differenz != 0, korrigiere am letzten Arbeitstag
+            if difference != 0:
+                demands_dict[last_workday_of_year][product] = demands_dict[last_workday_of_year].get(product, 0) + difference
     
-    # Speichere im Session State (mit Jahr-Information für Cache-Validierung)
+    # Speichere im Session State (mit Cache-Key für Invalidierung)
     st.session_state.daily_demands_planned = daily_demands_planned
     st.session_state.daily_demands_actual = daily_demands_actual
     st.session_state.volume_planning_calculated = True
-    st.session_state.volume_planning_year = planning_year  # Speichere Jahr für Cache-Validierung
+    st.session_state.volume_planning_year = planning_year  # Backward-compat / Debug
+    st.session_state.volume_planning_cache_key = cache_key
     
     return daily_demands_planned, daily_demands_actual
 

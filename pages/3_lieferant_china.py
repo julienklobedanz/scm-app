@@ -49,6 +49,11 @@ st.markdown("Überwachung der Produktion und des Transports zum Hafen Dengwong -
 # Initialisiere Session State
 initialize_session_state()
 
+# WICHTIG: Stelle sicher, dass daily_demands_actual aktualisiert wird, wenn sich Szenarien ändern
+# Dies ist notwendig, damit der Bestelleingang in der Tabelle korrekt aktualisiert wird
+from ui.volume_planning_utils import calculate_volume_planning_demand
+calculate_volume_planning_demand()
+
 # Happy Path: Automatische Simulation wenn noch keine Ergebnisse vorhanden
 run_happy_path_simulation()
 

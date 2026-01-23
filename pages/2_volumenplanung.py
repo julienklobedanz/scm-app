@@ -14,6 +14,7 @@ from models.scenarios import ScenarioManager
 from simulation.workday_calculator import WorkdayCalculator
 from simulation.demand_calculator import DemandCalculator
 from ui.scenario_sidebar import render_scenario_sidebar
+from ui.volume_planning_utils import calculate_volume_planning_demand
 
 st.set_page_config(page_title="Volumenplanung", layout="wide", page_icon="📅")
 
@@ -48,6 +49,10 @@ st.markdown("Wöchentliche und tägliche Volumenplanung basierend auf Saisonalit
 
 # Szenarien-Sidebar rendern
 render_scenario_sidebar(key_suffix="_volumenplanung")
+
+# WICHTIG: Nachfrage immer über zentrale Funktion laden.
+# Diese Funktion cached im Session State, invalidiert aber nun korrekt bei Szenario-Änderungen.
+daily_demands_planned, daily_demands_actual = calculate_volume_planning_demand()
 
 # Berechne Planung basierend auf jährlichem Volumen
 yearly_volume = st.session_state.get('yearly_volume', 370000)
@@ -159,23 +164,7 @@ with tab1:
     start_date = date(planning_year, 1, 1)
     end_date = date(planning_year, 12, 31)
     
-    # KRITISCH: Berechne Nachfrage für ALLE Tage sequenziell (für korrekte Carry-Over-Logik)
-    # Die DemandCalculator-Instanzen haben einen Zustand (product_remainders), der sequenziell aktualisiert werden muss
-    # WICHTIG: Berechne für alle Produkte gleichzeitig, damit der Rest korrekt weitergegeben wird
-    # WICHTIG: Verwende bereits berechnete Daten aus Session State, falls vorhanden
-    from ui.volume_planning_utils import calculate_volume_planning_demand
-    
-    if st.session_state.get('volume_planning_calculated', False):
-        # Verwende bereits berechnete Daten
-        daily_demands_planned = st.session_state.get('daily_demands_planned', {})
-        daily_demands_actual = st.session_state.get('daily_demands_actual', {})
-    else:
-        # Berechne neu (sollte normalerweise nicht passieren, da calculate_volume_planning_demand beim Start aufgerufen wird)
-        daily_demands_planned, daily_demands_actual = calculate_volume_planning_demand()
-    
-    # Falls Daten noch nicht vollständig sind, berechne sie
-    if not daily_demands_planned or not daily_demands_actual:
-        daily_demands_planned, daily_demands_actual = calculate_volume_planning_demand()
+    # Hinweis: daily_demands_* wurden bereits oben zentral geladen.
     
     # Finde letzten Arbeitstag des Jahres (für korrekte Rest-Aufsummierung)
     last_workday_of_year = None
@@ -384,23 +373,7 @@ with tab1:
 with tab2:
     st.header("Tägliche Volumenplanung")
     
-    # KRITISCH: Berechne Nachfrage für ALLE Tage sequenziell (für korrekte Carry-Over-Logik)
-    # Die tägliche Planung muss die gleiche sequenzielle Berechnung wie die wöchentliche verwenden
-    # WICHTIG: Nutze session_state, um zu prüfen, ob bereits berechnet wurde (Tabs werden separat ausgeführt)
-    # WICHTIG: Verwende die zentrale Funktion calculate_volume_planning_demand() für Konsistenz
-    # Diese Funktion berechnet die Daten einmalig und cached sie im Session State
-    # Die Korrektur-Logik ist bereits in dieser Funktion enthalten
-    if 'daily_demands_planned_tab2' not in st.session_state:
-        # Verwende die zentrale Funktion (bereits berechnet und korrigiert)
-        daily_demands_planned_tab2, daily_demands_actual_tab2 = calculate_volume_planning_demand()
-        
-        # Speichere Kopien für den Tab (um separate Instanzen zu haben, falls nötig)
-        st.session_state.daily_demands_planned_tab2 = daily_demands_planned_tab2
-        st.session_state.daily_demands_actual_tab2 = daily_demands_actual_tab2
-    else:
-        # Nutze bereits berechnete Daten aus session_state
-        daily_demands_planned_tab2 = st.session_state.daily_demands_planned_tab2
-        daily_demands_actual_tab2 = st.session_state.daily_demands_actual_tab2
+    # Hinweis: daily_demands_* wurden bereits oben zentral geladen.
     
     # Filter-Optionen mit Datum
     col1, col2 = st.columns(2)
@@ -449,8 +422,8 @@ with tab2:
         is_non_workday = not is_workday or is_holiday or is_weekend
         
         # Nutze bereits berechnete Nachfragen (sequenziell berechnet)
-        day_planned = daily_demands_planned_tab2.get(day, {})
-        day_actual = daily_demands_actual_tab2.get(day, {})
+        day_planned = daily_demands_planned.get(day, {})
+        day_actual = daily_demands_actual.get(day, {})
         
         product_demands_planned = {}
         product_demands_actual = {}
@@ -494,7 +467,7 @@ with tab2:
     for day in range(365):
         if day not in st.session_state.daily_demand_data:
             # Nutze die bereits sequenziell berechneten Daten
-            product_demands_actual = daily_demands_actual_tab2.get(day, {})
+            product_demands_actual = daily_demands_actual.get(day, {})
             st.session_state.daily_demand_data[day] = product_demands_actual
     
     # Erstelle Multi-Index Spalten
