@@ -28,10 +28,11 @@ st.markdown("""
 # Initialisiere Session State
 initialize_session_state()
 
-# WICHTIG: Happy Path Simulation SOFORT beim Start ausführen (vor dem Rendering)
-# Dies stellt sicher, dass die Simulation im Hintergrund läuft, auch wenn keine Page geöffnet wird
-from ui.utils import run_happy_path_simulation
-run_happy_path_simulation()
+# WICHTIG: Initialisiere ALLE Page-Berechnungen beim App-Start
+# Dies stellt sicher, dass alle Caches verfügbar sind, bevor Seiten geladen werden
+# Dadurch müssen Seiten nicht erst besucht werden, damit ihre Berechnungen starten
+from ui.page_initialization import initialize_all_page_calculations
+initialize_all_page_calculations()
 
 st.title("📊 SCOR Metriken")
 st.markdown("Supply Chain Operations Reference (SCOR) Metriken")

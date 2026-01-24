@@ -85,28 +85,46 @@ class ProductionPlanner:
             self._log_production(day, production_by_product, empty_zeros, empty_floats, empty_floats, empty_zeros, 0, 0.0)
             return production_by_product
         
-        # 1. Hole Tagesbedarf pro Produkt vom DemandCalculator
+        # 1. Hole Tagesbedarf pro Produkt aus Volumenplanung (Single Source of Truth)
+        # WICHTIG: calculate_volume_planning_demand() wird VOR plan_daily_production() aufgerufen,
+        # daher sollte daily_demands_actual IMMER verfügbar sein
         product_demands = {}
-        if self.demand_calculator:
-            is_last_workday_of_year = False
-            if self.workday_calculator.is_workday(day):
-                has_future_workdays = False
-                for future_day in range(day + 1, 365):
-                    if self.workday_calculator.is_workday(future_day):
-                        has_future_workdays = True
-                        break
-                is_last_workday_of_year = not has_future_workdays
-            
-            product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
-                day, marketing_add_ons, is_last_workday_of_year
-            )
-        else:
-            # Fallback
-            total_share = sum(self.master_data.PRODUCT_SALES_SHARES.values())
-            estimated_daily_target = self.master_data.GLOBAL_CONFIG.get('total_volume', 370000) / 365
-            for product in self.master_data.BOM.keys():
-                share = self.master_data.PRODUCT_SALES_SHARES.get(product, 0.0) / total_share if total_share > 0 else 0
-                product_demands[product] = int(estimated_daily_target * share)
+        
+        # Versuche aus Cache zu lesen (Single Source of Truth)
+        try:
+            import streamlit as st
+            daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+            if day in daily_demands_actual and daily_demands_actual[day]:
+                # Verwende Nachfrage aus Volumenplanung (mit Marketing bereits enthalten)
+                product_demands = daily_demands_actual[day].copy()
+            else:
+                # Cache fehlt - das sollte nicht passieren
+                raise ValueError(
+                    f"daily_demands_actual fehlt für Tag {day}. "
+                    f"Bitte rufen Sie calculate_volume_planning_demand() auf, bevor Sie plan_daily_production() aufrufen."
+                )
+        except ImportError:
+            # Streamlit nicht verfügbar (z.B. Unit-Tests) - verwende DemandCalculator als Fallback
+            if self.demand_calculator:
+                is_last_workday_of_year = False
+                if self.workday_calculator.is_workday(day):
+                    has_future_workdays = False
+                    for future_day in range(day + 1, 365):
+                        if self.workday_calculator.is_workday(future_day):
+                            has_future_workdays = True
+                            break
+                    is_last_workday_of_year = not has_future_workdays
+                
+                product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
+                    day, marketing_add_ons, is_last_workday_of_year
+                )
+            else:
+                # Fallback für Unit-Tests ohne DemandCalculator
+                total_share = sum(self.master_data.PRODUCT_SALES_SHARES.values())
+                estimated_daily_target = self.master_data.GLOBAL_CONFIG.get('total_volume', 370000) / 365
+                for product in self.master_data.BOM.keys():
+                    share = self.master_data.PRODUCT_SALES_SHARES.get(product, 0.0) / total_share if total_share > 0 else 0
+                    product_demands[product] = int(estimated_daily_target * share)
         
         # 2. Addiere Backlog zum Bedarf
         production_demand_by_product = {}
@@ -227,7 +245,7 @@ class ProductionPlanner:
                 
                 # Wenn Summe < Kapazität: MIN(Rest_Kapazität, Minimale, Rest_Bedarf), sonst 0
                 remaining_capacity = daily_capacity - total_scheduled_so_far
-                remaining_demand = demand - base_qty
+                remaining_demand = max(0.0, demand - base_qty)  # Stelle sicher, dass es nicht negativ ist
                 
                 if total_scheduled_so_far < daily_capacity and remaining_capacity > 0:
                     rest_production = min(remaining_capacity, minimal, remaining_demand)
@@ -235,7 +253,9 @@ class ProductionPlanner:
                 else:
                     scheduled_qty = base_qty
             
-            scheduled_qty = max(0.0, scheduled_qty)
+            # KRITISCH: Stelle sicher, dass scheduled_qty nicht größer ist als demand
+            # Dies verhindert, dass mehr produziert wird als der Produktionsbedarf erlaubt
+            scheduled_qty = min(max(0.0, scheduled_qty), demand)
             scheduled_production_by_product[product] = scheduled_qty
             total_scheduled_so_far += scheduled_qty
             
@@ -246,7 +266,7 @@ class ProductionPlanner:
                 # Aktualisiere kumulierten Verbrauch
                 self._consumption_by_saddle[required_saddle_type] = self._consumption_by_saddle.get(required_saddle_type, 0.0) + float(scheduled_qty)
         
-        # Sicherheitsprüfung: Stelle sicher, dass die Summe nicht die Kapazität überschreitet
+        # Sicherheitsprüfung 1: Stelle sicher, dass die Summe nicht die Kapazität überschreitet
         total_scheduled = sum(scheduled_production_by_product.values())
         if total_scheduled > daily_capacity:
             # Proportionale Reduktion, falls die Summe die Kapazität überschreitet
@@ -264,7 +284,46 @@ class ProductionPlanner:
                     stock_by_saddle_type[required_saddle_type] = stock_by_saddle_type.get(required_saddle_type, 0.0) + reduction
                     self._consumption_by_saddle[required_saddle_type] = max(0.0, self._consumption_by_saddle.get(required_saddle_type, 0.0) - reduction)
         
-        # 8. Tatsächliche PM = "zu produzierende Mengen" die HEUTE geplant werden
+        # Sicherheitsprüfung 2: Stelle sicher, dass die Summe nicht den Produktionsbedarf überschreitet
+        total_production_demand = sum(production_demand_by_product.values())
+        total_scheduled = sum(scheduled_production_by_product.values())
+        if total_scheduled > total_production_demand:
+            # Proportionale Reduktion auf Produktionsbedarf
+            scale_factor = total_production_demand / total_scheduled if total_scheduled > 0 else 0
+            # WICHTIG: Bei Reduktion muss auch Material zurückgegeben werden
+            for product in sorted_products:
+                old_qty = scheduled_production_by_product.get(product, 0.0)
+                new_qty = old_qty * scale_factor
+                reduction = old_qty - new_qty
+                scheduled_production_by_product[product] = new_qty
+                
+                # Gebe reduziertes Material zurück
+                if reduction > 0:
+                    required_saddle_type = self.master_data.BOM[product]['saddle']
+                    stock_by_saddle_type[required_saddle_type] = stock_by_saddle_type.get(required_saddle_type, 0.0) + reduction
+                    self._consumption_by_saddle[required_saddle_type] = max(0.0, self._consumption_by_saddle.get(required_saddle_type, 0.0) - reduction)
+        
+        # 8. Finale Prüfung - Stelle sicher, dass jedes Produkt nicht mehr produziert als sein Produktionsbedarf
+        # Diese Prüfung ist kritisch, um sicherzustellen, dass niemals mehr produziert wird als geplant (wenn Backlog = 0)
+        # WICHTIG: Wenn die Produktion reduziert wird, muss auch Material zurückgegeben werden
+        for product in products_list:
+            demand = production_demand_by_product.get(product, 0.0)
+            scheduled_qty = scheduled_production_by_product.get(product, 0.0)
+            
+            # KRITISCH: Stelle sicher, dass scheduled_qty nicht größer ist als demand
+            # Dies verhindert, dass mehr produziert wird als der Produktionsbedarf erlaubt
+            if scheduled_qty > demand:
+                old_qty = scheduled_production_by_product[product]
+                scheduled_production_by_product[product] = demand
+                reduction = old_qty - demand
+                
+                # Gebe reduziertes Material zurück
+                if reduction > 0:
+                    required_saddle_type = self.master_data.BOM[product]['saddle']
+                    stock_by_saddle_type[required_saddle_type] = stock_by_saddle_type.get(required_saddle_type, 0.0) + reduction
+                    self._consumption_by_saddle[required_saddle_type] = max(0.0, self._consumption_by_saddle.get(required_saddle_type, 0.0) - reduction)
+        
+        # 9. Tatsächliche PM = "zu produzierende Mengen" die HEUTE geplant werden
         # WICHTIG: "Tatsächliche PM" sind die "zu produzierende Mengen", die heute geplant werden
         # (NICHT die von gestern - das wäre "fertiggestellte PM")
         production_by_product = {}
@@ -348,19 +407,20 @@ class ProductionPlanner:
                 finished_pm_by_product[product] = 0
         
         # 7. Aktualisiere Backlog
-        # Backlog = geplante PM heute - fertiggestellte PM heute + Backlog gestern
-        # WICHTIG: "geplante PM" = Tagesbedarf OHNE Backlog (nicht production_demand_by_product!)
-        # WICHTIG: "fertiggestellte PM" = Produktion, die HEUTE fertiggestellt wird (von gestern produziert)
-        # Das ist die Produktion, die tatsächlich zur Bedarfsdeckung beiträgt
+        # KRITISCH: Backlog wird basierend auf der HEUTE GESTARTETEN Produktion reduziert, nicht erst bei Fertigstellung
+        # Dies verhindert den "Echo-Effekt", bei dem der Backlog nicht reduziert wird, obwohl produziert wurde
+        # Backlog = (geplante PM + Backlog gestern) - tatsächliche PM (heute gestartet)
+        # Backlog ist das, was wir heute NICHT in die Produktion geben konnten
         for product in self.master_data.BOM.keys():
             # Geplante PM heute (Tagesbedarf OHNE Backlog)
             planned_pm = product_demands.get(product, 0)
-            # Fertiggestellte PM heute (Produktion von gestern, die heute fertiggestellt wird)
-            finished_pm = finished_pm_by_product.get(product, 0)
             # Backlog gestern
             old_backlog = self.backlog.get(product, 0.0)
-            # Neuer Backlog = geplante PM - fertiggestellte PM + Backlog gestern
-            self.backlog[product] = max(0.0, planned_pm - finished_pm + old_backlog)
+            # Tatsächliche PM heute (Produktion, die HEUTE gestartet wird)
+            actual_started = production_by_product.get(product, 0)
+            # Neuer Backlog = (geplante PM + Backlog gestern) - tatsächliche PM (heute gestartet)
+            # Dies stellt sicher, dass der Backlog sofort reduziert wird, wenn produziert wird
+            self.backlog[product] = max(0.0, (planned_pm + old_backlog) - actual_started)
         
         # 8. Speichere Produktionsplan
         self.production_plan[day] = production_by_product

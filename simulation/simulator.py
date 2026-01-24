@@ -280,38 +280,23 @@ class Simulator:
                 
                 is_last_workday_of_year = (day == self._last_workday_calculated) if self._last_workday_calculated is not None else False
             
-            # WICHTIG: Verwende Nachfrage aus Volumenplanung, falls vorhanden
+            # WICHTIG: Verwende Nachfrage aus Volumenplanung (Single Source of Truth)
             # Die Volumenplanung ist die Basis, der Simulator verarbeitet diese Daten weiter
-            # Prüfe ob Nachfrage aus Volumenplanung verfügbar ist
-            product_demands = None
-            if STREAMLIT_AVAILABLE:
-                try:
-                    # Versuche Nachfrage aus Volumenplanung zu holen (tatsächliche Nachfrage mit Marketing)
-                    daily_demands_actual = st.session_state.get('daily_demands_actual', {})
-                    if day in daily_demands_actual and daily_demands_actual[day]:
-                        # Verwende Nachfrage aus Volumenplanung
-                        product_demands = daily_demands_actual[day].copy()
-                    else:
-                        # Fallback: Berechne Nachfrage selbst (wenn Volumenplanung noch nicht ausgeführt wurde)
-                        product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
-                            day, 
-                            marketing_add_ons,
-                            is_last_workday_of_year
-                        )
-                except Exception:
-                    # Fallback: Berechne Nachfrage selbst (wenn Streamlit nicht verfügbar oder Fehler)
-                    product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
-                        day, 
-                        marketing_add_ons,
-                        is_last_workday_of_year
-                    )
-            else:
-                # Fallback: Berechne Nachfrage selbst (wenn Streamlit nicht verfügbar)
-                product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
-                    day, 
-                    marketing_add_ons,
-                    is_last_workday_of_year
+            # calculate_volume_planning_demand() wird VOR simulator.run() aufgerufen,
+            # daher sollte daily_demands_actual IMMER verfügbar sein
+            if not STREAMLIT_AVAILABLE:
+                raise RuntimeError("Streamlit ist nicht verfügbar. Simulator benötigt daily_demands_actual aus session_state.")
+            
+            # Versuche Nachfrage aus Volumenplanung zu holen (tatsächliche Nachfrage mit Marketing)
+            daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+            if day not in daily_demands_actual or not daily_demands_actual[day]:
+                raise ValueError(
+                    f"daily_demands_actual fehlt für Tag {day}. "
+                    f"Bitte rufen Sie calculate_volume_planning_demand() auf, bevor Sie simulator.run() aufrufen."
                 )
+            
+            # Verwende Nachfrage aus Volumenplanung (Single Source of Truth)
+            product_demands = daily_demands_actual[day].copy()
             
             # Gesamtnachfrage (ganzzahlig)
             daily_target = sum(product_demands.values())
