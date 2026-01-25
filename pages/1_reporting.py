@@ -136,8 +136,9 @@ tab1, tab2, tab3 = st.tabs(["📅 Volumenplanung", "📦 Material", "🏭 Produk
 
 with tab1:
     # Lade Volumenplanungsdaten
-    if not st.session_state.get('volume_planning_calculated', False):
-        calculate_volume_planning_demand()
+    # WICHTIG: Immer aufrufen - Funktion prüft selbst, ob Cache noch gültig ist
+    # (durch Vergleich des Cache-Keys mit aktiven Szenarien)
+    calculate_volume_planning_demand()
     
     daily_demands_planned = st.session_state.get('daily_demands_planned', {})
     daily_demands_actual = st.session_state.get('daily_demands_actual', {})
@@ -346,6 +347,18 @@ with tab1:
 with tab2:
     st.header("📦 KPI-Dashboard Materiallager")
     
+    # WICHTIG: Stelle sicher, dass alle abhängigen Daten aktualisiert sind
+    # 1. Volumenplanung (Basis für alle anderen Berechnungen)
+    calculate_volume_planning_demand()
+    
+    # 2. Produktionslogs (invalidiert Material-Cache nach Berechnung)
+    from ui.production_calculations import calculate_production_logs
+    calculate_production_logs()
+    
+    # 3. Materialinventar (neu berechnet mit aktualisierten Produktionsdaten)
+    from ui.material_calculations import calculate_material_inventory
+    calculate_material_inventory()
+    
     # Hole Materiallager-Daten
     saddle_inventory_data = get_saddle_inventory_data()
     
@@ -524,14 +537,34 @@ with tab3:
     # KPI-Dashboard Produktion
     st.header("🏭 KPI-Dashboard Produktion")
     
+    # WICHTIG: Stelle sicher, dass alle abhängigen Daten aktualisiert sind
+    # 1. Volumenplanung (Basis für Produktionsberechnung)
+    calculate_volume_planning_demand()
+    
+    # 2. Produktionslogs (dynamisch, berücksichtigt Marketing)
+    from ui.production_calculations import calculate_production_logs
+    production_logs_cache = calculate_production_logs()
+    
     # Hole KPIs aus Session State
     kpis = st.session_state.get('kpis', {})
     service_level = kpis.get('service_level', 0.0)
     total_demand = kpis.get('total_demand', 0.0)
     total_produced = kpis.get('total_produced', 0.0)
     
-    # Falls KPIs nicht vorhanden, berechne sie aus results_df
-    if not kpis or service_level == 0.0:
+    # Berechne KPIs aus production_logs_cache (dynamisch, mit Marketing)
+    if production_logs_cache:
+        daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+        total_demand = sum(sum(day_demand.values()) for day_demand in daily_demands_actual.values())
+        
+        # Summiere tatsächliche PM aus production_logs_cache
+        total_produced = 0.0
+        for product, df in production_logs_cache.items():
+            if not df.empty and 'tatsächliche PM' in df.columns:
+                total_produced += df['tatsächliche PM'].sum()
+        
+        service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
+    elif not kpis or service_level == 0.0:
+        # Fallback: Berechne aus results_df (statisch)
         total_demand = results_df['Daily_Target'].sum() if 'Daily_Target' in results_df.columns else 0.0
         total_produced = results_df['Actual_Build'].sum() if 'Actual_Build' in results_df.columns else 0.0
         service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
@@ -577,7 +610,8 @@ with tab3:
     # Gesamtübersicht Produktion
     st.subheader("Gesamtübersicht")
     
-    production_logs = get_production_logs()
+    # Verwende production_logs_cache (dynamisch, mit Marketing) statt statischer production_logs
+    production_logs = production_logs_cache if production_logs_cache else get_production_logs()
     
     if not production_logs:
         st.warning("⚠️ Keine Produktionslogs verfügbar.")
@@ -596,11 +630,20 @@ with tab3:
             total_actual = 0.0
             
             for product, logs in production_logs.items():
-                if logs and day < len(logs):
-                    log_entry = logs[day]
-                    total_backlog += log_entry.get('Backlog', 0.0)
-                    total_planned += log_entry.get('geplante PM', 0.0)
-                    total_actual += log_entry.get('tatsächliche PM', 0.0)
+                # Handle DataFrame (production_logs_cache) oder Liste (statische production_logs)
+                if isinstance(logs, pd.DataFrame):
+                    if not logs.empty and day < len(logs):
+                        log_entry = logs.iloc[day]
+                        total_backlog += log_entry.get('Backlog', 0.0)
+                        total_planned += log_entry.get('geplante PM', 0.0)
+                        total_actual += log_entry.get('tatsächliche PM', 0.0)
+                else:
+                    # Liste (statische production_logs)
+                    if logs and day < len(logs):
+                        log_entry = logs[day]
+                        total_backlog += log_entry.get('Backlog', 0.0)
+                        total_planned += log_entry.get('geplante PM', 0.0)
+                        total_actual += log_entry.get('tatsächliche PM', 0.0)
             
             total_backlog_data.append({
                 'date': current_date,
@@ -661,20 +704,33 @@ with tab3:
         st.subheader("Produktion einzelner Fahrräder")
         
         for product in sorted(production_logs.keys()):
-            if not production_logs[product]:
-                continue
+            logs = production_logs[product]
+            
+            # Handle DataFrame (production_logs_cache) oder Liste (statische production_logs)
+            if isinstance(logs, pd.DataFrame):
+                if logs.empty:
+                    continue
+                max_day = min(365, len(logs))
+            else:
+                if not logs:
+                    continue
+                max_day = min(365, len(logs))
             
             st.write(f"**{product}**")
             
             backlog_data = []
             deviation_data = []
             
-            max_day = min(365, len(production_logs[product]))
             date_cache = {day: workday_calc.get_date_from_day(day) for day in range(max_day)}
             
             for day in range(max_day):
                 current_date = date_cache[day]
-                log_entry = production_logs[product][day]
+                
+                # Handle DataFrame oder Liste
+                if isinstance(logs, pd.DataFrame):
+                    log_entry = logs.iloc[day]
+                else:
+                    log_entry = logs[day]
                 
                 backlog_data.append({
                     'date': current_date,
