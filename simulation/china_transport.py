@@ -578,8 +578,8 @@ class ChinaTransportManager:
         # Berechne Shares für alle Sättel (einmalig)
         saddle_shares_all = self.master_data.calculate_saddle_shares()
         
-        # Tägliche Produktion pro Sattel sammeln (aus transport_status)
-        # daily_prod_all[day_idx][sattel] = menge
+        # Tägliche Produktion pro Sattel (wird aus Volumenplanung gefüllt, siehe Block unten;
+        # dieselbe Quelle wie Produktionsmenge und get_inbound → konsistente Warenausgang-/Inbound-Summen)
         daily_prod_all = {day_idx: {s: 0.0 for s in all_saddles} for day_idx in range(total_days)}
         
         # Daten für die finale Tabelle (nur für den angefragten saddle_name)
@@ -685,26 +685,34 @@ class ChinaTransportManager:
             if 0 <= production_end_day_idx < total_days:
                 total_production = sum(order_quantities)
                 raw_data_map[production_end_day_idx]['prod'] = total_production
+                # Produktionsdatum in dieser Zeile setzen, damit get_inbound_log_dataframe
+                # Zeilen mit Produktionsmenge > 0 verarbeiten kann (prod_date für daily_prod_all)
+                prod_date = start_date + timedelta(days=production_end_day_idx)
+                raw_data_map[production_end_day_idx]['production_date_str'] = prod_date.strftime(self.master_data.DATE_FORMAT)
         
-        # Scan Transport Status (für Pool-Berechnung, Versand, Störungen)
+        # Pool (daily_prod_all) aus Volumenplanung für ALLE Sättel füllen – gleiche Quelle wie
+        # Produktionsmenge und wie get_inbound. Dann Warenausgang und Inbound-Summen sind konsistent.
+        for day_idx in range(total_days):
+            curr_date = start_date + timedelta(days=day_idx)
+            for s in all_saddles:
+                order_qty = self._calculate_order_quantity_from_volume_planning(curr_date, s, daily_demands_actual_cache)
+                if order_qty <= 0:
+                    continue
+                order_day = (curr_date - date(self.workday_calculator.year, 1, 1)).days
+                released_day = self._get_next_workday(order_day, use_chinese_holidays=True)
+                released_date = self.workday_calculator.get_date_from_day(released_day)
+                released_day_idx = (released_date - start_date).days
+                if released_day_idx < 0 or released_day_idx >= total_days:
+                    continue
+                production_end_day = self._add_workdays(released_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
+                production_end_date = self.workday_calculator.get_date_from_day(production_end_day)
+                prod_day_idx = (production_end_date - start_date).days
+                if 0 <= prod_day_idx < total_days:
+                    daily_prod_all[prod_day_idx][s] += order_qty
+        
+        # Scan Transport Status (nur noch für Störungen/Breakdown; Pool kommt aus Volumenplanung)
         for (o_day, o_id), status in self.transport_status.items():
-            # Produktions-Tag (für den Pool relevant)
             p_day_sim = status.get('production_end_day')
-            
-            # Menge (Pool-Menge) - Originalmenge, nicht nach Verlusten
-            qty_original = status.get('quantity', 0.0)
-            qty_pool = status.get('actual_quantity', qty_original)
-            
-            # Produktion für Pool-Berechnung registrieren
-            if p_day_sim is not None:
-                p_date = self.workday_calculator.get_date_from_day(p_day_sim)
-                day_offset = (p_date - start_date).days
-                if 0 <= day_offset < total_days:
-                    # Wir verteilen diese Pool-Produktion auf alle Sättel anhand ihrer Shares
-                    for s in all_saddles:
-                        s_share = saddle_shares_all.get(s, 0.0)
-                        daily_prod_all[day_offset][s] += qty_pool * s_share
-            
             # Prüfe auf Störungen (für Breakdown-Spalte)
             if p_day_sim is not None:
                 p_date = self.workday_calculator.get_date_from_day(p_day_sim)
@@ -736,7 +744,11 @@ class ChinaTransportManager:
                 total_accumulated += acc
             
             # 2. Losgröße berechnen
-            current_lot_size = int(total_accumulated / lot_size) * lot_size
+            # Am letzten Tag: Restbestand mitversenden, damit sum(Produktionsmenge) = sum(Warenausgang)
+            if day_idx == total_days - 1 and total_accumulated > 0:
+                current_lot_size = int(round(total_accumulated))
+            else:
+                current_lot_size = int(total_accumulated / lot_size) * lot_size
             
             # 3. Wenn Versand möglich -> Verteilen
             shipments_today = {s: 0.0 for s in all_saddles}
@@ -783,7 +795,6 @@ class ChinaTransportManager:
         # ---------------------------------------------------------
         table_rows = []
         previous_stock = 0.0  # Warenbestand vom Vortag
-        cumulative_shipped = 0.0  # Kumulierte bereits verschickte Menge
         
         for day_idx in range(total_days):
             raw = raw_data_map[day_idx]
@@ -796,45 +807,32 @@ class ChinaTransportManager:
                 production_qty = 0
             else:
                 # Produktionsmenge = Freigegebene Bestellungen für das Produktionsdatum
-                # Wir müssen die freigegebenen Bestellungen finden, deren Produktionsdatum heute ist
                 production_qty = raw['prod']
             
-            # WARENBESTAND: Vorheriger Bestand + Produziert - Ausgangsmenge
-            # WICHTIG: Berechne Warenbestand VOR Warenausgang
+            # WARENBESTAND: Vorheriger Bestand + Produktion (vor dem heutigen Versand)
+            # current_stock = kumulierte Produktion - kumulierte Versände bis gestern
             current_stock = previous_stock + production_qty
             
-            # WARENAUSGANG: Wenn Warenbestand - bereits verschickt >= 0: Warenbestand - bereits verschickt, sonst Warenbestand
-            # Das bedeutet: Die verschickte Menge ist MIN(Warenbestand, bereits verschickt)
-            planned_shipment_qty = shipment_results[day_idx]  # Bereits berechnete Versandmenge (aus Pool-Logik)
+            # WARENAUSGANG: Versand = min(geplante Versandmenge aus Pool-Logik, verfügbarer Bestand)
+            # KORREKTUR: current_stock IST bereits der verfügbare Bestand (Produktion kum. - Versand kum. bis gestern).
+            # Eine Formel "current_stock - cumulative_shipped" wäre ein doppelter Abzug und würde den
+            # Warenausgang fälschlich begrenzen → Bestand würde anwachsen. Richtig: min(planned, current_stock).
+            planned_shipment_qty = shipment_results[day_idx]
             
             # Prüfe ob es DeliveryProblemScenario gibt, die zu 100% Verlust führen
             if self.scenario_manager:
-                # Konvertiere Datum zu Tag-Index
                 day_index = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(day_index)
                 for scenario in delivery_problems:
                     if scenario.component_type == 'saddles' and scenario.loss_percentage >= 1.0:
-                        # 100% Verlust = "Ausgefallen"
                         shipment_qty = 0
                         break
                 else:
-                    # Kein 100% Verlust - wende Formel an
-                    # Wenn Warenbestand - bereits verschickt >= 0: Warenbestand - bereits verschickt, sonst Warenbestand
-                    if current_stock - cumulative_shipped >= 0:
-                        shipment_qty = min(planned_shipment_qty, current_stock - cumulative_shipped)
-                    else:
-                        shipment_qty = min(planned_shipment_qty, current_stock)
-            else:
-                # Kein Scenario Manager - wende Formel an
-                if current_stock - cumulative_shipped >= 0:
-                    shipment_qty = min(planned_shipment_qty, current_stock - cumulative_shipped)
-                else:
                     shipment_qty = min(planned_shipment_qty, current_stock)
+            else:
+                shipment_qty = min(planned_shipment_qty, current_stock)
             
-            # Aktualisiere kumulierte verschickte Menge
-            cumulative_shipped += shipment_qty
-            
-            # Aktualisiere Warenbestand nach Versand
+            # Warenbestand nach Versand
             current_stock = current_stock - shipment_qty
             previous_stock = current_stock  # Für nächsten Tag
             
