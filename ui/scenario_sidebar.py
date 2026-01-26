@@ -63,6 +63,9 @@ def render_scenario_sidebar(key_suffix=""):
                     demand_increase_factor=demand_factor
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
+                # WICHTIG: Invalidiere Volumenplanung-Cache, damit sie mit neuen Szenarien neu berechnet wird
+                st.session_state.volume_planning_calculated = False
+                st.session_state.volume_planning_cache_key = None
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
                 st.rerun()
         
@@ -83,6 +86,9 @@ def render_scenario_sidebar(key_suffix=""):
                     affected_component="saddles"
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
+                # WICHTIG: Invalidiere Volumenplanung-Cache, damit sie mit neuen Szenarien neu berechnet wird
+                st.session_state.volume_planning_calculated = False
+                st.session_state.volume_planning_cache_key = None
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
                 st.rerun()
         
@@ -102,6 +108,9 @@ def render_scenario_sidebar(key_suffix=""):
                     component_type="saddles"  # Immer Sättel
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
+                # WICHTIG: Invalidiere Volumenplanung-Cache, damit sie mit neuen Szenarien neu berechnet wird
+                st.session_state.volume_planning_calculated = False
+                st.session_state.volume_planning_cache_key = None
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
                 st.rerun()
         
@@ -125,6 +134,9 @@ def render_scenario_sidebar(key_suffix=""):
                     delay_days=delay
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
+                # WICHTIG: Invalidiere Volumenplanung-Cache, damit sie mit neuen Szenarien neu berechnet wird
+                st.session_state.volume_planning_calculated = False
+                st.session_state.volume_planning_cache_key = None
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
                 st.rerun()
         
@@ -188,7 +200,11 @@ def render_scenario_sidebar(key_suffix=""):
             st.session_state.simulation_running = False
             st.session_state.simulation_started = False
             st.session_state.simulation_year = None
+            # WICHTIG: Setze Volumenplanung zurück, damit sie mit aktuellen Szenarien neu berechnet wird
             st.session_state.volume_planning_calculated = False
+            st.session_state.volume_planning_cache_key = None
+            st.session_state.daily_demands_planned = {}
+            st.session_state.daily_demands_actual = {}
             st.session_state.run_simulation = True
             st.session_state.manual_restart = True
             st.success("🔄 Cache gelöscht - Simulation wird neu gestartet...")
