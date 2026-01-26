@@ -1177,32 +1177,36 @@ class ChinaTransportManager:
             if supplier_df.empty:
                 continue
             
-            # Iteriere über alle Zeilen und sammle Produktionsmengen
+            # KORRIGIERTE LOGIK: Lese Produktionsmenge direkt aus der Zeile
+            # Das Produktionsdatum (String) und die Produktionsmenge stehen in unterschiedlichen Zeilen:
+            # - Produktionsdatum (String) steht in der Zeile des Freigabedatums (Menge oft 0)
+            # - Produktionsmenge steht in der Zeile, wo die Produktion fertig ist (Datum-String leer)
+            # Lösung: Verwende das Datum der Zeile selbst, wenn die Produktionsmenge > 0 ist
             for _, row in supplier_df.iterrows():
-                production_date_str = row.get('Produktionsdatum', '')
-                production_qty = row.get('Produktionsmenge', 0)
+                # Hole Menge (sicherstellen, dass es float ist)
+                qty_val = row.get('Produktionsmenge', 0)
+                try:
+                    qty = float(qty_val) if qty_val != '' else 0.0
+                except (ValueError, TypeError):
+                    qty = 0.0
                 
-                if production_date_str and production_qty:
-                    try:
-                        from datetime import datetime
-                        prod_date = datetime.strptime(production_date_str, self.master_data.DATE_FORMAT).date()
-                        day_offset = (prod_date - start_date).days
-                        
-                        # PERFORMANCE: Nur relevante Tage verarbeiten
-                        if 0 <= day_offset < total_days:
-                            effective_day = day_offset
-                            last_production_day = max(last_production_day, effective_day)  # OPTIMIERUNG
+                # Wenn Produktion vorhanden ist, nehmen wir das DATUM DER ZEILE als Produktionsdatum
+                if qty > 0.001:
+                    date_str = row.get('Datum', '')
+                    if date_str:
+                        try:
+                            from datetime import datetime
+                            # Wir nutzen das Datum der Zeile selbst!
+                            row_date = datetime.strptime(date_str, self.master_data.DATE_FORMAT).date()
+                            effective_day = (row_date - start_date).days
                             
-                            # Konvertiere production_qty zu float (falls string)
-                            try:
-                                qty = float(production_qty) if isinstance(production_qty, str) else float(production_qty)
-                            except (ValueError, TypeError):
-                                qty = 0.0
-                            
-                            # Exakte Zuteilung in den Eimer für diesen Sattel-Typ
-                            daily_prod_all[effective_day][saddle_name] += qty
-                    except (ValueError, TypeError):
-                        continue
+                            # PERFORMANCE: Nur relevante Tage verarbeiten
+                            if 0 <= effective_day < total_days:
+                                # Exakte Zuteilung in den Eimer für diesen Sattel-Typ
+                                daily_prod_all[effective_day][saddle_name] += qty
+                                last_production_day = max(last_production_day, effective_day)
+                        except (ValueError, TypeError):
+                            continue
 
         # OPTIMIERUNG: Bestimme letzten relevanten Tag
         # Maximal ~40 Tage nach letzter Produktion können noch Transporte ankommen
