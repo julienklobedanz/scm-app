@@ -132,12 +132,17 @@ def calculate_product_demand(day: int, product: str, include_marketing: bool = T
                 
                 for scenario in marketing_scenarios:
                     factor = scenario.demand_increase_factor
-                    base_float = base_daily_floats.get(product, 0.0)
-                    # Marketing-Add-on = zusätzliche Nachfrage durch Marketing
-                    add_on = base_float * (factor - 1.0)
-                    if product not in marketing_add_ons:
-                        marketing_add_ons[product] = 0.0
-                    marketing_add_ons[product] += add_on
+                    # Bestimme betroffene Produkte: Wenn None, dann alle Produkte (Rückwärtskompatibilität)
+                    affected_products = scenario.affected_products if scenario.affected_products is not None else list(MasterData.BOM.keys())
+                    
+                    # Nur wenn dieses Produkt betroffen ist, Marketing-Add-on berechnen
+                    if product in affected_products:
+                        base_float = base_daily_floats.get(product, 0.0)
+                        # Marketing-Add-on = zusätzliche Nachfrage durch Marketing
+                        add_on = base_float * (factor - 1.0)
+                        if product not in marketing_add_ons:
+                            marketing_add_ons[product] = 0.0
+                        marketing_add_ons[product] += add_on
         
         # Berechne Nachfrage mit Marketing
         # WICHTIG: Am letzten Arbeitstag müssen Reste aufsummiert werden

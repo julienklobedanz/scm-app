@@ -257,7 +257,12 @@ class Simulator:
                     
                     for scenario in marketing_scenarios:
                         factor = scenario.demand_increase_factor
-                        for product in self.master_data.BOM.keys():
+                        # Bestimme betroffene Produkte: Wenn None, dann alle Produkte (Rückwärtskompatibilität)
+                        affected_products = scenario.affected_products if scenario.affected_products is not None else list(self.master_data.BOM.keys())
+                        
+                        for product in affected_products:
+                            if product not in self.master_data.BOM:
+                                continue  # Überspringe ungültige Produkte
                             base_float = base_daily_floats.get(product, 0.0)
                             # Marketing-Add-on = zusätzliche Nachfrage durch Marketing (auf Float-Basis)
                             # Add-on = Base * (Factor - 1.0), z.B. bei Factor 1.5: Add-on = Base * 0.5
@@ -374,7 +379,12 @@ class Simulator:
                         
                         for scenario in future_marketing_scenarios:
                             factor = scenario.demand_increase_factor
-                            for product in self.master_data.BOM.keys():
+                            # Bestimme betroffene Produkte: Wenn None, dann alle Produkte (Rückwärtskompatibilität)
+                            affected_products = scenario.affected_products if scenario.affected_products is not None else list(self.master_data.BOM.keys())
+                            
+                            for product in affected_products:
+                                if product not in self.master_data.BOM:
+                                    continue  # Überspringe ungültige Produkte
                                 base_float = base_daily_floats.get(product, 0.0)
                                 add_on = base_float * (factor - 1.0)
                                 if product not in future_marketing_add_ons:

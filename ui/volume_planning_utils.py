@@ -51,7 +51,11 @@ def calculate_volume_planning_demand():
 
             # Szenario-spezifische Parameter
             if isinstance(s, MarketingCampaignScenario):
-                extra = (getattr(s, "demand_increase_factor", None),)
+                # affected_products muss in den Fingerprint, damit Cache invalidiert wird
+                affected_products = getattr(s, "affected_products", None)
+                # Konvertiere Liste zu Tuple für Hashbarkeit, sortiere für Konsistenz
+                affected_products_tuple = tuple(sorted(affected_products)) if affected_products else None
+                extra = (getattr(s, "demand_increase_factor", None), affected_products_tuple)
             elif isinstance(s, WarehouseDamageScenario):
                 extra = (
                     getattr(s, "stock_loss_percentage", None),
@@ -122,7 +126,12 @@ def calculate_volume_planning_demand():
                 
                 for scenario in marketing_scenarios:
                     factor = scenario.demand_increase_factor
-                    for product in MasterData.BOM.keys():
+                    # Bestimme betroffene Produkte: Wenn None, dann alle Produkte (Rückwärtskompatibilität)
+                    affected_products = scenario.affected_products if scenario.affected_products is not None else list(MasterData.BOM.keys())
+                    
+                    for product in affected_products:
+                        if product not in MasterData.BOM:
+                            continue  # Überspringe ungültige Produkte
                         base_float = base_daily_floats.get(product, 0.0)
                         add_on = base_float * (factor - 1.0)
                         if product not in marketing_add_ons:

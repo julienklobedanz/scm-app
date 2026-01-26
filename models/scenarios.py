@@ -4,7 +4,7 @@ Definiert verschiedene Störungsszenarien für die Simulation
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 
@@ -21,6 +21,7 @@ class Scenario:
 class MarketingCampaignScenario(Scenario):
     """Marketingaktion: Erhöht die Nachfrage für einen Zeitraum"""
     demand_increase_factor: float = 1.5  # 50% mehr Nachfrage
+    affected_products: Optional[List[str]] = None  # Liste von Produktnamen, None = alle Produkte (Rückwärtskompatibilität)
 
 
 @dataclass

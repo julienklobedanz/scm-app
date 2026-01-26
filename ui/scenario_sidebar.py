@@ -53,14 +53,38 @@ def render_scenario_sidebar(key_suffix=""):
             end_date = st.date_input("End-Datum", value=date(planning_year, 3, 11), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"marketing_end_global{key_suffix}")
             demand_factor = st.slider("Nachfrage-Erhöhung (Faktor)", 1.0, 3.0, 1.5, 0.1, key=f"marketing_factor_global{key_suffix}")
             
+            # Produktauswahl: Multi-Select für betroffene Produkte
+            all_products = list(MasterData.BOM.keys())
+            selected_products = st.multiselect(
+                "Betroffene Produkte",
+                all_products,
+                default=all_products,  # Standard: Alle Produkte (Rückwärtskompatibilität)
+                help="Wählen Sie die Produkte aus, für die die Marketingaktion gelten soll. Wenn keine Auswahl getroffen wird, wirkt die Aktion auf alle Produkte.",
+                key=f"marketing_products_global{key_suffix}"
+            )
+            
             if st.button("➕ Marketingaktion hinzufügen", key=f"add_marketing_global{key_suffix}"):
                 start_day = (start_date - start_of_year).days
                 end_day = (end_date - start_of_year).days
+                
+                # Wenn alle Produkte ausgewählt oder keine Auswahl, dann None (alle Produkte)
+                affected_products = None if (not selected_products or len(selected_products) == len(all_products)) else selected_products
+                
+                # Name mit Produktliste (wenn nicht alle Produkte)
+                if affected_products:
+                    products_str = ", ".join(affected_products[:3])  # Erste 3 Produkte
+                    if len(affected_products) > 3:
+                        products_str += f" (+{len(affected_products) - 3} weitere)"
+                    name = f"Marketingaktion ({products_str}) ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})"
+                else:
+                    name = f"Marketingaktion ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})"
+                
                 scenario = MarketingCampaignScenario(
-                    name=f"Marketingaktion ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
+                    name=name,
                     start_day=start_day,
                     end_day=end_day,
-                    demand_increase_factor=demand_factor
+                    demand_increase_factor=demand_factor,
+                    affected_products=affected_products
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
