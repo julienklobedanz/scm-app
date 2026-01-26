@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict
 from config.master_data import MasterData
 from simulation.workday_calculator import WorkdayCalculator
+from models.scenarios import WaterDamageScenario
 
 
 def calculate_material_inventory():
@@ -41,7 +42,7 @@ def calculate_material_inventory():
         inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
         
         if not inbound_df.empty:
-            avail_col_idx = inbound_df.columns.get_loc('Verfügbar im Lager 🇩🇪')
+            avail_col_idx = inbound_df.columns.get_loc('Tatsächliche Ankunft LKW 🇩🇪')
             saddle_col_indices = {s: inbound_df.columns.get_loc(s) for s in saddle_types if s in inbound_df.columns}
             
             for row_tuple in inbound_df.itertuples(index=False, name=None):
@@ -143,12 +144,40 @@ def calculate_material_inventory():
                 if required_saddle in issue_by_saddle:
                     issue_by_saddle[required_saddle] += qty
         
+        # Prüfe Wasserschaden-Szenarien für diesen Tag
+        water_damage_active = False
+        scenario_manager = st.session_state.get('scenario_manager')
+        if scenario_manager and 0 <= day < 365:
+            water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
+            if water_damage_scenarios:
+                # Prüfe ob exaktes Datum (start_day == end_day)
+                for scenario in water_damage_scenarios:
+                    if scenario.start_day == scenario.end_day and scenario.start_day == day:
+                        water_damage_active = True
+                        break
+        
         for s in saddle_types:
             stock_morning[s] = stock_by_saddle[s] + receipt_by_saddle.get(s, 0.0)
+            
+            # WASSERSCHADEN: Speichere Bestand vor dem Schaden für Verlustmenge
+            stock_before_damage = stock_morning[s]
+            
+            # WASSERSCHADEN: Setze Bestand morgens auf 0 wenn Szenario aktiv
+            if water_damage_active:
+                stock_morning[s] = 0.0
+            
             actual_issue = min(issue_by_saddle[s], stock_morning[s])
             val = stock_morning[s] - actual_issue
             stock_evening[s] = max(0.0, val)
+            
+            # WASSERSCHADEN: Setze auch Abendbestand auf 0
+            if water_damage_active:
+                stock_evening[s] = 0.0
+            
             stock_by_saddle[s] = stock_evening[s]
+            
+            # Berechne Verlustmenge (nur wenn Wasserschaden aktiv)
+            loss_qty = stock_before_damage if water_damage_active else 0.0
             
             saddle_logs[s].append({
                 'Wochentag': weekday_abbr,
@@ -156,7 +185,7 @@ def calculate_material_inventory():
                 'Lagerzugang': int(round(receipt_by_saddle.get(s, 0.0))) if receipt_by_saddle.get(s, 0.0) > 0 else 0,
                 'Bestand morgens': int(round(stock_morning[s])),
                 'Lagerabgang': int(round(actual_issue)),
-                'Verlustmenge': 0,
+                'Verlustmenge': int(round(loss_qty)) if loss_qty > 0 else 0,
                 'Bestand abends': int(round(stock_evening[s])),
                 'Is_Weekend': is_weekend,
                 'Is_Holiday': is_holiday

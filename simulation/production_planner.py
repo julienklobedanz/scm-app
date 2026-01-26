@@ -513,9 +513,7 @@ class ProductionPlanner:
             stock_morning_by_saddle[saddle_name] = max(0.0, inbound_stock - consumption_before_today)
         
         for product in self.master_data.BOM.keys():
-            frame_name = self.master_data.BOM[product]['frame']
             saddle_name = self.master_data.BOM[product]['saddle']
-            fork_name = self.master_data.BOM[product]['fork']
             
             # Verfügbarkeit für Anzeige: Hole Bestand morgens (vor der Produktion)
             stock_saddle_specific = stock_morning_by_saddle.get(saddle_name)
@@ -533,8 +531,6 @@ class ProductionPlanner:
                 # Ziehe auch hier den Verbrauch bis zum VORHERIGEN Tag ab
                 consumption_before_today = self._consumption_by_saddle.get(saddle_name, 0.0)
                 stock_saddle_specific = max(0.0, stock_saddle_specific - consumption_before_today)
-            
-            materials_complete = 'Ja' if stock_saddle_specific > 0 else 'Nein'
             
             planned_pm = product_demands.get(product, 0)
             actual_qty = production_by_product.get(product, 0)
@@ -555,10 +551,7 @@ class ProductionPlanner:
                 'Datum': current_date.strftime(self.master_data.DATE_FORMAT),
                 'Schichtanzahl': shifts,
                 'Auslastung (%)': round(utilization, 2),
-                'Materialien vollständig?': materials_complete,
-                frame_name: '∞',
                 saddle_name: int(round(stock_saddle_specific)) if stock_saddle_specific > 0 else 0,
-                fork_name: '∞',
                 'geplante PM': int(round(planned_pm)),
                 'tatsächliche PM': int(round(actual_qty)),
                 'fertiggestellte PM': int(round(finished_pm, 0)),
@@ -619,7 +612,7 @@ class ProductionPlanner:
                 stock_morning = 0.0
                 
                 for _, row in inbound_df.iterrows():
-                    avail_str = row.get('Verfügbar im Lager 🇩🇪', '')
+                    avail_str = row.get('Tatsächliche Ankunft LKW 🇩🇪', '')
                     if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
                         try:
                             avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()

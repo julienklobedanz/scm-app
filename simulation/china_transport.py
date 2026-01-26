@@ -4,12 +4,12 @@ Simuliert den detaillierten Transport von China nach Deutschland
 """
 
 from typing import Dict, List, Tuple, Optional
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import pandas as pd
 from models.inventory import Inventory
 from simulation.workday_calculator import WorkdayCalculator
 from config.master_data import MasterData
-from models.scenarios import ScenarioManager, DeliveryProblemScenario
+from models.scenarios import ScenarioManager, DelayScenario, CargoLossScenario
 
 
 class ChinaTransportManager:
@@ -51,13 +51,14 @@ class ChinaTransportManager:
         self._chinese_holidays_cache: Optional[set] = None
         self._chinese_holidays_year: Optional[int] = None
     
-    def place_order(self, order_day: int, quantity: float) -> int:
+    def place_order(self, order_day: int, quantity: float, saddle_name: str = None) -> Optional[int]:
         """
         Platziert eine Bestellung in China
         
         Args:
             order_day: Tag der Bestellung (0-basiert)
             quantity: Bestellmenge
+            saddle_name: Optional: Name des Sattels (nicht mehr verwendet, für Rückwärtskompatibilität)
             
         Returns:
             order_id: Eindeutige Bestell-ID
@@ -71,7 +72,7 @@ class ChinaTransportManager:
         order_id = self.order_counter
         
         # Prüfe Produktionsprobleme beim Lieferanten (z.B. SupplierBreakdownScenario)
-        # HINWEIS: Transportprobleme (DeliveryProblemScenario) werden erst beim Versand angewendet!
+        # HINWEIS: Verspätungen (DelayScenario) werden beim Versand angewendet!
         # Hier nur Produktionsverluste berücksichtigen (falls vorhanden)
         production_loss_percentage = 0.0
         
@@ -80,14 +81,44 @@ class ChinaTransportManager:
         
         # Freigabedatum: Nächster Arbeitstag nach Bestellung
         # Das Produktionsdatum bezieht sich auf das Freigabedatum, nicht auf das Bestelldatum!
-        released_day = self._get_next_workday(order_day)
+        released_day = self._get_next_workday(order_day, use_chinese_holidays=True)
+        
+        # NEU: Prüfe SupplierBreakdownScenario und verschiebe Freigabedatum wenn es während des Ausfalls liegt
+        # PERFORMANCE: Verwende Hilfsfunktion für bessere Performance
+        released_day = self._find_first_workday_after_breakdowns(released_day, use_chinese_holidays=True)
         
         # Schritt 1: Produktion in China (5 AT)
         # ARBEITSTAG bedeutet: Start-Tag + 5 Arbeitstage (Start-Tag zählt nicht mit)
         # Das Freigabedatum ist der Start-Tag, nicht das Bestelldatum
         # WICHTIG: Für Produktion in China werden chinesische Feiertage verwendet!
         production_start_day = released_day
+        
+        # Prüfe auch für production_start_day, ob SupplierBreakdownScenario noch aktiv ist
+        production_start_day = self._find_first_workday_after_breakdowns(production_start_day, use_chinese_holidays=True)
+        # Aktualisiere released_day wenn production_start_day verschoben wurde
+        if production_start_day > released_day:
+            released_day = production_start_day
+        
         production_end_day = self._add_workdays(production_start_day, 5, exclude_start=True, use_chinese_holidays=True)
+        
+        # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden
+        # PERFORMANCE: Prüfe nur wenn production_end_day im gültigen Bereich liegt
+        if 0 <= production_end_day < 365:
+            # Prüfe ob production_end_day während eines Ausfalls liegt
+            if self._is_day_during_breakdown(production_end_day):
+                # Verschiebe production_start_day weiter nach hinten, bis production_end_day nach dem Ausfall liegt
+                # PERFORMANCE: Iteriere maximal 365 Tage (Sicherheitsschleife)
+                max_iterations = 365
+                iteration = 0
+                while self._is_day_during_breakdown(production_end_day) and iteration < max_iterations:
+                    # Verschiebe production_start_day auf ersten AT nach Ausfall
+                    production_start_day = self._find_first_workday_after_breakdowns(production_end_day, use_chinese_holidays=True)
+                    # Rechne production_end_day neu (5 AT nach production_start_day)
+                    production_end_day = self._add_workdays(production_start_day, 5, exclude_start=True, use_chinese_holidays=True)
+                    iteration += 1
+                # Aktualisiere released_day wenn production_start_day verschoben wurde
+                if production_start_day > released_day:
+                    released_day = production_start_day
         
         # Schritt 2: LKW zum Hafen (China) - 2 AT
         # HINWEIS: Verspätungen werden erst beim Versand (in process_shipments) angewendet
@@ -179,34 +210,55 @@ class ChinaTransportManager:
             # Wir verschiffen immer exakt 500 Stück (nicht die gesamte Menge)
             ship_departure_day = current_day
             
-            # Wende Lieferprobleme-Szenarien an (Transportprobleme: Container über Bord, Verspätung)
-            delivery_problems = []
-            if self.scenario_manager:
-                delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(ship_departure_day)
+            # NEU: Prüfe Verspätungs-Szenarien an verschiedenen Zwischenstopps (nur Ankünfte)
+            # Verspätung verschiebt alle nachfolgenden Schritte
+            # WICHTIG: Alle Verspätungen werden am ABFAHRTSDATUM des LKW China geprüft
+            # Das Abfahrtsdatum des LKW China entspricht dem "Datum" in der Inbound-Tabelle
             
-            # Berechne Verspätung und Verlust aus Szenarien
-            delay_days = 0
-            loss_factor = 1.0
-            for scenario in delivery_problems:
-                if scenario.component_type == 'saddles':
-                    delay_days = max(delay_days, scenario.delay_days)
-                    loss_factor *= (1.0 - scenario.loss_percentage)
+            # Sammle alle Verspätungen für die Bestellungen in diesem Versand
+            # Prüfe am Abfahrtsdatum des LKW China (truck_china_start_day)
+            max_truck_china_delay = 0
+            max_ship_arrival_delay = 0
+            max_truck_de_arrival_delay = 0
+            
+            for status in ready_to_ship_orders:
+                truck_china_start = status.get('truck_china_start_day')
+                if truck_china_start is not None and self.scenario_manager:
+                    # Prüfe alle DelayScenarios am Abfahrtsdatum des LKW China
+                    for scenario in self.scenario_manager.scenarios:
+                        if isinstance(scenario, DelayScenario) and scenario.active:
+                            if scenario.component_type == 'saddles' and scenario.start_day == scenario.end_day:
+                                if truck_china_start == scenario.start_day:
+                                    if scenario.delay_stage == 'truck_china_arrival':
+                                        max_truck_china_delay = max(max_truck_china_delay, scenario.delay_days)
+                                    elif scenario.delay_stage == 'ship_arrival':
+                                        max_ship_arrival_delay = max(max_ship_arrival_delay, scenario.delay_days)
+                                    elif scenario.delay_stage == 'truck_de_arrival':
+                                        max_truck_de_arrival_delay = max(max_truck_de_arrival_delay, scenario.delay_days)
+            
+            # Wenn Verspätung an Ankunft LKW China, verschiebt sich die Schiff-Abfahrt
+            # (Schiff kann erst abfahren, wenn Ware im Hafen ist)
+            if max_truck_china_delay > 0:
+                # Verschiebe Schiff-Abfahrt um die Verspätung
+                ship_departure_day += max_truck_china_delay
             
             # KRITISCH: Schiff fährt 30 KALENDERTAGE (KT), nicht Arbeitstage!
             # Das Schiff fährt kontinuierlich, Feiertage spielen keine Rolle
             # Berechnung: Abfahrt + 30 Kalendertage
             ship_departure_date = self.workday_calculator.get_date_from_day(ship_departure_day)
-            ship_arrival_date = ship_departure_date + timedelta(days=30)  # 30 Kalendertage
-            # Verspätung wird als Kalendertage addiert
-            if delay_days > 0:
-                ship_arrival_date += timedelta(days=delay_days)
-            # Konvertiere zurück zu Tag-Index
-            ship_arrival_day = (ship_arrival_date - date(self.workday_calculator.year, 1, 1)).days
+            ship_arrival_date_planned = ship_departure_date + timedelta(days=30)  # 30 Kalendertage
+            
+            # Verschiebe Ankunft Schiff bei Verspätung (wenn am Abfahrtsdatum LKW China aktiv)
+            ship_arrival_date_actual = ship_arrival_date_planned + timedelta(days=max_ship_arrival_delay)
+            ship_arrival_day = (ship_arrival_date_actual - date(self.workday_calculator.year, 1, 1)).days
             
             # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 1 Arbeitstag
             # Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
             truck_de_start_day = ship_arrival_day
-            truck_de_end_day = self._add_workdays(truck_de_start_day, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
+            truck_de_end_day_planned = self._add_workdays(truck_de_start_day, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
+            
+            # Verschiebe Ankunft LKW DE bei Verspätung (wenn am Abfahrtsdatum LKW China aktiv)
+            truck_de_end_day = truck_de_end_day_planned + max_truck_de_arrival_delay
             physical_arrival_day = truck_de_end_day
             available_day = physical_arrival_day + 1
             
@@ -232,8 +284,7 @@ class ChinaTransportManager:
                     status['shipped'] = True
                     status['shipped_quantity'] = status['quantity']  # Gesamte Menge
                     
-                    # Verlust anwenden (Container-Verlust passiert auf See)
-                    status['actual_quantity'] = status['actual_quantity'] * loss_factor
+                    # HINWEIS: Warenverlust ist ein separates Szenario und wird hier nicht behandelt
                     
                     remaining_to_ship -= status['quantity']
                 else:
@@ -250,10 +301,10 @@ class ChinaTransportManager:
                     shipped_status['available_day'] = available_day
                     shipped_status['shipped'] = True
                     
-                    # Verlust anwenden
-                    # Anteilig: nur der verschickte Teil hat Verlust
+                    # HINWEIS: Warenverlust ist ein separates Szenario und wird hier nicht behandelt
+                    # Anteilig: nur der verschickte Teil
                     shipped_ratio = quantity_to_ship_from_order / status['quantity']
-                    shipped_status['actual_quantity'] = status['actual_quantity'] * shipped_ratio * loss_factor
+                    shipped_status['actual_quantity'] = status['actual_quantity'] * shipped_ratio
                     
                     # Aktualisiere die ursprüngliche Bestellung: Reduziere Menge um verschickten Teil
                     status['quantity'] -= quantity_to_ship_from_order
@@ -319,6 +370,63 @@ class ChinaTransportManager:
             
             # Wenn wir hier ankommen, ist es ein Arbeitstag in China (Mo-Fr, kein chinesischer Feiertag)
             return current_day
+    
+    def _find_first_workday_after_breakdowns(self, day: int, use_chinese_holidays: bool = True) -> int:
+        """
+        Findet den ersten Arbeitstag nach ALLEN aktiven SupplierBreakdownScenarios für einen Tag.
+        
+        PERFORMANCE: Prüft nur einmal alle aktiven Breakdowns und findet dann den nächsten freien Tag.
+        
+        Args:
+            day: Tag (0-basiert), für den geprüft werden soll
+            use_chinese_holidays: Wenn True, verwendet chinesische Feiertage
+            
+        Returns:
+            Erster Arbeitstag nach allen aktiven Ausfällen (kann auch day selbst sein, wenn kein Ausfall aktiv)
+        """
+        if not self.scenario_manager or not (0 <= day < 365):
+            return day
+        
+        # PERFORMANCE: Hole alle aktiven Breakdowns einmalig
+        breakdowns = self.scenario_manager.get_supplier_breakdown_scenarios(day)
+        if not breakdowns:
+            return day
+        
+        # Finde das späteste End-Datum aller aktiven Breakdowns
+        latest_end_day = max(breakdown.end_day for breakdown in breakdowns)
+        
+        # Wenn day bereits nach dem Ausfall liegt, keine Verschiebung nötig
+        if day > latest_end_day:
+            return day
+        
+        # Verschiebe auf ersten AT nach Ausfall
+        return self._get_next_workday(latest_end_day, use_chinese_holidays)
+    
+    def _is_day_during_breakdown(self, day: int) -> bool:
+        """
+        Prüft ob ein Tag während eines aktiven SupplierBreakdownScenario liegt.
+        
+        PERFORMANCE: Prüft nur einmal alle aktiven Breakdowns.
+        
+        Args:
+            day: Tag (0-basiert)
+            
+        Returns:
+            True wenn Tag während eines aktiven Ausfalls liegt
+        """
+        if not self.scenario_manager or not (0 <= day < 365):
+            return False
+        
+        breakdowns = self.scenario_manager.get_supplier_breakdown_scenarios(day)
+        if not breakdowns:
+            return False
+        
+        # Prüfe ob day zwischen start_day und end_day eines aktiven Breakdowns liegt
+        for breakdown in breakdowns:
+            if breakdown.start_day <= day <= breakdown.end_day:
+                return True
+        
+        return False
     
     def _get_chinese_holidays(self) -> set:
         """
@@ -441,6 +549,9 @@ class ChinaTransportManager:
         Returns:
             Bestellmenge (Summe der Nachfrage aller Produkte mit diesem Sattel)
         """
+        # HINWEIS: SupplierBreakdownScenario blockiert Bestellungen nicht mehr,
+        # sondern verschiebt nur Freigabe- und Produktionsdatum (siehe place_order())
+        
         # OPTIMIERUNG: Wenn Cache nicht übergeben wurde, lade aus session_state
         if daily_demands_actual_cache is None:
             try:
@@ -500,7 +611,7 @@ class ChinaTransportManager:
                     MarketingCampaignScenario,
                     WarehouseDamageScenario,
                     SupplierBreakdownScenario,
-                    DeliveryProblemScenario,
+                    DelayScenario,
                 )
                 scenario_items = []
                 for s in getattr(scenario_manager, "scenarios", []):
@@ -525,10 +636,15 @@ class ChinaTransportManager:
                         )
                     elif isinstance(s, SupplierBreakdownScenario):
                         extra = (getattr(s, "component_type", None),)
-                    elif isinstance(s, DeliveryProblemScenario):
+                    elif isinstance(s, DelayScenario):
                         extra = (
-                            getattr(s, "loss_percentage", None),
                             getattr(s, "delay_days", None),
+                            getattr(s, "delay_stage", None),
+                            getattr(s, "component_type", None),
+                        )
+                    elif isinstance(s, CargoLossScenario):
+                        extra = (
+                            getattr(s, "loss_date", None),
                             getattr(s, "component_type", None),
                         )
                     else:
@@ -649,6 +765,11 @@ class ChinaTransportManager:
                 # Freigabedatum = Nächster chinesischer Arbeitstag nach Bestelldatum
                 order_day = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 released_day = self._get_next_workday(order_day, use_chinese_holidays=True)
+                
+                # NEU: Prüfe SupplierBreakdownScenario und verschiebe Freigabedatum
+                # PERFORMANCE: Verwende Hilfsfunktion
+                released_day = self._find_first_workday_after_breakdowns(released_day, use_chinese_holidays=True)
+                
                 released_date = self.workday_calculator.get_date_from_day(released_day)
                 released_day_idx = (released_date - start_date).days
                 
@@ -664,16 +785,52 @@ class ChinaTransportManager:
                     
                     # Berechne Produktionsdatum für diese freigegebene Bestellung
                     # Produktionsdatum = Freigabedatum + 5 chinesische AT (Produktionszeit)
-                    production_end_day = self._add_workdays(released_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
+                    production_start_day = released_day
+                    
+                    # Prüfe auch für production_start_day, ob SupplierBreakdownScenario noch aktiv ist
+                    production_start_day = self._find_first_workday_after_breakdowns(production_start_day, use_chinese_holidays=True)
+                    if production_start_day > released_day:
+                        released_day = production_start_day
+                    
+                    production_end_day = self._add_workdays(production_start_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
+                    
+                    # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden
+                    if 0 <= production_end_day < 365:
+                        if self._is_day_during_breakdown(production_end_day):
+                            # Verschiebe production_start_day weiter nach hinten, bis production_end_day nach dem Ausfall liegt
+                            max_iterations = 365
+                            iteration = 0
+                            while self._is_day_during_breakdown(production_end_day) and iteration < max_iterations:
+                                production_start_day = self._find_first_workday_after_breakdowns(production_end_day, use_chinese_holidays=True)
+                                production_end_day = self._add_workdays(production_start_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
+                                iteration += 1
+                            if production_start_day > released_day:
+                                released_day = production_start_day
+                    
                     production_end_date = self.workday_calculator.get_date_from_day(production_end_day)
                     production_end_day_idx = (production_end_date - start_date).days
                     
-                    # Speichere Produktionsdatum in der Zeile des Freigabedatums
-                    if 0 <= production_end_day_idx < total_days:
+                    # KRITISCH: Produktionsdatum gehört in die Zeile des FREIGABEDATUMS, nicht des Produktionstages!
+                    # Das Produktionsdatum zeigt: "Freigabedatum X → Produktionsdatum = X + 5 AT"
+                    if 0 <= released_day_idx < total_days:
+                        # Speichere Produktionsdatum in der Zeile des Freigabedatums
                         if not raw_data_map[released_day_idx]['production_date_str']:
                             raw_data_map[released_day_idx]['production_date_str'] = production_end_date.strftime(self.master_data.DATE_FORMAT)
-                        
-                        # Sammle freigegebene Bestellungen nach Produktionsdatum
+                        # Wenn mehrere Bestellungen am gleichen Freigabedatum freigegeben werden,
+                        # verwende das späteste Produktionsdatum (falls unterschiedlich)
+                        else:
+                            # Prüfe ob das neue Produktionsdatum später ist
+                            existing_prod_date_str = raw_data_map[released_day_idx]['production_date_str']
+                            try:
+                                existing_prod_date = datetime.strptime(existing_prod_date_str, self.master_data.DATE_FORMAT).date()
+                                if production_end_date > existing_prod_date:
+                                    raw_data_map[released_day_idx]['production_date_str'] = production_end_date.strftime(self.master_data.DATE_FORMAT)
+                            except (ValueError, TypeError):
+                                # Falls Parsing fehlschlägt, überschreibe
+                                raw_data_map[released_day_idx]['production_date_str'] = production_end_date.strftime(self.master_data.DATE_FORMAT)
+                    
+                    # Sammle freigegebene Bestellungen nach Produktionsdatum (für Produktionsmenge)
+                    if 0 <= production_end_day_idx < total_days:
                         if production_end_day_idx not in release_production_map:
                             release_production_map[production_end_day_idx] = []
                         release_production_map[production_end_day_idx].append(order_qty)
@@ -685,17 +842,18 @@ class ChinaTransportManager:
                 raw_data_map[released_day_idx]['release'] = total_released
         
         # Berechne Produktionsmenge: Summe aller freigegebenen Bestellungen mit Produktionsdatum gleich Datum
+        # HINWEIS: production_date_str wurde bereits in der Zeile des Freigabedatums gesetzt (siehe oben)
+        # Hier setzen wir nur die Produktionsmenge in der Zeile des Produktionstages
         for production_end_day_idx, order_quantities in release_production_map.items():
             if 0 <= production_end_day_idx < total_days:
                 total_production = sum(order_quantities)
                 raw_data_map[production_end_day_idx]['prod'] = total_production
-                # Produktionsdatum in dieser Zeile setzen, damit get_inbound_log_dataframe
-                # Zeilen mit Produktionsmenge > 0 verarbeiten kann (prod_date für daily_prod_all)
-                prod_date = start_date + timedelta(days=production_end_day_idx)
-                raw_data_map[production_end_day_idx]['production_date_str'] = prod_date.strftime(self.master_data.DATE_FORMAT)
+                # HINWEIS: production_date_str wird NICHT hier gesetzt, sondern in der Zeile des Freigabedatums
+                # Dies ist korrekt, da das Produktionsdatum zur Freigabe gehört, nicht zur Produktion
         
         # Pool (daily_prod_all) aus Volumenplanung für ALLE Sättel füllen – gleiche Quelle wie
         # Produktionsmenge und wie get_inbound. Dann Warenausgang und Inbound-Summen sind konsistent.
+        # WICHTIG: Berücksichtige Verschiebung durch SupplierBreakdownScenario
         for day_idx in range(total_days):
             curr_date = start_date + timedelta(days=day_idx)
             for s in all_saddles:
@@ -704,11 +862,34 @@ class ChinaTransportManager:
                     continue
                 order_day = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 released_day = self._get_next_workday(order_day, use_chinese_holidays=True)
+                
+                # NEU: Prüfe SupplierBreakdownScenario und verschiebe Freigabedatum
+                # PERFORMANCE: Verwende Hilfsfunktion
+                released_day = self._find_first_workday_after_breakdowns(released_day, use_chinese_holidays=True)
+                
                 released_date = self.workday_calculator.get_date_from_day(released_day)
                 released_day_idx = (released_date - start_date).days
                 if released_day_idx < 0 or released_day_idx >= total_days:
                     continue
-                production_end_day = self._add_workdays(released_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
+                
+                production_start_day = released_day
+                
+                # Prüfe auch für production_start_day, ob SupplierBreakdownScenario noch aktiv ist
+                production_start_day = self._find_first_workday_after_breakdowns(production_start_day, use_chinese_holidays=True)
+                
+                production_end_day = self._add_workdays(production_start_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
+                
+                # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden
+                if 0 <= production_end_day < 365:
+                    if self._is_day_during_breakdown(production_end_day):
+                        # Verschiebe production_start_day weiter nach hinten, bis production_end_day nach dem Ausfall liegt
+                        max_iterations = 365
+                        iteration = 0
+                        while self._is_day_during_breakdown(production_end_day) and iteration < max_iterations:
+                            production_start_day = self._find_first_workday_after_breakdowns(production_end_day, use_chinese_holidays=True)
+                            production_end_day = self._add_workdays(production_start_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
+                            iteration += 1
+                
                 production_end_date = self.workday_calculator.get_date_from_day(production_end_day)
                 prod_day_idx = (production_end_date - start_date).days
                 if 0 <= prod_day_idx < total_days:
@@ -724,6 +905,20 @@ class ChinaTransportManager:
                 if 0 <= p_off < total_days:
                     if status.get('production_loss_percentage', 0.0) > 0:
                         raw_data_map[p_off]['breakdown'] = "Ja"
+        
+        # Prüfe SupplierBreakdownScenario für jeden Tag und setze Störung
+        # HINWEIS: Bestellungen werden nicht mehr blockiert, sondern nur verschoben
+        # Die Störung wird angezeigt, um zu zeigen dass der Ausfall aktiv ist
+        if self.scenario_manager:
+            for day_idx in range(total_days):
+                curr_date = start_date + timedelta(days=day_idx)
+                order_day = (curr_date - date(self.workday_calculator.year, 1, 1)).days
+                
+                if 0 <= order_day < 365:
+                    breakdowns = self.scenario_manager.get_supplier_breakdown_scenarios(order_day)
+                    if breakdowns:
+                        # Zeige Störung an (Bestellungen werden verschoben, nicht blockiert)
+                        raw_data_map[day_idx]['breakdown'] = "Ja"
         
         # ---------------------------------------------------------
         # DER "ALTE" LOGIK-KERN: Tägliche Pool- & Versand-Berechnung
@@ -823,18 +1018,8 @@ class ChinaTransportManager:
             # Warenausgang fälschlich begrenzen → Bestand würde anwachsen. Richtig: min(planned, current_stock).
             planned_shipment_qty = shipment_results[day_idx]
             
-            # Prüfe ob es DeliveryProblemScenario gibt, die zu 100% Verlust führen
-            if self.scenario_manager:
-                day_index = (curr_date - date(self.workday_calculator.year, 1, 1)).days
-                delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(day_index)
-                for scenario in delivery_problems:
-                    if scenario.component_type == 'saddles' and scenario.loss_percentage >= 1.0:
-                        shipment_qty = 0
-                        break
-                else:
-                    shipment_qty = min(planned_shipment_qty, current_stock)
-            else:
-                shipment_qty = min(planned_shipment_qty, current_stock)
+            # HINWEIS: Warenverlust ist ein separates Szenario und wird hier nicht behandelt
+            shipment_qty = min(planned_shipment_qty, current_stock)
             
             # Warenbestand nach Versand
             current_stock = current_stock - shipment_qty
@@ -893,7 +1078,7 @@ class ChinaTransportManager:
                     MarketingCampaignScenario,
                     WarehouseDamageScenario,
                     SupplierBreakdownScenario,
-                    DeliveryProblemScenario,
+                    DelayScenario,
                 )
                 scenario_items = []
                 for s in getattr(scenario_manager, "scenarios", []):
@@ -918,10 +1103,15 @@ class ChinaTransportManager:
                         )
                     elif isinstance(s, SupplierBreakdownScenario):
                         extra = (getattr(s, "component_type", None),)
-                    elif isinstance(s, DeliveryProblemScenario):
+                    elif isinstance(s, DelayScenario):
                         extra = (
-                            getattr(s, "loss_percentage", None),
                             getattr(s, "delay_days", None),
+                            getattr(s, "delay_stage", None),
+                            getattr(s, "component_type", None),
+                        )
+                    elif isinstance(s, CargoLossScenario):
+                        extra = (
+                            getattr(s, "loss_date", None),
                             getattr(s, "component_type", None),
                         )
                     else:
@@ -946,13 +1136,14 @@ class ChinaTransportManager:
         
         # 1. Setup
         if not self.transport_status:
-            cols = ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
+            cols = ['Wochentag', 'Datum', 'Verspätung', 'Ladungsverlust', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
                     'Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 'Abfahrt LKW 🇩🇪', 
                     'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪', 
-                    'Verfügbar im Lager 🇩🇪', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
+                    'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
             return pd.DataFrame(columns=cols)
         
-        start_date = date(self.workday_calculator.year - 1, 11, 1)
+        # Startdatum: Aktuelles Jahr minus 49 Tage (entspricht der Lead Time)
+        start_date = date(self.workday_calculator.year, 1, 1) - timedelta(days=49)
         end_date = date(self.workday_calculator.year, 12, 31)
         total_days = (end_date - start_date).days + 1
         
@@ -1115,10 +1306,12 @@ class ChinaTransportManager:
             row = {
                 'Wochentag': self.workday_calculator.get_weekday_abbr(day_idx) if 0 <= day_idx < 365 else ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][curr_date.weekday()],
                 'Datum': curr_date.strftime(self.master_data.DATE_FORMAT),
+                'Verspätung': 'Nein',
+                'Ladungsverlust': 'Nein',  # NEU: Ladungsverlust-Spalte
                 'Abfahrt LKW 🇨🇳': '', 'Ankunft LKW 🇨🇳': '', 
                 'Abfahrt Schiff 🇨🇳': '', 'Ankunft Schiff 🇩🇪': '', 'Abfahrt LKW 🇩🇪': '',
                 'Geplante Ankunft LKW 🇩🇪': '', 'Tatsächliche Ankunft LKW 🇩🇪': '', 
-                'Verfügbar im Lager 🇩🇪': '', 'Menge Gesamt': '',
+                'Menge Gesamt': '',
                 'Is_Weekend': is_weekend,
                 'Is_Holiday': is_holiday
             }
@@ -1127,67 +1320,165 @@ class ChinaTransportManager:
                 row[s] = ''
 
             if is_transport_day:
-                # Fülle die exakten Werte ein (als ganze Zahlen)
-                total_qty = 0.0
-                for s in saddle_shares_dict:
-                    if s in shipments_today and shipments_today[s] > 0.001:
-                        qty = int(round(shipments_today[s]))
-                        row[s] = qty
-                        total_qty += qty
+                day_idx_sim = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 
-                # KRITISCH: Gesamtmenge aus Summe der Einzelpositionen berechnen
-                row['Menge Gesamt'] = int(round(total_qty))
+                # Prüfe Ladungsverlust-Szenarien basierend auf ABFAHRTSDATUM (day_idx_sim)
+                cargo_loss_active = False
+                if self.scenario_manager:
+                    cargo_loss_scenarios = self.scenario_manager.get_cargo_loss_scenarios(day_idx_sim)
+                    for scenario in cargo_loss_scenarios:
+                        if scenario.component_type == 'saddles' and scenario.start_day == scenario.end_day:
+                            if day_idx_sim == scenario.start_day:
+                                cargo_loss_active = True
+                                break
                 
-                # Datums-Berechnung für Ankunft (wie gehabt)
+                # Setze Mengen auf 0 wenn Ladungsverlust aktiv
+                if cargo_loss_active:
+                    for s in saddle_shares_dict:
+                        row[s] = 0
+                    row['Menge Gesamt'] = 0
+                    row['Ladungsverlust'] = 'Ja'
+                else:
+                    total_qty = 0.0
+                    for s in saddle_shares_dict:
+                        if s in shipments_today and shipments_today[s] > 0.001:
+                            qty = int(round(shipments_today[s]))
+                            row[s] = qty
+                            total_qty += qty
+                    row['Menge Gesamt'] = int(round(total_qty))
+                
                 row['Abfahrt LKW 🇨🇳'] = curr_date.strftime(self.master_data.DATE_FORMAT)
                 
-                day_idx_sim = (curr_date - date(self.workday_calculator.year, 1, 1)).days
-                day_port = self._add_workdays(day_idx_sim, 2)
-                date_port = self.workday_calculator.get_date_from_day(day_port)
-                row['Ankunft LKW 🇨🇳'] = date_port.strftime(self.master_data.DATE_FORMAT)
+                # --- PFAD 1: IDEALER ABLAUF (für die "Geplante"-Spalte) ---
+                # Dies ignoriert alle Szenarien und berechnet den Happy Path.
                 
-                wd = date_port.weekday()
-                if wd == 2:  # Wenn bereits Mittwoch
-                    days_to_wed = 7
-                else:
-                    days_to_wed = (2 - wd) % 7
-                    if days_to_wed == 0:
-                        days_to_wed = 7
+                # Ideal: Ankunft Hafen China (Start + 2 AT)
+                day_port_ideal = self._add_workdays(day_idx_sim, 2)
+                date_port_ideal = self.workday_calculator.get_date_from_day(day_port_ideal)
                 
-                date_ship_dep = date_port + timedelta(days=days_to_wed)
-                row['Abfahrt Schiff 🇨🇳'] = date_ship_dep.strftime(self.master_data.DATE_FORMAT)
+                # Ideal: Abfahrt Schiff (Nächster Mittwoch)
+                wd_ideal = date_port_ideal.weekday()
+                days_to_wed_ideal = (2 - wd_ideal) % 7 if (2 - wd_ideal) % 7 != 0 else 7
+                date_ship_dep_ideal = date_port_ideal + timedelta(days=days_to_wed_ideal)
                 
-                # KRITISCH: Schiff fährt 30 KALENDERTAGE (KT), nicht Arbeitstage!
-                # Das Schiff fährt kontinuierlich, Feiertage spielen keine Rolle
-                # Berechnung: Abfahrt + 30 Kalendertage
-                date_ship_arr = date_ship_dep + timedelta(days=30)  # 30 Kalendertage
-                row['Ankunft Schiff 🇩🇪'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
-                row['Abfahrt LKW 🇩🇪'] = date_ship_arr.strftime(self.master_data.DATE_FORMAT)
+                # Ideal: Ankunft Schiff DE (Abfahrt + 30 KT)
+                date_ship_arr_ideal = date_ship_dep_ideal + timedelta(days=30)
+                day_ship_arr_ideal_idx = (date_ship_arr_ideal - date(self.workday_calculator.year, 1, 1)).days
                 
-                # Konvertiere Ankunft Schiff zu Tag-Index für weitere Berechnungen
-                day_ship_arr_idx = (date_ship_arr - date(self.workday_calculator.year, 1, 1)).days
+                # Ideal: Ankunft LKW DE (Ankunft Schiff + 1 AT)
+                day_arr_de_ideal = self._add_workdays(day_ship_arr_ideal_idx, 1, exclude_start=True, use_chinese_holidays=False)
+                date_arr_de_ideal = self.workday_calculator.get_date_from_day(day_arr_de_ideal)
                 
-                # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 1 Arbeitstag
-                # Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
-                day_arr_de = self._add_workdays(day_ship_arr_idx, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
-                date_arr_de = self.workday_calculator.get_date_from_day(day_arr_de)
+                # Prüfe ob geplante Ankunft auf Wochenende oder Feiertag fällt - verschiebe auf nächsten Arbeitstag
+                ideal_weekday = date_arr_de_ideal.weekday()
+                is_ideal_weekend = ideal_weekday >= 5
+                is_ideal_holiday = date_arr_de_ideal in self.workday_calculator.german_holidays
                 
-                row['Geplante Ankunft LKW 🇩🇪'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
-                row['Tatsächliche Ankunft LKW 🇩🇪'] = date_arr_de.strftime(self.master_data.DATE_FORMAT)
+                if is_ideal_weekend or is_ideal_holiday:
+                    # Verschiebe auf nächsten Arbeitstag
+                    days_to_add = 1
+                    while True:
+                        next_date = date_arr_de_ideal + timedelta(days=days_to_add)
+                        next_weekday = next_date.weekday()
+                        is_next_weekend = next_weekday >= 5
+                        is_next_holiday = next_date in self.workday_calculator.german_holidays
+                        if not is_next_weekend and not is_next_holiday:
+                            date_arr_de_ideal = next_date
+                            break
+                        days_to_add += 1
                 
-                date_avail = date_arr_de + timedelta(days=1)
-                row['Verfügbar im Lager 🇩🇪'] = date_avail.strftime(self.master_data.DATE_FORMAT)
+                # SETZE REFERENZWERT: Dieser Wert bleibt statisch, egal welche Szenarien aktiv sind
+                row['Geplante Ankunft LKW 🇩🇪'] = date_arr_de_ideal.strftime(self.master_data.DATE_FORMAT)
+
+
+                # --- PFAD 2: REALER ABLAUF (für alle anderen Spalten) ---
+                # Dies berücksichtigt Verspätungen und mögliche verpasste Schiffe.
+                
+                day_port_planned = day_port_ideal # Basis ist gleich
+                
+                # Prüfe Verspätungen basierend auf ABFAHRTSDATUM (day_idx_sim)
+                truck_china_arrival_delay = 0
+                ship_arrival_delay = 0
+                truck_de_arrival_delay = 0
+                
+                if self.scenario_manager:
+                    for scenario in self.scenario_manager.scenarios:
+                        if isinstance(scenario, DelayScenario) and scenario.active:
+                            if scenario.component_type == 'saddles' and scenario.start_day == scenario.end_day:
+                                # Vergleich mit Start-Datum der Zeile (Abfahrt LKW China)
+                                if day_idx_sim == scenario.start_day:
+                                    if scenario.delay_stage == 'truck_china_arrival':
+                                        truck_china_arrival_delay = max(truck_china_arrival_delay, scenario.delay_days)
+                                    elif scenario.delay_stage == 'ship_arrival':
+                                        ship_arrival_delay = max(ship_arrival_delay, scenario.delay_days)
+                                    elif scenario.delay_stage == 'truck_de_arrival':
+                                        truck_de_arrival_delay = max(truck_de_arrival_delay, scenario.delay_days)
+
+                # Verschiebe Ankunft LKW China
+                day_port_actual = day_port_planned + truck_china_arrival_delay
+                date_port_actual = self.workday_calculator.get_date_from_day(day_port_actual)
+                row['Ankunft LKW 🇨🇳'] = date_port_actual.strftime(self.master_data.DATE_FORMAT)
+                
+                # Schiff Abfahrt (Real: Nächster Mittwoch nach tatsächlicher Ankunft)
+                wd_actual = date_port_actual.weekday()
+                days_to_wed_actual = (2 - wd_actual) % 7 if (2 - wd_actual) % 7 != 0 else 7
+                date_ship_dep_actual = date_port_actual + timedelta(days=days_to_wed_actual)
+                row['Abfahrt Schiff 🇨🇳'] = date_ship_dep_actual.strftime(self.master_data.DATE_FORMAT)
+                
+                # Ankunft Schiff (Real: Tatsächliche Abfahrt + 30 KT + Schiff-Verspätung)
+                date_ship_arr_planned_real = date_ship_dep_actual + timedelta(days=30)
+                date_ship_arr_actual = date_ship_arr_planned_real + timedelta(days=ship_arrival_delay)
+                row['Ankunft Schiff 🇩🇪'] = date_ship_arr_actual.strftime(self.master_data.DATE_FORMAT)
+                row['Abfahrt LKW 🇩🇪'] = date_ship_arr_actual.strftime(self.master_data.DATE_FORMAT)
+                
+                day_ship_arr_actual_idx = (date_ship_arr_actual - date(self.workday_calculator.year, 1, 1)).days
+                
+                # LKW DE Transport (Real: Tatsächliche Schiffsankunft + 1 AT)
+                day_arr_de_planned_real = self._add_workdays(day_ship_arr_actual_idx, 1, exclude_start=True, use_chinese_holidays=False)
+                
+                # Verschiebe Ankunft LKW DE (mit LKW-DE Verspätung)
+                day_arr_de_actual = day_arr_de_planned_real + truck_de_arrival_delay
+                date_arr_de_actual = self.workday_calculator.get_date_from_day(day_arr_de_actual)
+                
+                # Prüfe ob Ankunft auf Wochenende oder Feiertag fällt - verschiebe auf nächsten Arbeitstag
+                arr_weekday = date_arr_de_actual.weekday()
+                is_weekend = arr_weekday >= 5
+                is_holiday = date_arr_de_actual in self.workday_calculator.german_holidays
+                
+                if is_weekend or is_holiday:
+                    # Verschiebe auf nächsten Arbeitstag
+                    days_to_add = 1
+                    while True:
+                        next_date = date_arr_de_actual + timedelta(days=days_to_add)
+                        next_weekday = next_date.weekday()
+                        is_next_weekend = next_weekday >= 5
+                        is_next_holiday = next_date in self.workday_calculator.german_holidays
+                        if not is_next_weekend and not is_next_holiday:
+                            date_arr_de_actual = next_date
+                            day_arr_de_actual = (date_arr_de_actual - date(self.workday_calculator.year, 1, 1)).days
+                            break
+                        days_to_add += 1
+                
+                row['Tatsächliche Ankunft LKW 🇩🇪'] = date_arr_de_actual.strftime(self.master_data.DATE_FORMAT)
+                
+                # Markiere Zeile als verspätet, wenn irgendein Delay aktiv war
+                # ODER wenn das Schiff verpasst wurde (Abfahrt Ideal != Abfahrt Real)
+                if (truck_china_arrival_delay > 0 or 
+                    ship_arrival_delay > 0 or 
+                    truck_de_arrival_delay > 0 or 
+                    date_ship_dep_ideal != date_ship_dep_actual):
+                    row['Verspätung'] = 'Ja'
 
             rows.append(row)
             
         # DataFrame erstellen
         df = pd.DataFrame(rows)
         
-        # Spalten sortieren
-        cols = ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
+        # Spalten sortieren (Verspätung und Ladungsverlust direkt nach Datum)
+        cols = ['Wochentag', 'Datum', 'Verspätung', 'Ladungsverlust', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
                 'Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 'Abfahrt LKW 🇩🇪', 
                 'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪', 
-                'Verfügbar im Lager 🇩🇪', 'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
+                'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
         
         # Sicherstellen dass alle Cols da sind
         for c in cols:

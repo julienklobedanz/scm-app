@@ -38,11 +38,25 @@ class SupplierBreakdownScenario(Scenario):
 
 
 @dataclass
-class DeliveryProblemScenario(Scenario):
-    """Lieferprobleme beim Lieferanten: Verlust und/oder Verspätung (nur Sättel)"""
-    loss_percentage: float = 0.0  # 0.0 = kein Verlust, 1.0 = 100% Verlust
-    delay_days: int = 0  # Zusätzliche Verspätung in Tagen
-    component_type: str = "saddles"  # Immer Sättel (keine Wahlmöglichkeit mehr)
+class DelayScenario(Scenario):
+    """Verspätung bei einem Logistik-Zwischenstopp: Verschiebt alle nachfolgenden Schritte"""
+    delay_days: int = 0  # Verspätung in Tagen
+    delay_stage: str = "truck_china_arrival"  # Zwischenstopp: "truck_china_arrival", "ship_arrival", "truck_de_arrival"
+    component_type: str = "saddles"  # Immer Sättel
+
+
+@dataclass
+class WaterDamageScenario(Scenario):
+    """Wasserschaden im Materiallager: Setzt Bestand aller Sättel morgens und abends auf 0"""
+    damage_date: int = -1  # Exaktes Datum (start_day = end_day = damage_date), -1 = nicht gesetzt
+    affected_component: str = "saddles"  # Immer Sättel
+
+
+@dataclass
+class CargoLossScenario(Scenario):
+    """Ladungsverlust auf See: Verliert die gesamte Ladung einer Lieferung"""
+    loss_date: int = -1  # Exaktes Datum (start_day = end_day = loss_date), -1 = nicht gesetzt
+    component_type: str = "saddles"  # Immer Sättel
 
 
 @dataclass
@@ -98,10 +112,24 @@ class ScenarioManager:
             and s.component_type in ['saddles', 'all']  # Nur Sättel sind relevant
         ]
     
-    def get_delivery_problem_scenarios(self, day: int) -> list[DeliveryProblemScenario]:
-        """Gibt aktive Lieferproblem-Szenarien zurück"""
+    def get_delay_scenarios(self, day: int) -> list[DelayScenario]:
+        """Gibt aktive Verspätungs-Szenarien zurück"""
         return [
             s for s in self.get_active_scenarios(day)
-            if isinstance(s, DeliveryProblemScenario)
+            if isinstance(s, DelayScenario)
+        ]
+    
+    def get_water_damage_scenarios(self, day: int) -> list[WaterDamageScenario]:
+        """Gibt aktive Wasserschaden-Szenarien zurück"""
+        return [
+            s for s in self.get_active_scenarios(day)
+            if isinstance(s, WaterDamageScenario)
+        ]
+    
+    def get_cargo_loss_scenarios(self, day: int) -> list[CargoLossScenario]:
+        """Gibt aktive Ladungsverlust-Szenarien zurück"""
+        return [
+            s for s in self.get_active_scenarios(day)
+            if isinstance(s, CargoLossScenario)
         ]
 

@@ -228,10 +228,10 @@ class Simulator:
             received_quantity = arrived_qty  # Für Reporting
             
             # Prüfe Lieferantenausfall (für neue Bestellungen)
+            # HINWEIS: Bestellungen werden nicht mehr blockiert, sondern nur verschoben
+            # supplier_blocked_saddles wird nicht mehr verwendet, da Bestellungen immer platziert werden
             supplier_breakdowns = self.scenario_manager.get_supplier_breakdown_scenarios(day)
-            supplier_blocked_saddles = any(
-                s.component_type in ['saddles', 'all'] for s in supplier_breakdowns
-            )
+            supplier_blocked_saddles = False  # Nicht mehr verwendet, aber für Rückwärtskompatibilität beibehalten
             
             # 2. Berechne tägliche Nachfrage mit Carry-Over-Logik
             # Marketing-Add-ons berechnen (pro Produkt) - auf Float-Basis

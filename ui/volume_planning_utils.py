@@ -13,7 +13,8 @@ from models.scenarios import (
     MarketingCampaignScenario,
     WarehouseDamageScenario,
     SupplierBreakdownScenario,
-    DeliveryProblemScenario,
+    DelayScenario,
+    WaterDamageScenario,
 )
 
 
@@ -63,11 +64,16 @@ def calculate_volume_planning_demand():
                 )
             elif isinstance(s, SupplierBreakdownScenario):
                 extra = (getattr(s, "component_type", None),)
-            elif isinstance(s, DeliveryProblemScenario):
+            elif isinstance(s, DelayScenario):
                 extra = (
-                    getattr(s, "loss_percentage", None),
                     getattr(s, "delay_days", None),
+                    getattr(s, "delay_stage", None),
                     getattr(s, "component_type", None),
+                )
+            elif isinstance(s, WaterDamageScenario):
+                extra = (
+                    getattr(s, "damage_date", None),
+                    getattr(s, "affected_component", None),
                 )
             else:
                 # Fallback für zukünftige Szenarien

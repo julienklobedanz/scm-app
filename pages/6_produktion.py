@@ -122,12 +122,9 @@ for product in sorted(production_logs.keys()):
     holiday_flags = df_prod_filtered['Is_Holiday'].values
     
     # Hole konkrete Einzelteil-Namen für dieses Produkt
-    frame_name = MasterData.BOM[product]['frame']
     saddle_name = MasterData.BOM[product]['saddle']
-    fork_name = MasterData.BOM[product]['fork']
     
     # Definiere Spaltenreihenfolge (Wochentag vor Datum)
-    # Einzelteile direkt nach "Auslastung (%)"
     # Hinweis: "Produktionsbedarf" und "Rang" sind nur Hilfsberechnungen
     # und werden nicht angezeigt (Spalten beginnen mit "_")
     column_order = [
@@ -135,10 +132,7 @@ for product in sorted(production_logs.keys()):
         'Datum',
         'Schichtanzahl',
         'Auslastung (%)',
-        frame_name,  # Konkreter Rahmen-Name
         saddle_name,  # Konkreter Sattel-Name
-        fork_name,  # Konkrete Gabel-Name
-        'Materialien vollständig?',
         'geplante PM',
         'tatsächliche PM',
         'fertiggestellte PM',
@@ -181,7 +175,7 @@ for product in sorted(production_logs.keys()):
     # Identifiziere numerische Spalten für Summenzeile
     numeric_cols = []
     for col in df_display.columns:
-        if col not in ['Wochentag', 'Datum', 'Materialien vollständig?']:
+        if col not in ['Wochentag', 'Datum']:
             # Prüfe, ob Spalte numerische Werte enthält
             try:
                 pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum()

@@ -10,7 +10,9 @@ from models.scenarios import (
     MarketingCampaignScenario,
     WarehouseDamageScenario,
     SupplierBreakdownScenario,
-    DeliveryProblemScenario,
+    DelayScenario,
+    WaterDamageScenario,
+    CargoLossScenario,
     StandardScenario
 )
 from simulation.workday_calculator import WorkdayCalculator
@@ -39,18 +41,21 @@ def render_scenario_sidebar(key_suffix=""):
         # Szenario-Auswahl mit eindeutigem Key
         scenario_type = st.selectbox(
             "Szenario-Typ",
-            ["Marketingaktion", "Wasserschaden im Lager", "Maschinenausfall (China)", "Lieferprobleme (China)"],
+            ["Marketingaktion", "Wasserschaden im Lager", "Maschinenausfall (China)", "Verspätung", "Ladungsverlust auf See"],
             key=f"scenario_type_global{key_suffix}"
         )
         
         planning_year = st.session_state.get('planning_year', 2027)
         workday_calc = WorkdayCalculator(year=planning_year)
         start_of_year = date(planning_year, 1, 1)
+        # Erlaube auch Daten aus 2026
+        min_date = date(2026, 1, 1)
+        max_date = date(planning_year, 12, 31)
         
         if scenario_type == "Marketingaktion":
             st.subheader("Marketingaktion")
-            start_date = st.date_input("Start-Datum", value=date(planning_year, 2, 19), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"marketing_start_global{key_suffix}")
-            end_date = st.date_input("End-Datum", value=date(planning_year, 3, 11), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"marketing_end_global{key_suffix}")
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 2, 19), min_value=min_date, max_value=max_date, key=f"marketing_start_global{key_suffix}")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 3, 11), min_value=min_date, max_value=max_date, key=f"marketing_end_global{key_suffix}")
             demand_factor = st.slider("Nachfrage-Erhöhung (Faktor)", 1.0, 3.0, 1.5, 0.1, key=f"marketing_factor_global{key_suffix}")
             
             # Produktauswahl: Multi-Select für betroffene Produkte
@@ -64,8 +69,24 @@ def render_scenario_sidebar(key_suffix=""):
             )
             
             if st.button("➕ Marketingaktion hinzufügen", key=f"add_marketing_global{key_suffix}"):
-                start_day = (start_date - start_of_year).days
-                end_day = (end_date - start_of_year).days
+                # Berechne start_day und end_day relativ zum Planungsjahr
+                # Wenn das Datum aus 2026 stammt, berechne es relativ zu 2026, dann addiere Offset
+                if start_date.year == 2026:
+                    start_date_base = date(2026, 1, 1)
+                    start_day = (start_date - start_date_base).days
+                    # Offset: Tage zwischen 1.1.2026 und 1.1.planning_year (negativ, da 2026 vor 2027)
+                    offset = (start_date_base - start_of_year).days
+                    start_day = start_day + offset
+                else:
+                    start_day = (start_date - start_of_year).days
+                
+                if end_date.year == 2026:
+                    end_date_base = date(2026, 1, 1)
+                    end_day = (end_date - end_date_base).days
+                    offset = (end_date_base - start_of_year).days
+                    end_day = end_day + offset
+                else:
+                    end_day = (end_date - start_of_year).days
                 
                 # Wenn alle Produkte ausgewählt oder keine Auswahl, dann None (alle Produkte)
                 affected_products = None if (not selected_products or len(selected_products) == len(all_products)) else selected_products
@@ -91,19 +112,24 @@ def render_scenario_sidebar(key_suffix=""):
                 st.rerun()
         
         elif scenario_type == "Wasserschaden im Lager":
-            st.subheader("Wasserschaden im Lager")
-            start_date = st.date_input("Start-Datum", value=date(planning_year, 4, 10), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"warehouse_damage_start_global{key_suffix}")
-            end_date = st.date_input("End-Datum", value=date(planning_year, 4, 20), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"warehouse_damage_end_global{key_suffix}")
-            stock_loss = st.slider("Lagerbestands-Verlust (%)", 0.0, 1.0, 0.5, 0.1, key=f"warehouse_damage_loss_global{key_suffix}")
+            st.subheader("Wasserschaden im Materiallager")
+            st.caption("Setzt den Bestand aller Sättel morgens und abends auf 0")
+            damage_date = st.date_input("Datum", value=date(planning_year, 4, 10), min_value=min_date, max_value=max_date, key=f"water_damage_date_global{key_suffix}")
             
-            if st.button("➕ Wasserschaden hinzufügen", key=f"add_warehouse_damage_global{key_suffix}"):
-                start_day = (start_date - start_of_year).days
-                end_day = (end_date - start_of_year).days
-                scenario = WarehouseDamageScenario(
-                    name=f"Wasserschaden im Lager ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
-                    start_day=start_day,
-                    end_day=end_day,
-                    stock_loss_percentage=stock_loss,
+            if st.button("➕ Wasserschaden hinzufügen", key=f"add_water_damage_global{key_suffix}"):
+                # Berechne damage_day relativ zum Planungsjahr
+                if damage_date.year == 2026:
+                    damage_date_base = date(2026, 1, 1)
+                    damage_day = (damage_date - damage_date_base).days
+                    offset = (damage_date_base - start_of_year).days
+                    damage_day = damage_day + offset
+                else:
+                    damage_day = (damage_date - start_of_year).days
+                scenario = WaterDamageScenario(
+                    name=f"Wasserschaden im Materiallager ({damage_date.strftime(MasterData.DATE_FORMAT)})",
+                    start_day=damage_day,
+                    end_day=damage_day,  # Exaktes Datum: start_day = end_day
+                    damage_date=damage_day,
                     affected_component="saddles"
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
@@ -112,15 +138,28 @@ def render_scenario_sidebar(key_suffix=""):
         
         elif scenario_type == "Maschinenausfall (China)":
             st.subheader("Maschinenausfall (China)")
-            start_date = st.date_input("Start-Datum", value=date(planning_year, 6, 1), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"supplier_breakdown_start_global{key_suffix}")
-            end_date = st.date_input("End-Datum", value=date(planning_year, 6, 10), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"supplier_breakdown_end_global{key_suffix}")
-            component = st.selectbox("Betroffene Komponente", ["saddles"], key=f"supplier_component_global{key_suffix}")  # Nur Sättel
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 6, 1), min_value=min_date, max_value=max_date, key=f"supplier_breakdown_start_global{key_suffix}")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 6, 10), min_value=min_date, max_value=max_date, key=f"supplier_breakdown_end_global{key_suffix}")
             
             if st.button("➕ Lieferantenausfall hinzufügen", key=f"add_supplier_breakdown_global{key_suffix}"):
-                start_day = (start_date - start_of_year).days
-                end_day = (end_date - start_of_year).days
+                # Berechne start_day und end_day relativ zum Planungsjahr
+                if start_date.year == 2026:
+                    start_date_base = date(2026, 1, 1)
+                    start_day = (start_date - start_date_base).days
+                    offset = (start_date_base - start_of_year).days
+                    start_day = start_day + offset
+                else:
+                    start_day = (start_date - start_of_year).days
+                
+                if end_date.year == 2026:
+                    end_date_base = date(2026, 1, 1)
+                    end_day = (end_date - end_date_base).days
+                    offset = (end_date_base - start_of_year).days
+                    end_day = end_day + offset
+                else:
+                    end_day = (end_date - start_of_year).days
                 scenario = SupplierBreakdownScenario(
-                    name=f"Lieferantenausfall Sättel ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
+                    name=f"Maschinenausfall Sättel ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
                     start_day=start_day,
                     end_day=end_day,
                     component_type="saddles"  # Immer Sättel
@@ -129,24 +168,67 @@ def render_scenario_sidebar(key_suffix=""):
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
                 st.rerun()
         
-        elif scenario_type == "Lieferprobleme (China)":
-            st.subheader("Lieferprobleme (China)")
-            st.info("Betroffene Komponente: Sättel")
-            start_date = st.date_input("Start-Datum", value=date(planning_year, 7, 19), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"delivery_start_global{key_suffix}")
-            end_date = st.date_input("End-Datum", value=date(planning_year, 7, 29), min_value=start_of_year, max_value=date(planning_year, 12, 31), key=f"delivery_end_global{key_suffix}")
-            loss = st.slider("Warenverlust (%)", 0.0, 1.0, 0.0, 0.1, key=f"delivery_loss_global{key_suffix}")
-            delay = st.number_input("Verspätung (Tage)", min_value=0, max_value=30, value=0, key=f"delivery_delay_global{key_suffix}")
+        elif scenario_type == "Verspätung":
+            st.subheader("Verspätung")
+            delay_date = st.date_input("Datum", value=date(planning_year, 7, 19), min_value=min_date, max_value=max_date, key=f"delay_date_global{key_suffix}")
+            delay_stage = st.selectbox(
+                "Logistik-Zwischenstopp",
+                ["truck_china_arrival", "ship_arrival", "truck_de_arrival"],
+                format_func=lambda x: {
+                    "truck_china_arrival": "Ankunft LKW China",
+                    "ship_arrival": "Ankunft Schiff",
+                    "truck_de_arrival": "Ankunft LKW Deutschland"
+                }[x],
+                key=f"delay_stage_global{key_suffix}"
+            )
+            delay = st.number_input("Verspätung (Tage)", min_value=0, max_value=30, value=0, key=f"delay_days_global{key_suffix}")
             
-            if st.button("➕ Lieferproblem hinzufügen", key=f"add_delivery_global{key_suffix}"):
-                start_day = (start_date - start_of_year).days
-                end_day = (end_date - start_of_year).days
-                scenario = DeliveryProblemScenario(
-                    name=f"Lieferproblem Sättel ({start_date.strftime(MasterData.DATE_FORMAT)} - {end_date.strftime(MasterData.DATE_FORMAT)})",
-                    start_day=start_day,
-                    end_day=end_day,
+            if st.button("➕ Verspätung hinzufügen", key=f"add_delay_global{key_suffix}"):
+                # Berechne delay_day relativ zum Planungsjahr
+                if delay_date.year == 2026:
+                    delay_date_base = date(2026, 1, 1)
+                    delay_day = (delay_date - delay_date_base).days
+                    offset = (delay_date_base - start_of_year).days
+                    delay_day = delay_day + offset
+                else:
+                    delay_day = (delay_date - start_of_year).days
+                stage_name = {
+                    "truck_china_arrival": "Ankunft LKW China",
+                    "ship_arrival": "Ankunft Schiff",
+                    "truck_de_arrival": "Ankunft LKW Deutschland"
+                }[delay_stage]
+                scenario = DelayScenario(
+                    name=f"Verspätung {stage_name} ({delay_date.strftime(MasterData.DATE_FORMAT)})",
+                    start_day=delay_day,
+                    end_day=delay_day,  # Exaktes Datum: start_day = end_day
                     component_type="saddles",  # Immer Sättel
-                    loss_percentage=loss,
-                    delay_days=delay
+                    delay_days=delay,
+                    delay_stage=delay_stage
+                )
+                st.session_state.scenario_manager.add_scenario(scenario)
+                st.success(f"Szenario hinzugefügt: {scenario.name}")
+                st.rerun()
+        
+        elif scenario_type == "Ladungsverlust auf See":
+            st.subheader("Ladungsverlust auf See")
+            st.caption("Verliert die gesamte Ladung einer Lieferung (Mengen werden auf 0 gesetzt)")
+            loss_date = st.date_input("Datum", value=date(planning_year, 8, 15), min_value=min_date, max_value=max_date, key=f"cargo_loss_date_global{key_suffix}")
+            
+            if st.button("➕ Ladungsverlust hinzufügen", key=f"add_cargo_loss_global{key_suffix}"):
+                # Berechne loss_day relativ zum Planungsjahr
+                if loss_date.year == 2026:
+                    loss_date_base = date(2026, 1, 1)
+                    loss_day = (loss_date - loss_date_base).days
+                    offset = (loss_date_base - start_of_year).days
+                    loss_day = loss_day + offset
+                else:
+                    loss_day = (loss_date - start_of_year).days
+                scenario = CargoLossScenario(
+                    name=f"Ladungsverlust auf See ({loss_date.strftime(MasterData.DATE_FORMAT)})",
+                    start_day=loss_day,
+                    end_day=loss_day,  # Exaktes Datum: start_day = end_day
+                    loss_date=loss_day,
+                    component_type="saddles"
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")

@@ -74,16 +74,6 @@ if not df.empty:
     weekend_flags = df['Is_Weekend'].values if 'Is_Weekend' in df.columns else [False] * len(df)
     holiday_flags = df['Is_Holiday'].values if 'Is_Holiday' in df.columns else [False] * len(df)
     
-    # Farblegende oben rechts
-    col1, col2 = st.columns([1, 1])
-    with col2:
-        st.markdown("""
-        <div style="text-align: right; margin-bottom: 10px;">
-            <span style="background-color: #ffebee; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
-            <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
-        </div>
-        """, unsafe_allow_html=True)
-    
     # Zeige Tabelle mit Styling (Wochenenden und Feiertage hervorheben)
     def style_row(row):
         idx = row.name
@@ -107,9 +97,9 @@ if not df.empty:
                 sum_row[col] = int(numeric_values.sum()) if not numeric_values.isna().all() else 0
             except (ValueError, TypeError):
                 sum_row[col] = 0
-        elif col not in ['Wochentag', 'Datum', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
+        elif col not in ['Wochentag', 'Datum', 'Verspätung', 'Ladungsverlust', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
                          'Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 'Abfahrt LKW 🇩🇪', 
-                         'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪', 'Verfügbar im Lager 🇩🇪']:
+                         'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪']:
             sum_row[col] = ''
         else:
             sum_row[col] = ''
