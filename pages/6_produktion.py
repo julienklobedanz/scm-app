@@ -16,7 +16,7 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 
 st.set_page_config(page_title="Produktion", layout="wide", page_icon="🏭")
 
-# CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
 st.markdown("""
 <style>
     /* Menüeinträge großgeschrieben und fett */
@@ -24,40 +24,14 @@ st.markdown("""
         font-weight: bold !important;
         text-transform: capitalize !important;
     }
-    /* Fixierte Summenzeile - letzte Zeile bleibt beim Scrollen sichtbar */
-    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
-        position: sticky !important;
-        bottom: 0 !important;
-        background-color: #e0e0e0 !important;
-        z-index: 100 !important;
-    }
-    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
-        background-color: #e0e0e0 !important;
-        font-weight: bold !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
-render_scenario_sidebar(key_suffix="_produktion")
+render_scenario_sidebar()
 
 # Initialisiere Session State
 initialize_session_state()
-
-# WICHTIG: Stelle sicher, dass daily_demands_actual aktualisiert wird, wenn sich Szenarien ändern
-# Dies ist notwendig, damit die Produktion korrekt aktualisiert wird
-from ui.volume_planning_utils import calculate_volume_planning_demand
-calculate_volume_planning_demand()
-
-# WICHTIG: material_inventory_data sollte bereits beim App-Start initialisiert worden sein
-# (durch initialize_all_page_calculations() in app.py)
-# Falls nicht, versuche es jetzt zu initialisieren (Fallback für direkten Seitenaufruf)
-if 'material_inventory_data' not in st.session_state:
-    from ui.material_calculations import calculate_material_inventory
-    try:
-        calculate_material_inventory()
-    except Exception:
-        pass  # Wird beim Laden der Seite behandelt
 
 st.title("🏭 Produktion")
 st.markdown("Übersicht über Produktionsplanung, tatsächliche Produktion und Materialverfügbarkeit")
@@ -71,23 +45,34 @@ if st.session_state.results_df is None:
 
 results_df = st.session_state.results_df
 
-# Zeitraum (erweitert um erste Tage von 2028)
+# Zeitraum
 planning_year = st.session_state.get('planning_year', 2027)
 start_date = date(planning_year, 1, 1)
-end_date = date(planning_year + 1, 1, 10)  # Erweitert bis 10.01.2028
+end_date = date(planning_year, 12, 31)
 workday_calc = WorkdayCalculator(year=planning_year)
 
 # NEU: Lese Produktionslogs direkt aus dem ProductionPlanner
-# WICHTIG: Cache-Key erweitert um Szenarien, damit Cache invalidiert wird wenn Marketing hinzugefügt wird
 def get_production_logs():
-    """
-    Wrapper-Funktion, die die Berechnungslogik aus ui.production_calculations verwendet.
-    Diese Funktion wird von der Seite verwendet, um production_logs_cache zu berechnen.
-    """
-    from ui.production_calculations import calculate_production_logs
-    return calculate_production_logs()
-
-# Alte Implementierung entfernt - wird jetzt in ui.production_calculations.py verwendet
+    """Liest Produktionslogs direkt aus dem ProductionPlanner (Single Source of Truth)"""
+    if 'simulator' not in st.session_state or st.session_state.simulator is None:
+        st.error("⚠️ Simulator nicht verfügbar. Bitte führen Sie zuerst die Simulation aus.")
+        return {}
+    
+    planner = st.session_state.simulator.production_planner
+    
+    if not hasattr(planner, 'production_logs') or not planner.production_logs:
+        st.warning("⚠️ Keine Produktionslogs verfügbar. Bitte führen Sie die Simulation erneut aus.")
+        return {}
+    
+    # Konvertiere Logs zu DataFrames
+    production_logs = {}
+    for product, logs in planner.production_logs.items():
+        if logs:
+            production_logs[product] = pd.DataFrame(logs)
+        else:
+            production_logs[product] = pd.DataFrame()
+    
+    return production_logs
 
 # Erstelle Produktions-Log
 with st.spinner("🔄 Lade Produktionsdaten..."):
@@ -107,7 +92,7 @@ for product in sorted(production_logs.keys()):
         st.info(f"Keine Daten für {product} verfügbar.")
         continue
     
-    # Filtere auf den Zeitraum (2027 + erste Tage 2028)
+    # Filtere auf den Standard-Zeitraum (2027)
     df_prod_filtered = df_prod[
         (pd.to_datetime(df_prod['Datum'], format='%d.%m.%Y') >= pd.to_datetime(start_date)) &
         (pd.to_datetime(df_prod['Datum'], format='%d.%m.%Y') <= pd.to_datetime(end_date))
@@ -149,15 +134,6 @@ for product in sorted(production_logs.keys()):
     available_columns = [col for col in column_order if col in df_prod_filtered.columns]
     df_display = df_prod_filtered[available_columns].copy()
     
-    # Formatierung: Auslastung auf 2 Nachkommastellen
-    if 'Auslastung (%)' in df_display.columns:
-        # Konvertiere zu numerisch und formatiere auf 2 Nachkommastellen
-        df_display['Auslastung (%)'] = pd.to_numeric(df_display['Auslastung (%)'], errors='coerce').round(2)
-        # Stelle sicher, dass NaN-Werte als leere Strings angezeigt werden
-        df_display['Auslastung (%)'] = df_display['Auslastung (%)'].apply(
-            lambda x: f"{x:.2f}" if pd.notna(x) else ""
-        )
-    
     # Farblegende oben rechts
     col1, col2 = st.columns([1, 1])
     with col2:
@@ -194,16 +170,7 @@ for product in sorted(production_logs.keys()):
         sum_row = {'Wochentag': 'Summe', 'Datum': ''}
         for col in df_display.columns:
             if col in numeric_cols:
-                # Für Auslastung: Durchschnitt statt Summe
-                if col == 'Auslastung (%)':
-                    # Konvertiere String-Werte zurück zu Float für Berechnung
-                    numeric_values = df_display[col].apply(
-                        lambda x: float(x) if isinstance(x, str) and x.strip() != '' else (float(x) if pd.notna(x) else 0)
-                    )
-                    avg_utilization = numeric_values.mean()
-                    sum_row[col] = f"{avg_utilization:.2f}" if pd.notna(avg_utilization) else ""
-                else:
-                    sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
+                sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
             elif col not in sum_row:
                 sum_row[col] = ''
         

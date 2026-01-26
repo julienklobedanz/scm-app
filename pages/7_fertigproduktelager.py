@@ -16,7 +16,7 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 
 st.set_page_config(page_title="Fertigproduktelager", layout="wide", page_icon="✅")
 
-# CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
+# CSS für Menü-Formatierung (Großbuchstaben und Fett)
 st.markdown("""
 <style>
     /* Menüeinträge großgeschrieben und fett */
@@ -24,34 +24,14 @@ st.markdown("""
         font-weight: bold !important;
         text-transform: capitalize !important;
     }
-    /* Fixierte Summenzeile - letzte Zeile bleibt beim Scrollen sichtbar */
-    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
-        position: sticky !important;
-        bottom: 0 !important;
-        background-color: #e0e0e0 !important;
-        z-index: 100 !important;
-    }
-    .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
-        background-color: #e0e0e0 !important;
-        font-weight: bold !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # Szenarien-Sidebar rendern
-render_scenario_sidebar(key_suffix="_fertigproduktelager")
+render_scenario_sidebar()
 
 # Initialisiere Session State
 initialize_session_state()
-
-# WICHTIG: Stelle sicher, dass alle abhängigen Daten aktualisiert sind
-# 1. Volumenplanung (Basis für Produktion)
-from ui.volume_planning_utils import calculate_volume_planning_demand
-calculate_volume_planning_demand()
-
-# 2. Produktionslogs (enthält fertiggestellte PM, reagiert auf Marketing)
-from ui.production_calculations import calculate_production_logs
-production_logs_cache = calculate_production_logs()
 
 st.title("✅ Fertigproduktelager")
 st.markdown("Übersicht über Fertigproduktbestände nach Produkten")
@@ -63,6 +43,8 @@ if st.session_state.results_df is None:
     st.warning("⚠️ Keine Simulationsergebnisse verfügbar.")
     st.stop()
 
+results_df = st.session_state.results_df
+
 # Zeitraum
 planning_year = st.session_state.get('planning_year', 2027)
 start_date = date(planning_year, 1, 1)
@@ -73,109 +55,53 @@ def create_finished_goods_log():
     """Erstellt Fertigproduktelager-Log für jedes Produkt"""
     fg_logs = {product: [] for product in MasterData.BOM.keys()}
     
-    # Kumulativer Bestand pro Produkt
-    stock_by_product = {product: 0.0 for product in MasterData.BOM.keys()}
-    
-    # Prüfe ob production_logs_cache verfügbar ist
-    if not production_logs_cache:
-        # Fallback: Verwende results_df (statisch)
-        results_df = st.session_state.results_df
-        for day in range(365):
-            current_date = workday_calc.get_date_from_day(day)
-            weekday = current_date.weekday()
-            weekday_name = workday_calc.get_weekday_name(day)
-            is_weekend = weekday >= 5
-            is_workday = workday_calc.is_workday(day)
-            is_holiday = not is_workday and not is_weekend
+    for day in range(365):
+        current_date = workday_calc.get_date_from_day(day)
+        day_info = workday_calc.get_day_info(day)
+        weekday_name = day_info['weekday_name']
+        is_workday = day_info['is_workday']
+        is_holiday = day_info['is_holiday']
+        is_weekend = day_info['is_weekend']
+        
+        # Produktion und Versand
+        actual_build = results_df.iloc[day]['Actual_Build']
+        
+        # Für jedes Produkt
+        for product in MasterData.BOM.keys():
+            product_share = MasterData.PRODUCT_SALES_SHARES.get(product, 0.0)
+            production_qty = actual_build * product_share
             
-            if day < len(results_df):
-                actual_build = results_df.iloc[day]['Actual_Build']
-            else:
-                actual_build = 0
+            # Aggregiere über alle Länder
+            total_receipt = 0
+            total_dispatch = 0
             
-            for product in MasterData.BOM.keys():
-                product_share = MasterData.PRODUCT_SALES_SHARES.get(product, 0.0)
-                production_qty = actual_build * product_share
+            for market_code, market_params in MasterData.MARKETS.items():
+                market_share = market_params['share']
                 
-                total_receipt = 0
-                total_dispatch = 0
+                # Vereinfacht: FGI = 0 (Just-in-Time), aber wir tracken Zugang/Abgang
+                receipt = production_qty * market_share
+                dispatch = receipt  # Sofort versendet (Just-in-Time)
                 
-                for market_code, market_params in MasterData.MARKETS.items():
-                    market_share = market_params['share']
-                    receipt = production_qty * market_share
-                    dispatch = receipt
-                    total_receipt += receipt
-                    total_dispatch += dispatch
-                
-                stock_morning = stock_by_product[product]
-                stock_evening = stock_morning + total_receipt - total_dispatch
-                stock_by_product[product] = max(0.0, stock_evening)
-                
-                weekday_abbr = weekday_name[:2]
-                
-                fg_logs[product].append({
-                    'Wochentag': weekday_abbr,
-                    'Datum': current_date.strftime(MasterData.DATE_FORMAT),
-                    'Lagerzugang': int(round(total_receipt)),
-                    'Bestand (morgens)': int(round(stock_morning)),
-                    'Lagerabgang': int(round(total_dispatch)),
-                    'Bestand (abends)': int(round(stock_evening)),
-                    'Is_Weekend': is_weekend,
-                    'Is_Holiday': is_holiday
-                })
-    else:
-        # NEU: Verwende fertiggestellte PM aus production_logs_cache (dynamisch, reagiert auf Marketing)
-        for day in range(365):
-            current_date = workday_calc.get_date_from_day(day)
-            weekday = current_date.weekday()
-            weekday_name = workday_calc.get_weekday_name(day)
-            is_weekend = weekday >= 5
-            is_workday = workday_calc.is_workday(day)
-            is_holiday = not is_workday and not is_weekend
+                total_receipt += receipt
+                total_dispatch += dispatch
             
-            # Für jedes Produkt
-            for product in MasterData.BOM.keys():
-                # Hole fertiggestellte PM aus production_logs_cache
-                finished_pm = 0.0
-                if product in production_logs_cache and not production_logs_cache[product].empty:
-                    df_prod = production_logs_cache[product]
-                    # Finde Zeile für diesen Tag
-                    date_str = current_date.strftime(MasterData.DATE_FORMAT)
-                    matching_rows = df_prod[df_prod['Datum'] == date_str]
-                    if not matching_rows.empty:
-                        finished_pm = matching_rows.iloc[0].get('fertiggestellte PM', 0.0)
-                        try:
-                            finished_pm = float(finished_pm) if finished_pm > 0 else 0.0
-                        except (ValueError, TypeError):
-                            finished_pm = 0.0
-                
-                # Lagerzugang = fertiggestellte PM (pro Produkt)
-                total_receipt = finished_pm
-                
-                # Lagerabgang = Verteilung auf Märkte
-                total_dispatch = 0.0
-                for market_code, market_params in MasterData.MARKETS.items():
-                    market_share = market_params['share']
-                    dispatch = finished_pm * market_share
-                    total_dispatch += dispatch
-                
-                # Bestand (kumulativ)
-                stock_morning = stock_by_product[product]
-                stock_evening = stock_morning + total_receipt - total_dispatch
-                stock_by_product[product] = max(0.0, stock_evening)
-                
-                weekday_abbr = weekday_name[:2]
-                
-                fg_logs[product].append({
-                    'Wochentag': weekday_abbr,
-                    'Datum': current_date.strftime(MasterData.DATE_FORMAT),
-                    'Lagerzugang': int(round(total_receipt)),
-                    'Bestand (morgens)': int(round(stock_morning)),
-                    'Lagerabgang': int(round(total_dispatch)),
-                    'Bestand (abends)': int(round(stock_evening)),
-                    'Is_Weekend': is_weekend,
-                    'Is_Holiday': is_holiday
-                })
+            # Bestand morgens (vereinfacht: 0, da Just-in-Time)
+            stock_morning = 0
+            stock_evening = 0
+            
+            # Wochentag-Abkürzung
+            weekday_abbr = weekday_name[:2]  # Mo, Di, Mi, etc.
+            
+            fg_logs[product].append({
+                'Wochentag': weekday_abbr,
+                'Datum': current_date.strftime(MasterData.DATE_FORMAT),
+                'Lagerzugang': round(total_receipt, 1),
+                'Bestand (morgens)': round(stock_morning, 1),
+                'Lagerabgang': round(total_dispatch, 1),
+                'Bestand (abends)': round(stock_evening, 1),
+                'Is_Weekend': is_weekend,
+                'Is_Holiday': is_holiday
+            })
     
     return {product: pd.DataFrame(log) for product, log in fg_logs.items()}
 
