@@ -174,7 +174,23 @@ def render_scenario_sidebar(key_suffix=""):
         
         # Simulation starten
         if st.button("🔄 Simulation neu starten", type="primary", use_container_width=True):
+            # KRITISCH: Lösche Cache, damit Simulation mit neuestem Code neu läuft
+            planning_year = st.session_state.get('planning_year', 2027)
+            if 'simulation_cache' in st.session_state:
+                if planning_year in st.session_state.simulation_cache:
+                    del st.session_state.simulation_cache[planning_year]
+            
+            # Setze alle Flags zurück
+            st.session_state.happy_path_run = False
+            st.session_state.results_df = None
+            st.session_state.simulator = None
+            st.session_state.kpis = None
+            st.session_state.simulation_running = False
+            st.session_state.simulation_started = False
+            st.session_state.simulation_year = None
+            st.session_state.volume_planning_calculated = False
             st.session_state.run_simulation = True
             st.session_state.manual_restart = True
+            st.success("🔄 Cache gelöscht - Simulation wird neu gestartet...")
             st.rerun()
 

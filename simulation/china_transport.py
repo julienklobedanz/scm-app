@@ -907,17 +907,16 @@ class ChinaTransportManager:
                 # Produktionsmenge = Freigegebene Bestellungen für das Produktionsdatum
                 production_qty = raw['prod']
             
-            # WARENBESTAND: Vorheriger Bestand + Produktion (vor dem heutigen Versand)
-            # current_stock = kumulierte Produktion - kumulierte Versände bis gestern
+            # WARENBESTAND: Vorheriger Bestand + Produziert
             current_stock = previous_stock + production_qty
             
-            # WARENAUSGANG: Versand = min(geplante Versandmenge aus Pool-Logik, verfügbarer Bestand)
-            # KORREKTUR: current_stock IST bereits der verfügbare Bestand (Produktion kum. - Versand kum. bis gestern).
-            # Eine Formel "current_stock - cumulative_shipped" wäre ein doppelter Abzug und würde den
-            # Warenausgang fälschlich begrenzen → Bestand würde anwachsen. Richtig: min(planned, current_stock).
-            planned_shipment_qty = shipment_results[day_idx]
+            # WARENAUSGANG: Verwende direkt die geplante Versandmenge aus Pool-Logik
+            # KONSISTENT mit get_inbound_log_dataframe: Beide verwenden shipments_today[s]
+            # ohne weitere Begrenzung durch Warenbestand
+            planned_shipment_qty = shipment_results[day_idx]  # Bereits berechnete Versandmenge (aus Pool-Logik)
             
             # Prüfe ob es DeliveryProblemScenario gibt, die zu 100% Verlust führen
+            shipment_qty = planned_shipment_qty  # Standard: Verwende geplante Menge
             if self.scenario_manager:
                 day_index = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 delivery_problems = self.scenario_manager.get_delivery_problem_scenarios(day_index)
@@ -925,12 +924,8 @@ class ChinaTransportManager:
                     if scenario.component_type == 'saddles' and scenario.loss_percentage >= 1.0:
                         shipment_qty = 0
                         break
-                else:
-                    shipment_qty = min(planned_shipment_qty, current_stock)
-            else:
-                shipment_qty = min(planned_shipment_qty, current_stock)
             
-            # Warenbestand nach Versand
+            # Aktualisiere Warenbestand nach Versand
             current_stock = current_stock - shipment_qty
             previous_stock = current_stock  # Für nächsten Tag
             
@@ -1050,15 +1045,9 @@ class ChinaTransportManager:
         # Alle Sättel ermitteln
         all_saddles = set(item['saddle'] for item in self.master_data.BOM.values())
         
-        # Shares berechnen (nur für die Verteilung der PRODUKTION in die Eimer)
-        saddle_shares_all = {}
-        total_share = 0.0
-        for s in all_saddles:
-            share = sum(self.master_data.PRODUCT_SALES_SHARES.get(p, 0) for p, bom in self.master_data.BOM.items() if bom['saddle'] == s)
-            saddle_shares_all[s] = share
-            total_share += share
-        if total_share > 0:
-            saddle_shares_all = {s: share / total_share for s, share in saddle_shares_all.items()}
+        # Shares berechnen (KONSISTENT mit get_supplier_log_dataframe)
+        # Verwende die gleiche Methode wie in get_supplier_log_dataframe für Konsistenz
+        saddle_shares_all = self.master_data.calculate_saddle_shares()
         
         # 2. Produktion sammeln (Der Zufluss in die Eimer)
         # WICHTIG: Berechne Produktion direkt aus Bestelleingang-Werten (dynamisch),
