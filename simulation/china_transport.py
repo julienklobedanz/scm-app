@@ -19,7 +19,7 @@ class ChinaTransportManager:
     2. LKW zum Hafen (China): 2 AT
     3. Warten auf Mittwoch (Schiff fährt nur Mittwochs ab)
     4. Schiff: 30 KT (Kalendertage)
-    5. LKW zum Werk (Deutschland): 2 AT
+    5. LKW zum Werk (Deutschland): 2 AT (Abfahrt nur an deutschen Arbeitstagen, Start-Tag zählt mit)
     6. Wareneingang: +1 Tag zwischen physischer Ankunft und Verfügbarkeit
     """
     
@@ -252,10 +252,33 @@ class ChinaTransportManager:
             ship_arrival_date_actual = ship_arrival_date_planned + timedelta(days=max_ship_arrival_delay)
             ship_arrival_day = (ship_arrival_date_actual - date(self.workday_calculator.year, 1, 1)).days
             
-            # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 1 Arbeitstag
-            # Start-Datum zählt NICHT mit! Also: Ankunft Schiff + 1 Arbeitstag (Ankunft zählt nicht)
+            # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 2 Arbeitstage
+            # Start-Datum zählt MIT! Also: Abfahrt Tag X = Tag 1, Tag X+1 = Tag 2, Ankunft Tag X+1
+            # Prüfe zuerst, ob das Abfahrtsdatum ein deutscher Feiertag ist - wenn ja, verschiebe auf nächsten Arbeitstag
             truck_de_start_day = ship_arrival_day
-            truck_de_end_day_planned = self._add_workdays(truck_de_start_day, 1, exclude_start=True, use_chinese_holidays=False)  # 2-1 = 1 Arbeitstag, Start zählt nicht!
+            truck_de_start_date = self.workday_calculator.get_date_from_day(truck_de_start_day)
+            
+            # Prüfe ob Abfahrt auf Wochenende oder Feiertag fällt - verschiebe auf nächsten Arbeitstag
+            start_weekday = truck_de_start_date.weekday()
+            is_start_weekend = start_weekday >= 5
+            is_start_holiday = truck_de_start_date in self.workday_calculator.german_holidays
+            
+            if is_start_weekend or is_start_holiday:
+                # Verschiebe Abfahrt auf nächsten Arbeitstag
+                days_to_add = 1
+                while True:
+                    next_date = truck_de_start_date + timedelta(days=days_to_add)
+                    next_weekday = next_date.weekday()
+                    is_next_weekend = next_weekday >= 5
+                    is_next_holiday = next_date in self.workday_calculator.german_holidays
+                    if not is_next_weekend and not is_next_holiday:
+                        truck_de_start_date = next_date
+                        truck_de_start_day = (truck_de_start_date - date(self.workday_calculator.year, 1, 1)).days
+                        break
+                    days_to_add += 1
+            
+            # Berechne Ankunft: Start-Tag zählt als Tag 1, nächster AT ist Tag 2 (Ankunft)
+            truck_de_end_day_planned = self._add_workdays(truck_de_start_day, 2, exclude_start=False, use_chinese_holidays=False)  # 2 Arbeitstage, Start zählt mit!
             
             # Verschiebe Ankunft LKW DE bei Verspätung (wenn am Abfahrtsdatum LKW China aktiv)
             truck_de_end_day = truck_de_end_day_planned + max_truck_de_arrival_delay
@@ -1369,8 +1392,30 @@ class ChinaTransportManager:
                 date_ship_arr_ideal = date_ship_dep_ideal + timedelta(days=30)
                 day_ship_arr_ideal_idx = (date_ship_arr_ideal - date(self.workday_calculator.year, 1, 1)).days
                 
-                # Ideal: Ankunft LKW DE (Ankunft Schiff + 1 AT)
-                day_arr_de_ideal = self._add_workdays(day_ship_arr_ideal_idx, 1, exclude_start=True, use_chinese_holidays=False)
+                # Ideal: Abfahrt LKW DE (Ankunft Schiff, aber nur wenn Arbeitstag, sonst nächster AT)
+                truck_de_start_day_ideal = day_ship_arr_ideal_idx
+                truck_de_start_date_ideal = date_ship_arr_ideal
+                
+                ideal_start_weekday = truck_de_start_date_ideal.weekday()
+                is_ideal_start_weekend = ideal_start_weekday >= 5
+                is_ideal_start_holiday = truck_de_start_date_ideal in self.workday_calculator.german_holidays
+                
+                if is_ideal_start_weekend or is_ideal_start_holiday:
+                    # Verschiebe Abfahrt auf nächsten Arbeitstag
+                    days_to_add = 1
+                    while True:
+                        next_date = truck_de_start_date_ideal + timedelta(days=days_to_add)
+                        next_weekday = next_date.weekday()
+                        is_next_weekend = next_weekday >= 5
+                        is_next_holiday = next_date in self.workday_calculator.german_holidays
+                        if not is_next_weekend and not is_next_holiday:
+                            truck_de_start_date_ideal = next_date
+                            truck_de_start_day_ideal = (truck_de_start_date_ideal - date(self.workday_calculator.year, 1, 1)).days
+                            break
+                        days_to_add += 1
+                
+                # Ideal: Ankunft LKW DE (Abfahrt + 2 AT, Start-Tag zählt mit)
+                day_arr_de_ideal = self._add_workdays(truck_de_start_day_ideal, 2, exclude_start=False, use_chinese_holidays=False)
                 date_arr_de_ideal = self.workday_calculator.get_date_from_day(day_arr_de_ideal)
                 
                 # Prüfe ob geplante Ankunft auf Wochenende oder Feiertag fällt - verschiebe auf nächsten Arbeitstag
@@ -1433,12 +1478,35 @@ class ChinaTransportManager:
                 date_ship_arr_planned_real = date_ship_dep_actual + timedelta(days=30)
                 date_ship_arr_actual = date_ship_arr_planned_real + timedelta(days=ship_arrival_delay)
                 row['Ankunft Schiff 🇩🇪'] = date_ship_arr_actual.strftime(self.master_data.DATE_FORMAT)
-                row['Abfahrt LKW 🇩🇪'] = date_ship_arr_actual.strftime(self.master_data.DATE_FORMAT)
                 
                 day_ship_arr_actual_idx = (date_ship_arr_actual - date(self.workday_calculator.year, 1, 1)).days
                 
-                # LKW DE Transport (Real: Tatsächliche Schiffsankunft + 1 AT)
-                day_arr_de_planned_real = self._add_workdays(day_ship_arr_actual_idx, 1, exclude_start=True, use_chinese_holidays=False)
+                # KRITISCH: Prüfe ob Abfahrt LKW auf Wochenende oder Feiertag fällt - verschiebe auf nächsten Arbeitstag
+                truck_de_start_day_real = day_ship_arr_actual_idx
+                truck_de_start_date_real = date_ship_arr_actual
+                
+                start_weekday_real = truck_de_start_date_real.weekday()
+                is_start_weekend_real = start_weekday_real >= 5
+                is_start_holiday_real = truck_de_start_date_real in self.workday_calculator.german_holidays
+                
+                if is_start_weekend_real or is_start_holiday_real:
+                    # Verschiebe Abfahrt auf nächsten Arbeitstag
+                    days_to_add = 1
+                    while True:
+                        next_date = truck_de_start_date_real + timedelta(days=days_to_add)
+                        next_weekday = next_date.weekday()
+                        is_next_weekend = next_weekday >= 5
+                        is_next_holiday = next_date in self.workday_calculator.german_holidays
+                        if not is_next_weekend and not is_next_holiday:
+                            truck_de_start_date_real = next_date
+                            truck_de_start_day_real = (truck_de_start_date_real - date(self.workday_calculator.year, 1, 1)).days
+                            break
+                        days_to_add += 1
+                
+                row['Abfahrt LKW 🇩🇪'] = truck_de_start_date_real.strftime(self.master_data.DATE_FORMAT)
+                
+                # LKW DE Transport (Real: Abfahrt + 2 AT, Start-Tag zählt mit)
+                day_arr_de_planned_real = self._add_workdays(truck_de_start_day_real, 2, exclude_start=False, use_chinese_holidays=False)
                 
                 # Verschiebe Ankunft LKW DE (mit LKW-DE Verspätung)
                 day_arr_de_actual = day_arr_de_planned_real + truck_de_arrival_delay
