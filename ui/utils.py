@@ -24,7 +24,8 @@ def initialize_session_state():
     if 'happy_path_run' not in st.session_state:
         st.session_state.happy_path_run = False
     if 'yearly_volume' not in st.session_state:
-        st.session_state.yearly_volume = 370000
+        # FIX: Synchronisiere yearly_volume mit total_volume aus GLOBAL_CONFIG
+        st.session_state.yearly_volume = MasterData.GLOBAL_CONFIG.get('total_volume', 370000)
     if 'simulation_running' not in st.session_state:
         st.session_state.simulation_running = False
     if 'simulation_started' not in st.session_state:

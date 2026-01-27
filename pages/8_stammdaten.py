@@ -10,8 +10,12 @@ from config.master_data import MasterData
 from config.holidays_config import HolidaysConfig
 from models.scenarios import ScenarioManager
 from ui.scenario_sidebar import render_scenario_sidebar
+from ui.page_initialization import initialize_all_page_calculations
 
 st.set_page_config(page_title="Stammdaten", layout="wide", page_icon="📋")
+
+# WICHTIG: Initialisiere Berechnungen auch auf dieser Seite
+initialize_all_page_calculations()
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett)
 st.markdown("""
@@ -43,6 +47,20 @@ if 'stammdaten_initialized' not in st.session_state:
 
 st.title("📋 Stammdaten")
 st.markdown("Alle Stammdaten der Supply Chain Simulation")
+
+# DEBUG: Zeige Konvergenz-Info für Test-1.3
+# WICHTIG: Zeige immer an, auch wenn Werte noch nicht gesetzt sind
+if 'convergence_iterations' in st.session_state:
+    convergence_reached = st.session_state.get('convergence_reached', False)
+    iterations = st.session_state.get('convergence_iterations', 0)
+    
+    if convergence_reached:
+        st.success(f"✅ **Konvergenz-Check:** {iterations} Iteration(en) durchgeführt, Konvergenz erreicht!")
+    else:
+        st.info(f"ℹ️ **Konvergenz-Check:** {iterations} Iteration(en) durchgeführt (max. 5)")
+else:
+    # Fallback: Zeige Info wenn Werte noch nicht gesetzt sind
+    st.warning("⚠️ **Konvergenz-Check:** Wird beim nächsten Laden der Seite berechnet...")
 
 # Tabs für verschiedene Stammdaten-Gruppen
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -209,6 +227,12 @@ with tab2:
             if new_value != value:
                 st.session_state.editable_global_config[key] = new_value
                 config_changed = True
+                
+                # FIX: Synchronisiere yearly_volume mit total_volume
+                if key == 'total_volume':
+                    st.session_state.yearly_volume = new_value
+                    # Aktualisiere auch MasterData.GLOBAL_CONFIG für Simulator
+                    MasterData.GLOBAL_CONFIG['total_volume'] = new_value
     
     with col2:
         for i, (key, value) in enumerate(list(st.session_state.editable_global_config.items())[4:]):
@@ -225,9 +249,39 @@ with tab2:
             if new_value != value:
                 st.session_state.editable_global_config[key] = new_value
                 config_changed = True
+                
+                # FIX: Synchronisiere yearly_volume mit total_volume
+                if key == 'total_volume':
+                    st.session_state.yearly_volume = new_value
+                    # Aktualisiere auch MasterData.GLOBAL_CONFIG für Simulator
+                    MasterData.GLOBAL_CONFIG['total_volume'] = new_value
     
     if config_changed:
         st.success("✅ Globale Konfiguration aktualisiert!")
+        
+        # FIX: Cache-Invalidierung bei Parameteränderungen
+        # Lösche alle relevanten Caches, damit Berechnungen neu starten
+        keys_to_delete = [
+            'production_logs_cache',
+            'production_logs_cache_key',
+            'material_inventory_data',
+            'saddle_logs_cache',
+            'material_logs_cache',
+            'inventory_chart_cache',
+            'daily_demands_planned',
+            'volume_planning_calculated',
+            'volume_planning_cache_key'
+        ]
+        
+        for k in keys_to_delete:
+            if k in st.session_state:
+                del st.session_state[k]
+        
+        # Lösche auch alle Caches die mit "material_inventory_" beginnen (außer last_cache_key)
+        for k in list(st.session_state.keys()):
+            if k.startswith('material_inventory_') and k != 'material_inventory_last_cache_key':
+                del st.session_state[k]
+        
         # Kein st.rerun() - Streamlit aktualisiert automatisch
     
     # Tägliche Arbeitslast (editierbar)

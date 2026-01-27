@@ -177,7 +177,8 @@ class ProductionPlanner:
                 stock_by_saddle_type[s_type] = current_saddle_stock * share
 
         # 5. Anteilige Produktion berechnen
-        products_list = list(self.master_data.BOM.keys())
+        # FIX: Garantiere deterministische Reihenfolge durch sorted()
+        products_list = sorted(self.master_data.BOM.keys())
         total_production_demand = sum(production_demand_by_product.values())
         
         proportional_production_by_product = {}
