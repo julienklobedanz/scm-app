@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict
 from config.master_data import MasterData
 from simulation.workday_calculator import WorkdayCalculator
+from models.scenarios import WaterDamageScenario
 
 
 def _get_backlog_from_previous_workday(
@@ -252,32 +253,143 @@ def _recalculate_all_products_with_rank_logic(
     return result
 
 
+def _get_inbound_arrivals_by_day_and_saddle(simulator, planning_year: int) -> Dict[int, Dict[str, float]]:
+    """
+    Erstellt eine Map: Tag-Index -> {Sattel: Menge}, die an diesem Tag ankommt.
+    Nutzt die Inbound-Tabelle für präzise Aufteilung pro Sattel-Typ.
+    
+    Args:
+        simulator: Simulator-Instanz
+        planning_year: Planungsjahr
+    
+    Returns:
+        Dict[day_index] -> Dict[saddle_name] -> quantity
+    """
+    inbound_map = {}
+    
+    manager = simulator.china_transport_manager
+    if not manager:
+        return inbound_map
+    
+    # Hole Sattel-Shares für Verteilung (Fallback)
+    saddle_shares = MasterData.calculate_saddle_shares()
+    
+    # Hole Inbound-DF (enthält bereits Verspätungen, Ladungsverluste etc.)
+    inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
+    
+    if inbound_df.empty:
+        return inbound_map
+    
+    start_date_sim = date(planning_year, 1, 1)
+    
+    # Iteriere über alle Zeilen der Inbound-Tabelle
+    for _, row in inbound_df.iterrows():
+        # Hole Ankunftsdatum (Tatsächliche Ankunft LKW 🇩🇪)
+        avail_str = row.get('Tatsächliche Ankunft LKW 🇩🇪', '')
+        if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
+            continue
+        
+        try:
+            avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+            day_idx = (avail_date - start_date_sim).days
+            
+            # Nur Tage im Planungsjahr berücksichtigen
+            if day_idx < 0 or day_idx >= 365:
+                continue
+            
+            if day_idx not in inbound_map:
+                inbound_map[day_idx] = {s: 0.0 for s in saddle_shares.keys()}
+            
+            # Hole Mengen pro Sattel-Typ aus den Spalten
+            for saddle_name in saddle_shares.keys():
+                if saddle_name in row:
+                    qty_val = row[saddle_name]
+                    try:
+                        if isinstance(qty_val, str):
+                            qty_val = qty_val.strip()
+                            if qty_val == '' or qty_val == '-':
+                                continue
+                        qty = float(qty_val) if qty_val else 0.0
+                        if qty > 0:
+                            inbound_map[day_idx][saddle_name] += qty
+                    except (ValueError, TypeError):
+                        continue
+        except (ValueError, TypeError):
+            continue
+    
+    return inbound_map
+
+
 def calculate_production_logs():
     """
-    Berechnet production_logs_cache ohne UI-Rendering.
-    Diese Funktion kann beim App-Start aufgerufen werden, ohne dass Streamlit-Widgets gerendert werden.
+    Berechnet production_logs_cache mit Running Inventory-Ansatz.
+    
+    NEUE LOGIK (Running Inventory):
+    - Chronologische Schleife über alle 365 Tage
+    - Running Stock pro Sattel-Typ wird Tag für Tag aktualisiert
+    - Inbound wird hinzugefügt, Produktion wird abgezogen
+    - Keine komplexen Deltas oder Synchronisationen mehr
     """
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
         return {}
     
-    planner = st.session_state.simulator.production_planner
+    simulator = st.session_state.simulator
+    planner = simulator.production_planner
     
     if not hasattr(planner, 'production_logs') or not planner.production_logs:
         return {}
     
-    # WICHTIG: Hole Cache-Key für Szenarien (für Cache-Invalidierung)
+    # Cache-Key für Invalidierung
     volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
-    
-    # Erweitere Cache-Key um Szenarien
-    cache_key = f"production_logs_{volume_planning_cache_key}"
+    cache_key = f"production_logs_running_v4_{volume_planning_cache_key}"  # v4: Fix für Double-Counting Bug
     
     # Prüfe Cache
     if cache_key in st.session_state and 'production_logs_cache' in st.session_state:
-        cached_key = st.session_state.get('production_logs_cache_key', None)
-        if cached_key == cache_key:
+        if st.session_state.get('production_logs_cache_key') == cache_key:
             return st.session_state.production_logs_cache
     
     planning_year = st.session_state.get('planning_year', 2027)
+    workday_calc = WorkdayCalculator(year=planning_year)
+    scenario_manager = getattr(simulator, 'scenario_manager', None)
+    
+    # Setup: Sattel-Typen und Shares
+    saddle_shares = MasterData.calculate_saddle_shares()
+    saddles = list(saddle_shares.keys())
+    
+    # Init Running Stock (Laufender Bestand)
+    running_stock = {s: 0.0 for s in saddles}
+    
+    # Berechne Initialbestand aus Inbound-Tabelle (Daten vor Planungsjahr)
+    manager = simulator.china_transport_manager
+    if manager:
+        cutoff_date = date(planning_year, 1, 1)
+        inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
+        
+        if not inbound_df.empty:
+            for _, row in inbound_df.iterrows():
+                avail_str = row.get('Tatsächliche Ankunft LKW 🇩🇪', '')
+                if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
+                    continue
+                
+                try:
+                    avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+                    if avail_date < cutoff_date:
+                        # Diese Ware kam vor dem Planungsjahr an -> Initialbestand
+                        for saddle_name in saddles:
+                            if saddle_name in row:
+                                qty_val = row[saddle_name]
+                                try:
+                                    if isinstance(qty_val, str):
+                                        qty_val = qty_val.strip()
+                                        if qty_val == '' or qty_val == '-':
+                                            continue
+                                    qty = float(qty_val) if qty_val else 0.0
+                                    if qty > 0:
+                                        running_stock[saddle_name] += qty
+                                except (ValueError, TypeError):
+                                    continue
+                except (ValueError, TypeError):
+                    continue
     
     # Konvertiere Logs zu DataFrames
     production_logs = {}
@@ -287,387 +399,216 @@ def calculate_production_logs():
         else:
             production_logs[product] = pd.DataFrame()
     
-    # Dynamische Updates mit Rang-Logik (Option 3: Hybrid-Ansatz)
+    # Mapping für schnellen Zugriff: Tag -> {Produkt: ZeilenIndex}
+    day_row_map = {}
+    for p, df in production_logs.items():
+        if df.empty:
+            continue
+        for idx, row in df.iterrows():
+            d_str = row.get('Datum', '')
+            if d_str:
+                try:
+                    d = datetime.strptime(d_str, MasterData.DATE_FORMAT).date()
+                    day_idx = (d - date(planning_year, 1, 1)).days
+                    if 0 <= day_idx < 365:
+                        if day_idx not in day_row_map:
+                            day_row_map[day_idx] = {}
+                        day_row_map[day_idx][p] = idx
+                except (ValueError, TypeError):
+                    pass
+    
+    # Hole Inbound-Daten einmalig (Tag -> {Sattel: Menge})
+    inbound_arrivals = _get_inbound_arrivals_by_day_and_saddle(simulator, planning_year)
+    
+    # Backlog Tracker (chronologisch)
+    current_backlog = {p: 0.0 for p in MasterData.BOM.keys()}
+    
+    # Tägliche Nachfrage (inkl. Marketing-Szenarien)
     daily_demands_actual = st.session_state.get('daily_demands_actual', {})
-    material_inventory_data = st.session_state.get('material_inventory_data', {})
-    workday_calc = WorkdayCalculator(year=planning_year)
     
-    if daily_demands_actual:
-        # OPTIMIERUNG: Gruppiere nach Tag, um für alle Produkte gleichzeitig zu berechnen
-        # (wichtig für korrekte Material-Reduktion während Rang-Logik)
-        days_to_update = {}
+    # ------------------------------------------------------------
+    # CHRONOLOGISCHE SCHLEIFE (Tag 0-365)
+    # ------------------------------------------------------------
+    for day in range(365):
+        current_date = workday_calc.get_date_from_day(day)
         
-        for product, df in production_logs.items():
-            if df.empty or 'Datum' not in df.columns or 'tatsächliche PM' not in df.columns:
-                continue
-            
-            for idx, row in df.iterrows():
-                date_str = row.get('Datum', '')
-                if date_str:
-                    try:
-                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
-                        day = (row_date - date(planning_year, 1, 1)).days
-                        
-                        if day in daily_demands_actual:
-                            if day not in days_to_update:
-                                days_to_update[day] = {
-                                    'date': row_date,
-                                    'products': {}
-                                }
-                            
-                            # Speichere statische Werte als Basis
-                            base_tatsaechliche_pm = row.get('tatsächliche PM', 0)
-                            base_geplante_pm = row.get('geplante PM', 0)
-                            base_saddle_stock = row.get(MasterData.BOM[product]['saddle'], 0)
-                            
-                            days_to_update[day]['products'][product] = {
-                                'df': df,
-                                'idx': idx,
-                                'base_tatsaechliche_pm': base_tatsaechliche_pm,
-                                'base_geplante_pm': base_geplante_pm,
-                                'base_saddle_stock': base_saddle_stock,
-                                'shifts': row.get('Schichtanzahl', 0)
-                            }
-                    except (ValueError, TypeError):
-                        pass
+        # A. INBOUND: Was kommt heute an?
+        if day in inbound_arrivals:
+            for saddle_name, qty in inbound_arrivals[day].items():
+                if qty > 0:
+                    running_stock[saddle_name] += qty
         
-        # WICHTIG: Verarbeite Tage in chronologischer Reihenfolge, damit Backlog korrekt berechnet wird
-        sorted_days = sorted(days_to_update.keys())
-        
-        # KRITISCH: Speichere berechnete Backlogs für jeden Tag (für korrekte Berechnung)
-        calculated_backlogs = {}  # Dict[day] -> Dict[product] -> backlog
-        
-        # KRITISCH: Speichere kumulierten Mehrverbrauch pro Sattel (Delta)
-        # Dies ist notwendig, damit der Mehrverbrauch von Tag X den Bestand an Tag X+1 reduziert
-        cumulative_saddle_consumption_delta = {}  # Dict[saddle_name] -> float
-        saddle_shares = MasterData.calculate_saddle_shares()
-        for saddle in saddle_shares.keys():
-            cumulative_saddle_consumption_delta[saddle] = 0.0
-        
-        # Berechne für jeden Tag mit Rang-Logik (für ALLE Produkte gleichzeitig)
-        for day in sorted_days:
-            day_data = days_to_update[day]
-            row_date = day_data['date']
-            products_info = day_data['products']
-            
-            # Hole aktualisierte Inputs
-            product_demands_new = daily_demands_actual[day]
-            
-            # KRITISCH: Berechne Backlog für diesen Tag basierend auf bereits berechneten Werten
-            backlog_by_product_calculated = {}
-            for product in MasterData.BOM.keys():
-                planned_pm = product_demands_new.get(product, 0)
-                
-                # Finde vorherigen Arbeitstag
-                prev_day = day - 1
-                while prev_day >= 0:
-                    if workday_calc.is_workday(prev_day):
+        # B. WASSERSCHADEN: Prüfe Szenarien
+        if scenario_manager:
+            water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
+            for scenario in water_damage_scenarios:
+                if scenario.affected_component == "saddles" and scenario.start_day == scenario.end_day:
+                    if day == scenario.start_day:
+                        # Setze Bestand aller Sättel auf 0
+                        for s in saddles:
+                            running_stock[s] = 0.0
                         break
-                    prev_day -= 1
-                
-                if prev_day >= 0:
-                    # Hole bereits berechneten Backlog vom Vortag
-                    if prev_day in calculated_backlogs:
-                        prev_backlog = calculated_backlogs[prev_day].get(product, 0.0)
-                    else:
-                        # Fallback: Hole aus statischen Logs
-                        prev_backlog = _get_backlog_from_previous_workday(
-                            production_logs, product, day, planning_year, workday_calc
-                        )
-                    
-                    # Hole bereits berechnete tatsächliche PM vom Vortag
-                    prev_actual_pm = 0
-                    prev_date = workday_calc.get_date_from_day(prev_day)
-                    prev_date_str = prev_date.strftime(MasterData.DATE_FORMAT)
-                    if product in production_logs:
-                        df = production_logs[product]
-                        if not df.empty and 'Datum' in df.columns and 'tatsächliche PM' in df.columns:
-                            matching_rows = df[df['Datum'] == prev_date_str]
-                            if not matching_rows.empty:
-                                prev_actual_pm = matching_rows.iloc[0].get('tatsächliche PM', 0)
-                                try:
-                                    prev_actual_pm = int(prev_actual_pm) if prev_actual_pm > 0 else 0
-                                except (ValueError, TypeError):
-                                    prev_actual_pm = 0
-                    
-                    # Berechne Backlog für vorherigen Tag: (prev_planned_pm + prev_prev_backlog) - prev_actual_pm
-                    # Für jetzt: Verwende bereits berechneten Backlog
-                    backlog_by_product_calculated[product] = prev_backlog
-                else:
-                    # Kein vorheriger Arbeitstag: Backlog = 0
-                    backlog_by_product_calculated[product] = 0.0
-            
-            # Berechne Materialverfügbarkeit für alle Sättel
-            saddle_available_new = {}
-            for saddle_name in saddle_shares.keys():
-                # 1. Hole Basis-Bestand (aus Cache oder Fallback)
-                base_stock = 0.0
-                if row_date in material_inventory_data:
-                    base_stock = material_inventory_data[row_date].get(saddle_name, 0.0)
-                else:
-                    # Fallback: Suche in products_info
-                    for product in MasterData.BOM.keys():
-                        if MasterData.BOM[product]['saddle'] == saddle_name:
-                            if product in products_info:
-                                val = products_info[product]['base_saddle_stock']
-                                try:
-                                    if isinstance(val, str) and val == '∞':
-                                        base_stock = float('inf')
-                                    else:
-                                        base_stock = float(val)
-                                except (ValueError, TypeError):
-                                    base_stock = 0.0
-                            break
-                    if base_stock == 0.0:
-                        base_stock = 0.0
-                
-                # 2. KRITISCH: Korrigiere Bestand um den kumulierten Mehrverbrauch der Vortage
-                delta = cumulative_saddle_consumption_delta.get(saddle_name, 0.0)
-                corrected_stock = max(0.0, base_stock - delta)
-                saddle_available_new[saddle_name] = corrected_stock
-            
-            # Hole Tageskapazität (aus einem beliebigen Produkt, sollte für alle gleich sein)
-            daily_capacity = 0.0
-            if products_info:
-                first_product_info = next(iter(products_info.values()))
-                shifts = first_product_info['shifts']
-                working_hours = MasterData.GLOBAL_CONFIG.get('working_hours_per_shift', 8)
-                capacity_per_hour = MasterData.GLOBAL_CONFIG.get('capacity_per_hour', 130)
-                daily_capacity = shifts * working_hours * capacity_per_hour
-            
-            # ----------------------------------------------------------------
-            # ÄNDERUNG: Keine Prüfung auf inputs_changed mehr!
-            # Wir berechnen IMMER neu, um sicherzustellen, dass production_logs 
-            # und material_verbrauch absolut konsistent sind.
-            # Dies korrigiert auch interne Inkonsistenzen aus der ursprünglichen Simulation.
-            # ----------------------------------------------------------------
-            
-            if daily_capacity > 0:
-                # IMMER neu berechnen: Repliziere KOMPLETTE statische Logik mit neuen Inputs
-                # Verwende berechneten Backlog statt statischen Backlog
-                new_production = _recalculate_all_products_with_rank_logic(
-                    day,
-                    product_demands_new,
-                    saddle_available_new,
-                    daily_capacity,
-                    production_logs,
-                    planning_year,
-                    workday_calc,
-                    backlog_by_product_calculated
-                )
-                
-                # Aktualisiere DataFrame UND berechne neues Delta
-                for product, info in products_info.items():
-                    df = info['df']
-                    idx = info['idx']
-                    saddle_name = MasterData.BOM[product]['saddle']
-                    
-                    new_tatsaechliche_pm = new_production.get(product, 0)
-                    base_tatsaechliche_pm = info['base_tatsaechliche_pm']
-                    
-                    # Update DataFrame
-                    df.at[idx, 'tatsächliche PM'] = new_tatsaechliche_pm
-                    
-                    # WICHTIG: Schreibe Materialverbrauch explizit (immer konsistent mit tatsächlicher PM)
-                    if 'material_verbrauch' not in df.columns:
-                        df['material_verbrauch'] = 0
-                    df.at[idx, 'material_verbrauch'] = new_tatsaechliche_pm
-                    
-                    # Korrigierten Bestand eintragen (Visualisierung)
-                    df.at[idx, saddle_name] = int(round(saddle_available_new[saddle_name])) if saddle_available_new[saddle_name] > 0 else 0
-                    
-                    # Delta aktualisieren (Kumulierte Abweichung zur CSV-Basis)
-                    # Delta = (Neue Produktion - Alte Produktion)
-                    # Wenn wir mehr produzieren, erhöht sich das Delta (Bestand sinkt stärker)
-                    try:
-                        old_val = float(base_tatsaechliche_pm) if base_tatsaechliche_pm > 0 else 0.0
-                    except (ValueError, TypeError):
-                        old_val = 0.0
-                    
-                    consumption_diff = float(new_tatsaechliche_pm) - old_val
-                    cumulative_saddle_consumption_delta[saddle_name] += consumption_diff
-                
-                # Backlog speichern
-                calculated_backlogs[day] = {}
-                for product in MasterData.BOM.keys():
-                    planned_pm = product_demands_new.get(product, 0)
-                    actual_pm = new_production.get(product, 0)
-                    prev_backlog = backlog_by_product_calculated.get(product, 0.0)
-                    new_backlog = max(0.0, (planned_pm + prev_backlog) - actual_pm)
-                    calculated_backlogs[day][product] = new_backlog
-            else:
-                # Falls Kapazität 0 ist (z.B. Wochenende), setze Werte auf 0
-                for product, info in products_info.items():
-                    df = info['df']
-                    idx = info['idx']
-                    saddle_name = MasterData.BOM[product]['saddle']
-                    
-                    df.at[idx, 'tatsächliche PM'] = 0
-                    if 'material_verbrauch' not in df.columns:
-                        df['material_verbrauch'] = 0
-                    df.at[idx, 'material_verbrauch'] = 0
-                    
-                    # Korrigierten Bestand eintragen (falls Delta vorhanden)
-                    stock_val = saddle_available_new.get(saddle_name, 0.0)
-                    df.at[idx, saddle_name] = int(round(stock_val)) if stock_val > 0 else 0
-                
-                # Backlog bleibt unverändert (wird am nächsten Arbeitstag weitergeführt)
-                calculated_backlogs[day] = {}
-                for product in MasterData.BOM.keys():
-                    planned_pm = product_demands_new.get(product, 0)
-                    prev_backlog = backlog_by_product_calculated.get(product, 0.0)
-                    # Backlog erhöht sich um geplante PM (da nichts produziert wurde)
-                    calculated_backlogs[day][product] = prev_backlog + planned_pm
         
-        # Aktualisiere "fertiggestellte PM"
-        for product, df in production_logs.items():
-            if df.empty or 'Datum' not in df.columns or 'tatsächliche PM' not in df.columns or 'fertiggestellte PM' not in df.columns:
-                continue
+        # --- WICHTIG: BESTAND MORGENS SICHERN (für die Anzeige) ---
+        # Dieser Wert entspricht exakt dem "Bestand morgens" im Materiallager
+        # Er wird statisch in alle Zeilen des Tages geschrieben
+        daily_start_stock = running_stock.copy()
+        
+        # C. HEUTE KEIN ARBEITSTAG?
+        is_workday = workday_calc.is_workday(day)
+        
+        # Bestand für UI schreiben (auch an Wochenenden)
+        # ANZEIGE: Bestand Morgens (der sich am WE nicht ändert)
+        if day in day_row_map:
+            for p, idx in day_row_map[day].items():
+                saddle = MasterData.BOM[p]['saddle']
+                df = production_logs[p]
+                df.at[idx, saddle] = int(round(daily_start_stock[saddle])) if daily_start_stock[saddle] > 0 else 0
+                df.at[idx, 'Backlog'] = int(round(current_backlog[p]))
+        
+        if not is_workday:
+            continue
+        
+        # D. PRODUKTION PLANEN
+        todays_demand_map = daily_demands_actual.get(day, {})
+        
+        # Kapazität holen (aus Logs)
+        daily_capacity = 0.0
+        if day in day_row_map and day_row_map[day]:
+            first_prod = next(iter(day_row_map[day]))
+            first_idx = day_row_map[day][first_prod]
+            df = production_logs[first_prod]
+            shifts = df.at[first_idx, 'Schichtanzahl']
+            working_hours = MasterData.GLOBAL_CONFIG.get('working_hours_per_shift', 8)
+            capacity_per_hour = MasterData.GLOBAL_CONFIG.get('capacity_per_hour', 130)
+            daily_capacity = shifts * working_hours * capacity_per_hour
+        
+        # FIX: WIR ADDIEREN HIER NICHT MEHR ZUM BACKLOG!
+        # current_backlog enthält hier NUR den Rückstand von gestern.
+        # Die Planungsfunktion addiert intern: Tagesbedarf + Backlog
+        
+        # E. RANKING & VERTEILUNG
+        if daily_capacity > 0:
+            scheduled_production = _recalculate_all_products_with_rank_logic(
+                day,
+                todays_demand_map,  # Übergibt den Tagesbedarf separat
+                running_stock.copy(),
+                daily_capacity,
+                production_logs,
+                planning_year,
+                workday_calc,
+                current_backlog.copy()  # Übergibt NUR den alten Backlog (vom Vortag)
+            )
+        else:
+            scheduled_production = {p: 0 for p in MasterData.BOM.keys()}
+        
+        # F. BESTAND ABBUCHEN & LOGS UPDATEN
+        for p, qty in scheduled_production.items():
+            saddle = MasterData.BOM[p]['saddle']
             
-            df_sorted = df.copy()
-            df_sorted['_date_parsed'] = pd.to_datetime(df_sorted['Datum'], format=MasterData.DATE_FORMAT)
-            df_sorted = df_sorted.sort_values('_date_parsed').reset_index(drop=True)
+            # 1. Physischer Abgang vom Gesamtbestand (intern, für Berechnung)
+            qty_to_book = min(qty, running_stock[saddle])
+            running_stock[saddle] -= qty_to_book
             
-            date_to_idx = {}
-            for idx, row in df_sorted.iterrows():
-                date_str = row.get('Datum', '')
-                if date_str:
-                    try:
-                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
-                        date_to_idx[row_date] = idx
-                    except (ValueError, TypeError):
-                        pass
+            # 2. Backlog Update (Hier passiert die korrekte Rechnung)
+            # Neuer Backlog = (Alter Backlog + Tagesbedarf) - Produktion
+            total_requirement = current_backlog[p] + todays_demand_map.get(p, 0)
+            current_backlog[p] = max(0.0, total_requirement - qty_to_book)
             
-            for idx, row in df_sorted.iterrows():
-                date_str = row.get('Datum', '')
-                if date_str:
-                    try:
-                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
-                        day = (row_date - date(planning_year, 1, 1)).days
-                        
-                        # WICHTIG: "Fertiggestellte PM" sollte nur an Arbeitstagen angezeigt werden
-                        # An Feiertagen/Wochenenden sollte sie 0 sein
-                        if not workday_calc.is_workday(day):
-                            df_sorted.at[idx, 'fertiggestellte PM'] = 0
-                            continue
-                        
-                        # Finde vorherigen Arbeitstag
-                        prev_workday_found = False
-                        prev_day = day - 1
-                        while prev_day >= 0:
-                            if workday_calc.is_workday(prev_day):
-                                prev_workday_date = workday_calc.get_date_from_day(prev_day)
-                                
-                                if prev_workday_date in date_to_idx:
-                                    prev_idx = date_to_idx[prev_workday_date]
-                                    prev_row = df_sorted.iloc[prev_idx]
-                                    
-                                    prev_actual_pm = prev_row.get('tatsächliche PM', 0)
-                                    df_sorted.at[idx, 'fertiggestellte PM'] = int(round(prev_actual_pm)) if prev_actual_pm > 0 else 0
-                                    prev_workday_found = True
-                                    break
-                            
-                            prev_day -= 1
-                        
-                        if not prev_workday_found:
-                            df_sorted.at[idx, 'fertiggestellte PM'] = 0
-                    except (ValueError, TypeError):
-                        pass
-            
-            if '_date_parsed' in df_sorted.columns:
-                df_sorted = df_sorted.drop(columns=['_date_parsed'])
-            production_logs[product] = df_sorted
+            # 3. Schreiben in DataFrame
+            if day in day_row_map and p in day_row_map[day]:
+                idx = day_row_map[day][p]
+                df = production_logs[p]
+                
+                df.at[idx, 'tatsächliche PM'] = qty_to_book
+                if 'material_verbrauch' not in df.columns:
+                    df['material_verbrauch'] = 0
+                df.at[idx, 'material_verbrauch'] = qty_to_book
+                df.at[idx, 'Backlog'] = int(round(current_backlog[p]))
+                
+                # ANZEIGE: Bestand Morgens (statisch für den ganzen Tag)
+                # Hier nutzen wir daily_start_stock statt running_stock!
+                df.at[idx, saddle] = int(round(daily_start_stock[saddle])) if daily_start_stock[saddle] > 0 else 0
+                
+                planned_pm = todays_demand_map.get(p, 0)
+                df.at[idx, 'geplante PM'] = int(planned_pm)
     
-        # Aktualisiere Backlog
-        for product, df in production_logs.items():
-            if df.empty or 'Datum' not in df.columns or 'fertiggestellte PM' not in df.columns or 'geplante PM' not in df.columns or 'Backlog' not in df.columns:
-                continue
-            
-            df_sorted = df.copy()
-            df_sorted['_date_parsed'] = pd.to_datetime(df_sorted['Datum'], format=MasterData.DATE_FORMAT)
-            df_sorted = df_sorted.sort_values('_date_parsed').reset_index(drop=True)
-            
-            for idx, row in df_sorted.iterrows():
-                date_str = row.get('Datum', '')
-                if date_str:
-                    try:
-                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
-                        day = (row_date - date(planning_year, 1, 1)).days
+    # Aktualisiere "fertiggestellte PM" (Produktion vom Vortag)
+    for product, df in production_logs.items():
+        if df.empty or 'Datum' not in df.columns or 'tatsächliche PM' not in df.columns or 'fertiggestellte PM' not in df.columns:
+            continue
+        
+        df_sorted = df.copy()
+        df_sorted['_date_parsed'] = pd.to_datetime(df_sorted['Datum'], format=MasterData.DATE_FORMAT)
+        df_sorted = df_sorted.sort_values('_date_parsed').reset_index(drop=True)
+        
+        date_to_idx = {}
+        for idx, row in df_sorted.iterrows():
+            date_str = row.get('Datum', '')
+            if date_str:
+                try:
+                    row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
+                    date_to_idx[row_date] = idx
+                except (ValueError, TypeError):
+                    pass
+        
+        for idx, row in df_sorted.iterrows():
+            date_str = row.get('Datum', '')
+            if date_str:
+                try:
+                    row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
+                    day = (row_date - date(planning_year, 1, 1)).days
+                    
+                    if not workday_calc.is_workday(day):
+                        df_sorted.at[idx, 'fertiggestellte PM'] = 0
+                        continue
+                    
+                    # Finde vorherigen Arbeitstag
+                    prev_workday_found = False
+                    prev_day = day - 1
+                    while prev_day >= 0:
+                        if workday_calc.is_workday(prev_day):
+                            prev_workday_date = workday_calc.get_date_from_day(prev_day)
+                            
+                            if prev_workday_date in date_to_idx:
+                                prev_idx = date_to_idx[prev_workday_date]
+                                prev_row = df_sorted.iloc[prev_idx]
+                                
+                                prev_actual_pm = prev_row.get('tatsächliche PM', 0)
+                                df_sorted.at[idx, 'fertiggestellte PM'] = int(round(prev_actual_pm)) if prev_actual_pm > 0 else 0
+                                prev_workday_found = True
+                                break
                         
-                        if day in daily_demands_actual:
-                            product_demands = daily_demands_actual[day]
-                            planned_pm = product_demands.get(product, 0)
-                            
-                            # KRITISCH: Backlog wird basierend auf der HEUTE GESTARTETEN Produktion reduziert
-                            # (nicht erst bei Fertigstellung), um den "Echo-Effekt" zu vermeiden
-                            actual_started = row.get('tatsächliche PM', 0)
-                            try:
-                                actual_started = int(actual_started) if actual_started > 0 else 0
-                            except (ValueError, TypeError):
-                                actual_started = 0
-                            
-                            prev_backlog = 0.0
-                            if idx > 0:
-                                prev_row = df_sorted.iloc[idx - 1]
-                                prev_backlog = prev_row.get('Backlog', 0)
-                                try:
-                                    prev_backlog = float(prev_backlog) if prev_backlog > 0 else 0.0
-                                except (ValueError, TypeError):
-                                    prev_backlog = 0.0
-                            
-                            # Neuer Backlog = (geplante PM + Backlog gestern) - tatsächliche PM (heute gestartet)
-                            # Dies stellt sicher, dass der Backlog sofort reduziert wird, wenn produziert wird
-                            new_backlog = max(0.0, (planned_pm + prev_backlog) - actual_started)
-                            df_sorted.at[idx, 'Backlog'] = int(round(new_backlog))
-                            
-                            current_planned_pm = row.get('geplante PM', 0)
-                            try:
-                                current_planned_pm = int(current_planned_pm) if current_planned_pm > 0 else 0
-                            except (ValueError, TypeError):
-                                current_planned_pm = 0
-                            
-                            if planned_pm != current_planned_pm:
-                                df_sorted.at[idx, 'geplante PM'] = int(planned_pm)
-                    except (ValueError, TypeError):
-                        pass
-            
-            if '_date_parsed' in df_sorted.columns:
-                df_sorted = df_sorted.drop(columns=['_date_parsed'])
-            production_logs[product] = df_sorted
+                        prev_day -= 1
+                    
+                    if not prev_workday_found:
+                        df_sorted.at[idx, 'fertiggestellte PM'] = 0
+                except (ValueError, TypeError):
+                    pass
+        
+        if '_date_parsed' in df_sorted.columns:
+            df_sorted = df_sorted.drop(columns=['_date_parsed'])
+        production_logs[product] = df_sorted
     
     # Cache Ergebnis
     st.session_state.production_logs_cache = production_logs
     st.session_state.production_logs_cache_key = cache_key
     
-    # NEU: Datenfluss-Korrektur
-    # Schreibe die aktualisierten DataFrames zurück in den Simulator,
-    # damit das Materiallager (pages/5_materiallager.py) die Änderungen sieht.
+    # Schreibe zurück in Simulator
     if planner:
         for product, df in production_logs.items():
             if not df.empty:
-                # Konvertiere DataFrame zurück in Liste von Dicts
-                # Wichtig: Entferne interne Spalten (die mit '_' beginnen) und behalte nur UI-relevante
-                # Konvertiere zu Dict-Liste
                 updated_logs = df.to_dict('records')
                 planner.production_logs[product] = updated_logs
     
-    # NEU: Erzwinge Neuberechnung des Materiallagers
-    # Da sich die Produktion geändert hat, sind die gecachten Materialdaten veraltet.
-    # Wir löschen sie, damit die Material-Seite sie beim nächsten Aufruf 
-    # frisch aus den aktualisierten production_logs berechnet.
-    if 'material_inventory_data' in st.session_state:
-        del st.session_state['material_inventory_data']
-    
-    # WICHTIG: Cache-Key 'saddle_logs_cache' muss gelöscht werden, 
-    # damit pages/5_materiallager.py die Daten neu berechnet.
+    # Lösche Materiallager-Cache (wird neu berechnet)
     keys_to_clear = [
-        'saddle_logs_cache',           # Cache für Materiallager-Tabelle
-        'material_logs_cache',         # Legacy Cache
-        'inventory_chart_cache'        # Cache für Charts
+        'saddle_logs_cache',
+        'material_logs_cache',
+        'inventory_chart_cache',
+        'material_inventory_data'
     ]
     
-    # Lösche auch alle versionierten Cache-Keys des Materiallagers
-    # (Keys die mit 'material_inventory_' beginnen, außer 'material_inventory_last_cache_key')
     for k in list(st.session_state.keys()):
         if k in keys_to_clear or (k.startswith('material_inventory_') and k != 'material_inventory_last_cache_key'):
             del st.session_state[k]

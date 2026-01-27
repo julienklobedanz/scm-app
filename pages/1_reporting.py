@@ -374,6 +374,8 @@ with tab2:
             kpi_data_by_saddle = {}
             total_days = len(planning_year_dates)
             
+            start_date_year = date(planning_year, 1, 1)
+            
             for saddle_type in saddle_types:
                 stocks = []
                 days_with_zero = 0
@@ -384,7 +386,11 @@ with tab2:
                     stock = planning_year_dates[date_key].get(saddle_type, 0.0)
                     stocks.append(stock)
                     
-                    if stock == 0:
+                    # FIX: Nur Arbeitstage als Engpass zählen
+                    day_idx = (date_key - start_date_year).days
+                    is_workday = workday_calc.is_workday(day_idx)
+                    
+                    if stock == 0 and is_workday:
                         days_with_zero += 1
                     
                     if previous_stock is not None and stock < previous_stock:
@@ -412,15 +418,18 @@ with tab2:
             total_avg_stock = sum(kpi['avg_stock'] for kpi in kpi_data_by_saddle.values())
             total_min_stock = min(kpi['min_stock'] for kpi in kpi_data_by_saddle.values()) if kpi_data_by_saddle else 0.0
             total_max_stock = sum(kpi['max_stock'] for kpi in kpi_data_by_saddle.values())
-            total_days_with_zero = 0
-            days_with_any_zero = 0
             
+            # Tage mit 0 Bestand (Gesamt) - unter Berücksichtigung von Arbeitstagen
+            days_with_any_zero = 0
             for date_key in sorted(planning_year_dates.keys()):
+                day_idx = (date_key - start_date_year).days
+                if not workday_calc.is_workday(day_idx):
+                    continue
+                    
                 has_any_zero = False
                 for saddle_type in saddle_types:
                     stock = planning_year_dates[date_key].get(saddle_type, 0.0)
                     if stock == 0:
-                        total_days_with_zero += 1
                         has_any_zero = True
                 if has_any_zero:
                     days_with_any_zero += 1
@@ -437,9 +446,9 @@ with tab2:
             
             with col2:
                 st.metric(
-                    label="Tage mit 0 Bestand (Gesamt)",
+                    label="Tage mit Engpass (Bestand 0)",
                     value=f"{days_with_any_zero}",
-                    help="Anzahl Tage, an denen mindestens ein Materialtyp = 0 war"
+                    help="Anzahl Arbeitstage, an denen mindestens ein Materialtyp = 0 war"
                 )
             
             with col3:
@@ -462,7 +471,7 @@ with tab2:
                     'Durchschnittlicher Bestand': int(round(kpi['avg_stock'])),
                     'Minimum Bestand': int(round(kpi['min_stock'])),
                     'Maximum Bestand': int(round(kpi['max_stock'])),
-                    'Tage mit 0 Bestand': kpi['days_with_zero'],
+                    'Tage mit 0 Bestand (Arbeitstage)': kpi['days_with_zero'],
                     'Ø Tagesverbrauch': int(round(kpi['avg_daily_consumption'])) if kpi['avg_daily_consumption'] > 0 else 0,
                     'Ø Reichweite (Tage)': f"{kpi['avg_days_of_supply']:.1f}" if kpi['avg_days_of_supply'] > 0 else "N/A"
                 })
@@ -518,7 +527,7 @@ with tab2:
                 bottleneck_df = pd.DataFrame([
                     {
                         'Satteltyp': saddle,
-                        'Tage mit 0 Bestand': days_zero,
+                        'Tage mit 0 Bestand (Arbeitstage)': days_zero,
                         'Engpass-Risiko': '🔴 Hoch' if days_zero > 30 else ('🟡 Mittel' if days_zero > 10 else '🟢 Niedrig')
                     }
                     for saddle, days_zero in bottleneck_data
@@ -545,29 +554,34 @@ with tab3:
     from ui.production_calculations import calculate_production_logs
     production_logs_cache = calculate_production_logs()
     
-    # Hole KPIs aus Session State
-    kpis = st.session_state.get('kpis', {})
-    service_level = kpis.get('service_level', 0.0)
-    total_demand = kpis.get('total_demand', 0.0)
-    total_produced = kpis.get('total_produced', 0.0)
-    
     # Berechne KPIs aus production_logs_cache (dynamisch, mit Marketing)
     if production_logs_cache:
         daily_demands_actual = st.session_state.get('daily_demands_actual', {})
         total_demand = sum(sum(day_demand.values()) for day_demand in daily_demands_actual.values())
         
-        # Summiere tatsächliche PM aus production_logs_cache
+        # FIX: Summiere 'fertiggestellte PM' für echte Produktionsleistung
         total_produced = 0.0
         for product, df in production_logs_cache.items():
-            if not df.empty and 'tatsächliche PM' in df.columns:
-                total_produced += df['tatsächliche PM'].sum()
+            if not df.empty:
+                if 'fertiggestellte PM' in df.columns:
+                    total_produced += df['fertiggestellte PM'].sum()
+                elif 'tatsächliche PM' in df.columns:
+                    # Fallback falls Simulation noch nicht weit genug lief
+                    total_produced += df['tatsächliche PM'].sum()
         
         service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
-    elif not kpis or service_level == 0.0:
+    else:
         # Fallback: Berechne aus results_df (statisch)
-        total_demand = results_df['Daily_Target'].sum() if 'Daily_Target' in results_df.columns else 0.0
-        total_produced = results_df['Actual_Build'].sum() if 'Actual_Build' in results_df.columns else 0.0
-        service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
+        kpis = st.session_state.get('kpis', {})
+        service_level = kpis.get('service_level', 0.0)
+        total_demand = kpis.get('total_demand', 0.0)
+        total_produced = kpis.get('total_produced', 0.0)
+        
+        if not kpis or service_level == 0.0:
+            # Fallback: Berechne aus results_df (statisch)
+            total_demand = results_df['Daily_Target'].sum() if 'Daily_Target' in results_df.columns else 0.0
+            total_produced = results_df['Actual_Build'].sum() if 'Actual_Build' in results_df.columns else 0.0
+            service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
     
     # Farblogik für Service Level
     if service_level >= 95.0:
@@ -600,9 +614,9 @@ with tab3:
     
     with col3:
         st.metric(
-            label="Gesamtproduktion",
+            label="Gesamtproduktion (Fertiggestellt)",
             value=f"{int(round(total_produced)):,}".replace(",", "."),
-            help="Summe aller produzierten Einheiten im Zeitraum"
+            help="Summe aller fertiggestellten Fahrräder im Zeitraum"
         )
     
     st.divider()
@@ -676,7 +690,7 @@ with tab3:
             st.plotly_chart(fig_total_backlog, width='stretch', key='chart_total_backlog')
         
         with col2:
-            st.write("**Über-/Unterproduktion**")
+            st.write("**Über-/Unterproduktion (Start)**")
             fig_total_deviation = go.Figure()
             
             deviations = [d['deviation'] for d in total_deviation_data]

@@ -14,8 +14,11 @@ from models.scenarios import WaterDamageScenario
 
 def calculate_material_inventory():
     """
-    Berechnet material_inventory_data und saddle_logs ohne UI-Rendering.
-    Diese Funktion kann beim App-Start aufgerufen werden, ohne dass Streamlit-Widgets gerendert werden.
+    Berechnet material_inventory_data und saddle_logs synchron zur Produktion.
+    
+    WICHTIG: Nutzt jetzt die Inbound-Tabelle (`get_inbound_log_dataframe`) als Source of Truth
+    für den Wareneingang. Das garantiert, dass Materiallager und Produktion dieselben
+    (bereits berechneten) Ankunftsdaten und Mengen sehen – inkl. Vorlauf (z.B. Nov/Dez 2026).
     
     Returns:
         Tuple (material_inventory_data, saddle_logs)
@@ -24,6 +27,9 @@ def calculate_material_inventory():
     """
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
         return {}, {}
+    
+    simulator = st.session_state.simulator
+    manager = simulator.china_transport_manager
     
     planning_year = st.session_state.get('planning_year', 2027)
     workday_calc = WorkdayCalculator(year=planning_year)
@@ -34,38 +40,96 @@ def calculate_material_inventory():
     
     saddle_logs = {saddle_type: [] for saddle_type in saddle_types}
     
-    # Hole Inbound-Daten
-    manager = st.session_state.simulator.china_transport_manager
+    # -------------------------------------------------------
+    # 1. INBOUND DATEN SAMMELN (Aus der Inbound-Tabelle)
+    # -------------------------------------------------------
     receipts_by_date_and_saddle: Dict[date, Dict[str, float]] = {}
     
     if manager:
         inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
-        
         if not inbound_df.empty:
-            avail_col_idx = inbound_df.columns.get_loc('Tatsächliche Ankunft LKW 🇩🇪')
-            saddle_col_indices = {s: inbound_df.columns.get_loc(s) for s in saddle_types if s in inbound_df.columns}
-            
-            for row_tuple in inbound_df.itertuples(index=False, name=None):
-                avail_str = row_tuple[avail_col_idx] if avail_col_idx < len(row_tuple) else None
-                if avail_str and isinstance(avail_str, str) and len(avail_str) > 0:
+            # Source-of-truth Spalte: diese wird auch für Materialzugang genutzt
+            avail_col = 'Tatsächliche Ankunft LKW 🇩🇪'
+
+            for _, row in inbound_df.iterrows():
+                avail_str = row.get(avail_col, '')
+                if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
+                    continue
+
+                try:
+                    avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+                except (ValueError, TypeError):
+                    continue
+
+                if avail_date not in receipts_by_date_and_saddle:
+                    receipts_by_date_and_saddle[avail_date] = {s: 0.0 for s in saddle_types}
+
+                for saddle_name in saddle_types:
+                    qty_val = row.get(saddle_name, 0)
                     try:
-                        avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
-                        
-                        if avail_date not in receipts_by_date_and_saddle:
-                            receipts_by_date_and_saddle[avail_date] = {s: 0.0 for s in saddle_types}
-                        
-                        for saddle, col_idx in saddle_col_indices.items():
-                            if col_idx < len(row_tuple):
-                                qty_val = row_tuple[col_idx]
-                                if qty_val and str(qty_val).strip() != '':
-                                    try:
-                                        receipts_by_date_and_saddle[avail_date][saddle] += float(qty_val)
-                                    except (ValueError, TypeError):
-                                        pass
+                        if isinstance(qty_val, str):
+                            qty_val = qty_val.strip()
+                            if qty_val == '' or qty_val == '-':
+                                continue
+                        qty = float(qty_val) if qty_val else 0.0
                     except (ValueError, TypeError):
                         continue
+
+                    if qty > 0:
+                        receipts_by_date_and_saddle[avail_date][saddle_name] += qty
     
-    # Materiallager berechnen
+    # -------------------------------------------------------
+    # 2. MATERIALVERBRAUCH VORVERARBEITEN (aus Produktions-Log)
+    # -------------------------------------------------------
+    # Cache für Produktionsdaten laden
+    if 'production_logs_cache' not in st.session_state:
+        # Fallback: Versuche zu berechnen (sollte aber eigentlich da sein)
+        from ui.production_calculations import calculate_production_logs
+        production_logs_cache = calculate_production_logs()
+    else:
+        production_logs_cache = st.session_state.production_logs_cache
+    
+    # Pre-Processing: Produktionsdaten in schnelles Lookup-Format wandeln
+    # Map: Date -> Saddle -> ConsumedQty
+    consumption_map = {}
+    
+    for product_name, df in production_logs_cache.items():
+        if df.empty or 'Datum' not in df.columns:
+            continue
+            
+        required_saddle = MasterData.BOM.get(product_name, {}).get('saddle')
+        if not required_saddle:
+            continue
+        
+        # Sicherstellen dass Spalte existiert
+        col_name = 'material_verbrauch' if 'material_verbrauch' in df.columns else 'tatsächliche PM'
+        if col_name not in df.columns:
+            continue
+        
+        for idx, row in df.iterrows():
+            d_str = row.get('Datum', '')
+            if d_str:
+                try:
+                    d = datetime.strptime(d_str, MasterData.DATE_FORMAT).date()
+                    qty = row.get(col_name, 0)
+                    try:
+                        qty = float(qty) if qty else 0.0
+                    except (ValueError, TypeError):
+                        qty = 0.0
+                    
+                    if qty > 0:
+                        if d not in consumption_map:
+                            consumption_map[d] = {}
+                        if required_saddle not in consumption_map[d]:
+                            consumption_map[d][required_saddle] = 0.0
+                        consumption_map[d][required_saddle] += qty
+                except (ValueError, TypeError):
+                    continue
+    
+    # -------------------------------------------------------
+    # 3. MATERIALVERBRAUCH & BESTAND BERECHNEN
+    # -------------------------------------------------------
+    # Start etwas früher, um Übertrag aus Vorjahr korrekt aufzubauen
     start_date_log = date(planning_year - 1, 11, 1)
     end_date_log = date(planning_year, 12, 31)
     total_days = (end_date_log - start_date_log).days + 1
@@ -73,10 +137,7 @@ def calculate_material_inventory():
     stock_by_saddle = {saddle_type: 0.0 for saddle_type in saddle_types}
     material_inventory_data = {}
     
-    results_df = st.session_state.get('results_df')
-    if results_df is None:
-        return {}, {}
-    
+    # HAUPTSCHLEIFE ÜBER TAGE
     for day_offset in range(total_days):
         current_date = start_date_log + timedelta(days=day_offset)
         day = (current_date - start_date_simulation).days
@@ -86,65 +147,18 @@ def calculate_material_inventory():
         weekday_abbr = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][weekday]
         is_weekend = weekday >= 5
         is_holiday = False
+        
         if 0 <= day < 365:
             if current_date in workday_calc.german_holidays:
                 is_holiday = True
         
+        # 1. Zugang (aus transport_status - synchron mit Produktion!)
         receipt_by_saddle = receipts_by_date_and_saddle.get(current_date, {s: 0.0 for s in saddle_types})
         
-        stock_morning = {}
-        stock_evening = {}
-        issue_by_saddle = {s: 0.0 for s in saddle_types}
+        # 2. Verbrauch (aus Produktions-Log)
+        consumed_today = consumption_map.get(current_date, {})
         
-        # Verbrauch aus production_logs_cache
-        if 'production_logs_cache' not in st.session_state:
-            continue
-        
-        production_logs_cache = st.session_state.production_logs_cache
-        production_by_product_from_logs = {}
-        
-        for product_name in MasterData.BOM.keys():
-            if product_name in production_logs_cache:
-                df = production_logs_cache[product_name]
-                if not df.empty and 'Datum' in df.columns and 'tatsächliche PM' in df.columns:
-                    current_date_str = current_date.strftime(MasterData.DATE_FORMAT)
-                    matching_rows = df[df['Datum'] == current_date_str]
-                    if not matching_rows.empty:
-                        # OPTION 4: Verwende material_verbrauch wenn vorhanden, sonst Fallback auf tatsächliche PM
-                        # Dies stellt sicher, dass Materiallager den korrekten Verbrauch verwendet
-                        material_verbrauch = matching_rows.iloc[0].get('material_verbrauch', None)
-                        actual_pm = matching_rows.iloc[0].get('tatsächliche PM', 0)
-                        
-                        # Verwende material_verbrauch wenn vorhanden, sonst actual_pm (Fallback)
-                        if material_verbrauch is not None:
-                            try:
-                                production_by_product_from_logs[product_name] = int(material_verbrauch) if material_verbrauch > 0 else 0
-                            except (ValueError, TypeError):
-                                # Fallback auf actual_pm wenn material_verbrauch ungültig
-                                try:
-                                    production_by_product_from_logs[product_name] = int(actual_pm) if actual_pm > 0 else 0
-                                except (ValueError, TypeError):
-                                    production_by_product_from_logs[product_name] = 0
-                        else:
-                            # Fallback auf actual_pm wenn material_verbrauch nicht vorhanden
-                            try:
-                                production_by_product_from_logs[product_name] = int(actual_pm) if actual_pm > 0 else 0
-                            except (ValueError, TypeError):
-                                production_by_product_from_logs[product_name] = 0
-                    else:
-                        production_by_product_from_logs[product_name] = 0
-                else:
-                    production_by_product_from_logs[product_name] = 0
-            else:
-                production_by_product_from_logs[product_name] = 0
-        
-        for product_name, qty in production_by_product_from_logs.items():
-            if qty > 0 and product_name in MasterData.BOM:
-                required_saddle = MasterData.BOM[product_name]['saddle']
-                if required_saddle in issue_by_saddle:
-                    issue_by_saddle[required_saddle] += qty
-        
-        # Prüfe Wasserschaden-Szenarien für diesen Tag
+        # 3. Prüfe Wasserschaden-Szenarien für diesen Tag
         water_damage_active = False
         scenario_manager = st.session_state.get('scenario_manager')
         if scenario_manager and 0 <= day < 365:
@@ -156,7 +170,11 @@ def calculate_material_inventory():
                         water_damage_active = True
                         break
         
+        stock_morning = {}
+        stock_evening = {}
+        
         for s in saddle_types:
+            # Bestand morgens = Bestand gestern abend + Zugang heute
             stock_morning[s] = stock_by_saddle[s] + receipt_by_saddle.get(s, 0.0)
             
             # WASSERSCHADEN: Speichere Bestand vor dem Schaden für Verlustmenge
@@ -166,19 +184,30 @@ def calculate_material_inventory():
             if water_damage_active:
                 stock_morning[s] = 0.0
             
-            actual_issue = min(issue_by_saddle[s], stock_morning[s])
-            val = stock_morning[s] - actual_issue
-            stock_evening[s] = max(0.0, val)
+            # Abgang = Was die Produktion tatsächlich verbraucht hat
+            # HINWEIS: Wir vertrauen hier blind dem Produktions-Log.
+            # Da der Produktions-Log VORHER lief und geprüft hat "ist genug da?",
+            # sollte stock_morning[s] >= planned_issue sein.
+            # Falls Rundungsdifferenzen auftreten, fangen wir das mit max(0) ab.
+            planned_issue = consumed_today.get(s, 0.0)
+            
+            # Zur Sicherheit: Nicht mehr abziehen als da ist (sollte dank Synchro nicht passieren)
+            actual_issue = min(planned_issue, stock_morning[s])
+            
+            # Bestand abends
+            stock_evening[s] = max(0.0, stock_morning[s] - actual_issue)
             
             # WASSERSCHADEN: Setze auch Abendbestand auf 0
             if water_damage_active:
                 stock_evening[s] = 0.0
             
+            # Übertrag für nächsten Tag
             stock_by_saddle[s] = stock_evening[s]
             
             # Berechne Verlustmenge (nur wenn Wasserschaden aktiv)
             loss_qty = stock_before_damage if water_damage_active else 0.0
             
+            # Log Entry für UI
             saddle_logs[s].append({
                 'Wochentag': weekday_abbr,
                 'Datum': current_date.strftime(MasterData.DATE_FORMAT),
