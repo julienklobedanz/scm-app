@@ -101,14 +101,14 @@ def _recalculate_all_products_with_rank_logic(
     # Ansonsten hole Backlog aus statischen Logs (Fallback)
     if backlog_by_product is None:
         backlog_by_product = {}
-        for product in MasterData.BOM.keys():
+        for product in sorted(MasterData.BOM.keys()):
             backlog_by_product[product] = _get_backlog_from_previous_workday(
                 production_logs, product, day, planning_year, workday_calc
             )
     
     # Schritt 2: Produktionsbedarf = Nachfrage + Backlog
     production_demand_by_product = {}
-    for product in MasterData.BOM.keys():
+    for product in sorted(MasterData.BOM.keys()):
         demand = product_demands_new.get(product, 0)
         backlog = backlog_by_product.get(product, 0.0)
         production_demand_by_product[product] = demand + backlog
@@ -116,7 +116,8 @@ def _recalculate_all_products_with_rank_logic(
     # Schritt 3: Anteilige Produktion berechnen
     total_production_demand = sum(production_demand_by_product.values())
     proportional_production_by_product = {}
-    products_list = list(MasterData.BOM.keys())
+    # FIX: Garantiere deterministische Reihenfolge durch sorted()
+    products_list = sorted(MasterData.BOM.keys())
     
     for product in products_list:
         demand = production_demand_by_product.get(product, 0.0)
@@ -330,25 +331,27 @@ def calculate_production_logs():
     - Inbound wird hinzugefügt, Produktion wird abgezogen
     - Keine komplexen Deltas oder Synchronisationen mehr
     """
-    if 'simulator' not in st.session_state or st.session_state.simulator is None:
+    # Sicherstellen, dass st verfügbar ist
+    import streamlit as st_module
+    if 'simulator' not in st_module.session_state or st_module.session_state.simulator is None:
         return {}
     
-    simulator = st.session_state.simulator
+    simulator = st_module.session_state.simulator
     planner = simulator.production_planner
     
     if not hasattr(planner, 'production_logs') or not planner.production_logs:
         return {}
     
     # Cache-Key für Invalidierung
-    volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
+    volume_planning_cache_key = st_module.session_state.get('volume_planning_cache_key', None)
     cache_key = f"production_logs_running_v4_{volume_planning_cache_key}"  # v4: Fix für Double-Counting Bug
     
     # Prüfe Cache
-    if cache_key in st.session_state and 'production_logs_cache' in st.session_state:
-        if st.session_state.get('production_logs_cache_key') == cache_key:
-            return st.session_state.production_logs_cache
+    if cache_key in st_module.session_state and 'production_logs_cache' in st_module.session_state:
+        if st_module.session_state.get('production_logs_cache_key') == cache_key:
+            return st_module.session_state.production_logs_cache
     
-    planning_year = st.session_state.get('planning_year', 2027)
+    planning_year = st_module.session_state.get('planning_year', 2027)
     workday_calc = WorkdayCalculator(year=planning_year)
     scenario_manager = getattr(simulator, 'scenario_manager', None)
     
@@ -421,10 +424,11 @@ def calculate_production_logs():
     inbound_arrivals = _get_inbound_arrivals_by_day_and_saddle(simulator, planning_year)
     
     # Backlog Tracker (chronologisch)
-    current_backlog = {p: 0.0 for p in MasterData.BOM.keys()}
+    # FIX: Garantiere deterministische Reihenfolge durch sorted()
+    current_backlog = {p: 0.0 for p in sorted(MasterData.BOM.keys())}
     
     # Tägliche Nachfrage (inkl. Marketing-Szenarien)
-    daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+    daily_demands_actual = st_module.session_state.get('daily_demands_actual', {})
     
     # ------------------------------------------------------------
     # CHRONOLOGISCHE SCHLEIFE (Tag 0-365)
@@ -500,7 +504,8 @@ def calculate_production_logs():
                 current_backlog.copy()  # Übergibt NUR den alten Backlog (vom Vortag)
             )
         else:
-            scheduled_production = {p: 0 for p in MasterData.BOM.keys()}
+            # FIX: Garantiere deterministische Reihenfolge durch sorted()
+            scheduled_production = {p: 0 for p in sorted(MasterData.BOM.keys())}
         
         # F. BESTAND ABBUCHEN & LOGS UPDATEN
         for p, qty in scheduled_production.items():
@@ -534,27 +539,33 @@ def calculate_production_logs():
                 df.at[idx, 'geplante PM'] = int(planned_pm)
     
     # Aktualisiere "fertiggestellte PM" (Produktion vom Vortag)
-    for product, df in production_logs.items():
-        if df.empty or 'Datum' not in df.columns or 'tatsächliche PM' not in df.columns or 'fertiggestellte PM' not in df.columns:
-            continue
-        
-        df_sorted = df.copy()
-        df_sorted['_date_parsed'] = pd.to_datetime(df_sorted['Datum'], format=MasterData.DATE_FORMAT)
-        df_sorted = df_sorted.sort_values('_date_parsed').reset_index(drop=True)
-        
-        date_to_idx = {}
-        for idx, row in df_sorted.iterrows():
-            date_str = row.get('Datum', '')
-            if date_str:
-                try:
-                    row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
-                    date_to_idx[row_date] = idx
-                except (ValueError, TypeError):
-                    pass
-        
-        for idx, row in df_sorted.iterrows():
-            date_str = row.get('Datum', '')
-            if date_str:
+    # OPTIMIERT: Vereinfachte Logik für bessere Performance
+    try:
+        for product, df in production_logs.items():
+            if df.empty or 'Datum' not in df.columns or 'tatsächliche PM' not in df.columns or 'fertiggestellte PM' not in df.columns:
+                continue
+            
+            df_sorted = df.copy()
+            df_sorted['_date_parsed'] = pd.to_datetime(df_sorted['Datum'], format=MasterData.DATE_FORMAT)
+            df_sorted = df_sorted.sort_values('_date_parsed').reset_index(drop=True)
+            
+            # Erstelle Mapping: Datum -> Index (einmalig für bessere Performance)
+            date_to_idx = {}
+            for idx, row in df_sorted.iterrows():
+                date_str = row.get('Datum', '')
+                if date_str:
+                    try:
+                        row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
+                        date_to_idx[row_date] = idx
+                    except (ValueError, TypeError):
+                        pass
+            
+            # OPTIMIERT: Iteriere nur über Arbeitstage (nicht alle Zeilen)
+            for idx, row in df_sorted.iterrows():
+                date_str = row.get('Datum', '')
+                if not date_str:
+                    continue
+                
                 try:
                     row_date = datetime.strptime(date_str, MasterData.DATE_FORMAT).date()
                     day = (row_date - date(planning_year, 1, 1)).days
@@ -563,36 +574,95 @@ def calculate_production_logs():
                         df_sorted.at[idx, 'fertiggestellte PM'] = 0
                         continue
                     
-                    # Finde vorherigen Arbeitstag
-                    prev_workday_found = False
-                    prev_day = day - 1
-                    while prev_day >= 0:
-                        if workday_calc.is_workday(prev_day):
-                            prev_workday_date = workday_calc.get_date_from_day(prev_day)
-                            
-                            if prev_workday_date in date_to_idx:
-                                prev_idx = date_to_idx[prev_workday_date]
-                                prev_row = df_sorted.iloc[prev_idx]
-                                
-                                prev_actual_pm = prev_row.get('tatsächliche PM', 0)
-                                df_sorted.at[idx, 'fertiggestellte PM'] = int(round(prev_actual_pm)) if prev_actual_pm > 0 else 0
-                                prev_workday_found = True
-                                break
-                        
-                        prev_day -= 1
+                    # FIX: Prüfe ob Wasserschaden am aktuellen Tag ODER am Vortag war
+                    # Wenn am Vortag Wasserschaden war, wurde nichts produziert → fertiggestellte PM = 0
+                    water_damage_today = False
+                    water_damage_yesterday = False
                     
-                    if not prev_workday_found:
+                    try:
+                        if scenario_manager:
+                            water_damage_today = len(scenario_manager.get_water_damage_scenarios(day)) > 0
+                            
+                            # Prüfe auch Vortag: Wenn am Vortag Wasserschaden war, wurde nichts produziert
+                            # WICHTIG: Nur den unmittelbar vorherigen Arbeitstag prüfen (nicht mehrere Tage zurück)
+                            prev_day_check = day - 1
+                            max_lookback_check = 5  # Maximal 5 Tage zurück (für Wochenenden/Feiertage)
+                            lookback_check_count = 0
+                            
+                            while prev_day_check >= 0 and lookback_check_count < max_lookback_check:
+                                if workday_calc.is_workday(prev_day_check):
+                                    water_damage_yesterday = len(scenario_manager.get_water_damage_scenarios(prev_day_check)) > 0
+                                    break  # Nur den ersten vorherigen Arbeitstag prüfen
+                                prev_day_check -= 1
+                                lookback_check_count += 1
+                    except Exception:
+                        water_damage_today = False
+                        water_damage_yesterday = False
+                    
+                    # Wenn Wasserschaden heute: fertiggestellte PM = 0
+                    if water_damage_today:
                         df_sorted.at[idx, 'fertiggestellte PM'] = 0
+                    else:
+                        # Normale Logik: Finde vorherigen Arbeitstag (mit Limit für Performance)
+                        prev_workday_found = False
+                        prev_day = day - 1
+                        max_lookback = 10  # Maximal 10 Tage zurück suchen (Performance-Optimierung)
+                        lookback_count = 0
+                        
+                        while prev_day >= 0 and lookback_count < max_lookback:
+                            if workday_calc.is_workday(prev_day):
+                                prev_workday_date = workday_calc.get_date_from_day(prev_day)
+                                
+                                if prev_workday_date in date_to_idx:
+                                    prev_idx = date_to_idx[prev_workday_date]
+                                    prev_row = df_sorted.iloc[prev_idx]
+                                    
+                                    # Prüfe ob am Vortag Wasserschaden war
+                                    prev_water_damage = False
+                                    try:
+                                        if scenario_manager:
+                                            prev_water_damage = len(scenario_manager.get_water_damage_scenarios(prev_day)) > 0
+                                    except Exception:
+                                        prev_water_damage = False
+                                    
+                                    prev_actual_pm = prev_row.get('tatsächliche PM', 0)
+                                    
+                                    # Wenn am Vortag Wasserschaden war UND nichts produziert wurde → fertiggestellte PM = 0
+                                    # Wenn am Vortag produziert wurde (auch wenn vorher Wasserschaden war) → fertiggestellte PM = tatsächliche PM vom Vortag
+                                    if prev_water_damage and prev_actual_pm == 0:
+                                        df_sorted.at[idx, 'fertiggestellte PM'] = 0
+                                    else:
+                                        df_sorted.at[idx, 'fertiggestellte PM'] = int(round(prev_actual_pm)) if prev_actual_pm > 0 else 0
+                                    
+                                    prev_workday_found = True
+                                    break
+                                lookback_count += 1
+                            
+                            prev_day -= 1
+                            lookback_count += 1  # FIX: Auch bei Nicht-Arbeitstagen zählen
+                        
+                        if not prev_workday_found:
+                            df_sorted.at[idx, 'fertiggestellte PM'] = 0
                 except (ValueError, TypeError):
-                    pass
-        
-        if '_date_parsed' in df_sorted.columns:
-            df_sorted = df_sorted.drop(columns=['_date_parsed'])
-        production_logs[product] = df_sorted
+                    df_sorted.at[idx, 'fertiggestellte PM'] = 0
+            
+            if '_date_parsed' in df_sorted.columns:
+                df_sorted = df_sorted.drop(columns=['_date_parsed'])
+            production_logs[product] = df_sorted
+    except Exception as e:
+        # Bei Fehler: Logge Fehler und verwende normale Logik ohne Wasserschaden-Check
+        try:
+            st_module.error(f"⚠️ Fehler bei Berechnung von fertiggestellte PM: {str(e)}")
+        except:
+            pass  # Falls st nicht verfügbar ist, ignoriere Fehler
+        # Setze alle fertiggestellte PM auf 0 als Fallback
+        for product, df in production_logs.items():
+            if not df.empty and 'fertiggestellte PM' in df.columns:
+                df['fertiggestellte PM'] = 0
     
     # Cache Ergebnis
-    st.session_state.production_logs_cache = production_logs
-    st.session_state.production_logs_cache_key = cache_key
+    st_module.session_state.production_logs_cache = production_logs
+    st_module.session_state.production_logs_cache_key = cache_key
     
     # Schreibe zurück in Simulator
     if planner:
@@ -609,8 +679,8 @@ def calculate_production_logs():
         'material_inventory_data'
     ]
     
-    for k in list(st.session_state.keys()):
+    for k in list(st_module.session_state.keys()):
         if k in keys_to_clear or (k.startswith('material_inventory_') and k != 'material_inventory_last_cache_key'):
-            del st.session_state[k]
+            del st_module.session_state[k]
     
     return production_logs

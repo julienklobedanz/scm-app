@@ -51,7 +51,12 @@ calculate_volume_planning_demand()
 
 # 2. Produktionslogs (enthält fertiggestellte PM, reagiert auf Marketing)
 from ui.production_calculations import calculate_production_logs
-production_logs_cache = calculate_production_logs()
+try:
+    production_logs_cache = calculate_production_logs()
+except Exception as e:
+    st.error(f"⚠️ Fehler bei Berechnung der Produktionslogs: {str(e)}")
+    st.exception(e)
+    production_logs_cache = {}
 
 st.title("✅ Fertigproduktelager")
 st.markdown("Übersicht über Fertigproduktbestände nach Produkten")

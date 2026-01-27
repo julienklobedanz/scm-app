@@ -90,8 +90,13 @@ def get_production_logs():
 # Alte Implementierung entfernt - wird jetzt in ui.production_calculations.py verwendet
 
 # Erstelle Produktions-Log
-with st.spinner("🔄 Lade Produktionsdaten..."):
-    production_logs = get_production_logs()
+try:
+    with st.spinner("🔄 Lade Produktionsdaten..."):
+        production_logs = get_production_logs()
+except Exception as e:
+    st.error(f"⚠️ Fehler bei Berechnung der Produktionslogs: {str(e)}")
+    st.exception(e)
+    production_logs = {}
 
 if not production_logs:
     st.warning("⚠️ Keine Produktionsdaten verfügbar.")
