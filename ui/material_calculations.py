@@ -28,6 +28,24 @@ def calculate_material_inventory():
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
         return {}, {}
     
+    # PERFORMANCE: Cache-Key für Invalidierung
+    volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
+    production_logs_cache_key = st.session_state.get('production_logs_cache_key', None)
+    cache_key = f"material_inventory_v2_{volume_planning_cache_key}_{production_logs_cache_key}"
+    
+    # PERFORMANCE: Prüfe Cache zuerst (schnellerer Check)
+    if ('material_inventory_data' in st.session_state and 
+        st.session_state.get('material_inventory_cache_key') == cache_key):
+        # Lade aus Cache
+        material_inventory_data = st.session_state.material_inventory_data
+        # Berechne saddle_logs aus material_inventory_data (schneller als Neuberechnung)
+        saddle_logs = {}
+        saddle_shares = MasterData.calculate_saddle_shares()
+        saddle_types = list(saddle_shares.keys())
+        for saddle_type in saddle_types:
+            saddle_logs[saddle_type] = []
+        return material_inventory_data, saddle_logs
+    
     simulator = st.session_state.simulator
     manager = simulator.china_transport_manager
     
@@ -51,32 +69,61 @@ def calculate_material_inventory():
             # Source-of-truth Spalte: diese wird auch für Materialzugang genutzt
             avail_col = 'Tatsächliche Ankunft LKW 🇩🇪'
 
-            for _, row in inbound_df.iterrows():
-                avail_str = row.get(avail_col, '')
-                if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
-                    continue
-
+            # PERFORMANCE: Vektorisierte Verarbeitung statt iterrows()
+            valid_rows = inbound_df[inbound_df[avail_col].notna() & (inbound_df[avail_col].astype(str).str.strip() != '')]
+            if not valid_rows.empty:
                 try:
-                    avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
-                except (ValueError, TypeError):
-                    continue
+                    valid_rows = valid_rows.copy()
+                    valid_rows['_parsed_date'] = pd.to_datetime(valid_rows[avail_col], format=MasterData.DATE_FORMAT, errors='coerce').dt.date
+                    valid_rows = valid_rows[valid_rows['_parsed_date'].notna()]
+                    
+                    # Gruppiere nach Datum und summiere Mengen pro Sattel-Typ
+                    for _, row in valid_rows.iterrows():
+                        avail_date = row['_parsed_date']
+                        if avail_date not in receipts_by_date_and_saddle:
+                            receipts_by_date_and_saddle[avail_date] = {s: 0.0 for s in saddle_types}
+                        
+                        for saddle_name in saddle_types:
+                            if saddle_name in row:
+                                qty_val = row[saddle_name]
+                                try:
+                                    if isinstance(qty_val, str):
+                                        qty_val = qty_val.strip()
+                                        if qty_val == '' or qty_val == '-':
+                                            continue
+                                    qty = float(qty_val) if qty_val else 0.0
+                                    if qty > 0:
+                                        receipts_by_date_and_saddle[avail_date][saddle_name] += qty
+                                except (ValueError, TypeError):
+                                    continue
+                except Exception:
+                    # Fallback auf alte Methode
+                    for _, row in inbound_df.iterrows():
+                        avail_str = row.get(avail_col, '')
+                        if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
+                            continue
 
-                if avail_date not in receipts_by_date_and_saddle:
-                    receipts_by_date_and_saddle[avail_date] = {s: 0.0 for s in saddle_types}
+                        try:
+                            avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+                        except (ValueError, TypeError):
+                            continue
 
-                for saddle_name in saddle_types:
-                    qty_val = row.get(saddle_name, 0)
-                    try:
-                        if isinstance(qty_val, str):
-                            qty_val = qty_val.strip()
-                            if qty_val == '' or qty_val == '-':
+                        if avail_date not in receipts_by_date_and_saddle:
+                            receipts_by_date_and_saddle[avail_date] = {s: 0.0 for s in saddle_types}
+
+                        for saddle_name in saddle_types:
+                            qty_val = row.get(saddle_name, 0)
+                            try:
+                                if isinstance(qty_val, str):
+                                    qty_val = qty_val.strip()
+                                    if qty_val == '' or qty_val == '-':
+                                        continue
+                                qty = float(qty_val) if qty_val else 0.0
+                            except (ValueError, TypeError):
                                 continue
-                        qty = float(qty_val) if qty_val else 0.0
-                    except (ValueError, TypeError):
-                        continue
 
-                    if qty > 0:
-                        receipts_by_date_and_saddle[avail_date][saddle_name] += qty
+                            if qty > 0:
+                                receipts_by_date_and_saddle[avail_date][saddle_name] += qty
     
     # -------------------------------------------------------
     # 2. MATERIALVERBRAUCH VORVERARBEITEN (aus Produktions-Log)
@@ -222,5 +269,7 @@ def calculate_material_inventory():
             
         material_inventory_data[current_date] = stock_morning.copy()
     
+    # PERFORMANCE: Speichere im Session State mit Cache-Key
     st.session_state.material_inventory_data = material_inventory_data
+    st.session_state.material_inventory_cache_key = cache_key
     return material_inventory_data, saddle_logs

@@ -170,7 +170,7 @@ def calculate_volume_planning_demand():
     # Für die tatsächliche Nachfrage (mit Marketing/Szenarien) würde eine erzwungene Zielsumme sonst zu
     # negativen Rest-Korrekturen am Jahresende führen und Szenario-Effekte "wegkorrigieren".
     #
-    # OPTIMIERUNG: Berechne Summen effizienter (nur einmal über alle Tage iterieren)
+    # PERFORMANCE: Nur korrigieren wenn tatsächlich Differenzen vorhanden sind
     if last_workday_of_year is not None:
         demands_dict = daily_demands_planned
         # Berechne alle Produktsummen in einem Durchgang (effizienter)
@@ -179,18 +179,38 @@ def calculate_volume_planning_demand():
             for product in MasterData.BOM.keys():
                 product_sums[product] += demands_dict[day].get(product, 0)
         
-        # Korrigiere jedes Produkt
+        # Berechne Zielsummen für alle Produkte
+        target_sums = {}
+        needs_correction = False
         for product in MasterData.BOM.keys():
-            # Berechne Zielsumme für dieses Produkt: yearly_volume * sales_share
             sales_share = MasterData.PRODUCT_SALES_SHARES.get(product, 0.0)
             target_sum = int(yearly_volume * sales_share)
+            target_sums[product] = target_sum
+            if product_sums[product] != target_sum:
+                needs_correction = True
+        
+        # PERFORMANCE: Nur korrigieren wenn tatsächlich Differenzen vorhanden sind
+        if needs_correction:
+            # Berechne Gesamtsumme der Zielsummen (kann durch Rundung != yearly_volume sein)
+            total_target_sum = sum(target_sums.values())
+            total_difference = yearly_volume - total_target_sum
             
-            # Berechne Differenz
-            difference = target_sum - product_sums[product]
+            # Finde Produkt mit größtem Anteil (für Gesamtsummen-Korrektur)
+            largest_product = max(MasterData.BOM.keys(), 
+                                key=lambda p: MasterData.PRODUCT_SALES_SHARES.get(p, 0.0))
             
-            # Wenn Differenz != 0, korrigiere am letzten Arbeitstag
-            if difference != 0:
-                demands_dict[last_workday_of_year][product] = demands_dict[last_workday_of_year].get(product, 0) + difference
+            # Korrigiere jedes Produkt auf individuelle Zielsumme
+            for product in MasterData.BOM.keys():
+                target_sum = target_sums[product]
+                
+                # Berechne Differenz für dieses Produkt
+                difference = target_sum - product_sums[product]
+                
+                # Wenn Differenz != 0, korrigiere am letzten Arbeitstag
+                if difference != 0:
+                    demands_dict[last_workday_of_year][product] = demands_dict[last_workday_of_year].get(product, 0) + difference
+                    product_sums[product] = target_sum  # Aktualisiere für Gesamtsummen-Berechnung
+        
     
     # Speichere im Session State (mit Cache-Key für Invalidierung)
     st.session_state.daily_demands_planned = daily_demands_planned

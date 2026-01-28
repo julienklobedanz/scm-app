@@ -154,11 +154,12 @@ class DemandCalculator:
             # Dies stellt sicher, dass alle Reste am Jahresende aufsummiert werden
             remainder_to_add = base_with_remainder - rounded_base
             daily_target_float = rounded_base + remainder_to_add + marketing_add_on
-        
-        # 6. Ergebnis abrunden (da wir Integer zurückgeben müssen)
-        # WICHTIG: math.floor() für korrekte Abrundung
-        # ABER: Am letzten Arbeitstag sollte das Ergebnis bereits ganzzahlig sein (Rest wurde addiert)
-        daily_target_int = math.floor(daily_target_float)
+            # KRITISCH: Am letzten Arbeitstag RUNDEN statt ABRUNDEN, um Reste nicht zu verlieren
+            # Die Excel-Formel zeigt: Reste werden aufsummiert, dann gerundet (nicht abgerundet)
+            daily_target_int = round(daily_target_float)
+        else:
+            # Normale Tage: Abrunden (ABRUNDEN in Excel)
+            daily_target_int = math.floor(daily_target_float)
         
         # 6. Berechne neuen Rest (nur aus Base + Rest, Marketing-Add-on wird nicht in Rest übernommen)
         # (Base + Rest) - ABRUNDEN(Base + Rest; 0)

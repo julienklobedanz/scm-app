@@ -85,30 +85,56 @@ def get_bicycle_inventory_data():
     bicycle_inventory = {}
     stock_by_product = {product: 0.0 for product in MasterData.BOM.keys()}
     
+    # PERFORMANCE: Verwende Cache statt calculate_production_logs() neu aufzurufen
+    # Dies vermeidet mehrfache teure Berechnungen
+    production_logs_cache = st.session_state.get('production_logs_cache', {})
+    
+    # Fallback: Nur wenn Cache nicht verfügbar ist, berechne neu
+    if not production_logs_cache:
+        from ui.production_calculations import calculate_production_logs
+        production_logs_cache = calculate_production_logs()
+    
+    # Hole tägliche Nachfrage (für Lagerabgang)
+    daily_demands_actual = st.session_state.get('daily_demands_actual', {})
+    
     for day in range(365):
         current_date = workday_calc.get_date_from_day(day)
         bicycle_inventory[current_date] = {}
         
-        if day < len(results_df):
-            actual_build = results_df.iloc[day]['Actual_Build']
+        # Für jedes Produkt
+        for product in MasterData.BOM.keys():
+            # KRITISCH: Hole fertiggestellte PM aus production_logs_cache (wie in create_finished_goods_log)
+            finished_pm = 0.0
+            if production_logs_cache and product in production_logs_cache and not production_logs_cache[product].empty:
+                df_prod = production_logs_cache[product]
+                date_str = current_date.strftime(MasterData.DATE_FORMAT)
+                matching_rows = df_prod[df_prod['Datum'] == date_str]
+                if not matching_rows.empty:
+                    finished_pm = matching_rows.iloc[0].get('fertiggestellte PM', 0.0)
+                    try:
+                        finished_pm = float(finished_pm) if finished_pm > 0 else 0.0
+                    except (ValueError, TypeError):
+                        finished_pm = 0.0
             
-            for product in MasterData.BOM.keys():
+            # Fallback: Verwende results_df wenn production_logs_cache nicht verfügbar
+            if finished_pm == 0.0 and day < len(results_df):
+                actual_build = results_df.iloc[day]['Actual_Build']
                 product_share = MasterData.PRODUCT_SALES_SHARES.get(product, 0.0)
-                production_qty = actual_build * product_share
-                
-                total_receipt = 0
-                total_dispatch = 0
-                
-                for market_code, market_params in MasterData.MARKETS.items():
-                    market_share = market_params['share']
-                    receipt = production_qty * market_share
-                    dispatch = receipt
-                    total_receipt += receipt
-                    total_dispatch += dispatch
-                
-                stock_by_product[product] = stock_by_product[product] + total_receipt - total_dispatch
-                stock_by_product[product] = max(0.0, stock_by_product[product])
-                bicycle_inventory[current_date][product] = stock_by_product[product]
+                finished_pm = actual_build * product_share
+            
+            # Lagerzugang = fertiggestellte PM (pro Produkt)
+            total_receipt = finished_pm
+            
+            # Lagerabgang = Nachfrage für dieses Produkt an diesem Tag
+            # KRITISCH: Verwende tägliche Nachfrage aus daily_demands_actual
+            day_demand = daily_demands_actual.get(day, {})
+            total_dispatch = day_demand.get(product, 0.0)
+            
+            # Bestand (kumulativ)
+            stock_morning = stock_by_product[product]
+            stock_evening = stock_morning + total_receipt - total_dispatch
+            stock_by_product[product] = max(0.0, stock_evening)
+            bicycle_inventory[current_date][product] = stock_by_product[product]
     
     return bicycle_inventory
 
@@ -559,15 +585,43 @@ with tab3:
         daily_demands_actual = st.session_state.get('daily_demands_actual', {})
         total_demand = sum(sum(day_demand.values()) for day_demand in daily_demands_actual.values())
         
-        # FIX: Summiere 'fertiggestellte PM' für echte Produktionsleistung
+        # KRITISCH: Summiere 'fertiggestellte PM' für echte Produktionsleistung
+        # WICHTIG: Nur gültige Werte berücksichtigen (nicht NaN oder negative Werte)
+        # KRITISCH: Addiere auch die tatsächliche PM vom letzten Tag des Jahres (wird nicht als fertiggestellte PM am nächsten Tag berücksichtigt)
         total_produced = 0.0
+        last_day_actual_pm = 0.0  # Sammle tatsächliche PM vom letzten Tag
+        
         for product, df in production_logs_cache.items():
             if not df.empty:
                 if 'fertiggestellte PM' in df.columns:
-                    total_produced += df['fertiggestellte PM'].sum()
+                    # Filtere nur gültige Werte (nicht NaN, nicht negativ)
+                    finished_pm_series = pd.to_numeric(df['fertiggestellte PM'], errors='coerce').fillna(0.0)
+                    finished_pm_series = finished_pm_series[finished_pm_series >= 0]
+                    total_produced += finished_pm_series.sum()
+                    
+                    # KRITISCH: Addiere auch die tatsächliche PM vom letzten Tag des Jahres
+                    # Die tatsächliche PM vom letzten Tag wird nicht als fertiggestellte PM am nächsten Tag berücksichtigt
+                    # weil es keinen nächsten Tag gibt. Daher müssen wir sie hier explizit addieren.
+                    if 'tatsächliche PM' in df.columns and 'Datum' in df.columns:
+                        # Finde letzte Zeile des Jahres (31.12.2027)
+                        last_date_str = date(planning_year, 12, 31).strftime(MasterData.DATE_FORMAT)
+                        last_row = df[df['Datum'] == last_date_str]
+                        if not last_row.empty:
+                            last_actual_pm_val = last_row.iloc[0].get('tatsächliche PM', 0)
+                            try:
+                                last_actual_pm = float(pd.to_numeric(last_actual_pm_val, errors='coerce')) if pd.notna(pd.to_numeric(last_actual_pm_val, errors='coerce')) else 0.0
+                                if last_actual_pm > 0:
+                                    last_day_actual_pm += last_actual_pm
+                            except (ValueError, TypeError):
+                                pass
                 elif 'tatsächliche PM' in df.columns:
                     # Fallback falls Simulation noch nicht weit genug lief
-                    total_produced += df['tatsächliche PM'].sum()
+                    actual_pm_series = pd.to_numeric(df['tatsächliche PM'], errors='coerce').fillna(0.0)
+                    actual_pm_series = actual_pm_series[actual_pm_series >= 0]
+                    total_produced += actual_pm_series.sum()
+        
+        # Addiere tatsächliche PM vom letzten Tag
+        total_produced += last_day_actual_pm
         
         service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
     else:

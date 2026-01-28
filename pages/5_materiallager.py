@@ -136,6 +136,10 @@ else:
 for saddle_type in sorted(saddle_logs.keys()):
     st.subheader(f"📋 {saddle_type}")
     df = saddle_logs[saddle_type]
+    # Prüfe ob DataFrame leer ist oder 'Datum' Spalte fehlt
+    if df.empty or 'Datum' not in df.columns:
+        st.info(f"Keine Daten für {saddle_type} verfügbar.")
+        continue
     # Filtere auf den Standard-Zeitraum (2027)
     mask = (pd.to_datetime(df['Datum'], format='%d.%m.%Y') >= pd.to_datetime(start_date)) & \
            (pd.to_datetime(df['Datum'], format='%d.%m.%Y') <= pd.to_datetime(end_date))

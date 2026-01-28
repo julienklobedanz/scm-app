@@ -5,7 +5,7 @@ Intelligenter Produktionsplaner mit Backlog-Tracking und Priorisierung
 
 import math
 from typing import Dict, Tuple, Optional
-from datetime import datetime
+from datetime import datetime, date
 from models.inventory import Inventory
 from config.master_data import MasterData
 from simulation.demand_calculator import DemandCalculator
@@ -40,6 +40,12 @@ class ProductionPlanner:
         # Cache für Inbound-Tabelle (Performance-Optimierung)
         # Key: day, Value: Dict[saddle_name, stock_morning]
         self._inbound_stock_cache: Dict[int, Dict[str, float]] = {}
+        
+        # PERFORMANCE: Cache für Verteilung pro Tag und Sattel-Typ (wird einmal berechnet)
+        # Key: day, Value: Dict[saddle_name, qty]
+        # Wird einmal berechnet aus get_inbound_log_dataframe(), dann wiederverwendet
+        self._inbound_distribution_cache: Dict[int, Dict[str, float]] = {}
+        self._inbound_distribution_initialized: bool = False
         
         # Kumulierter Verbrauch pro Sattel-Typ (für Bestandsreduktion in UI)
         # Key: saddle_name, Value: kumulierter Verbrauch bis Tag X
@@ -567,12 +573,79 @@ class ProductionPlanner:
             
             self.production_logs[product].append(log_entry)
     
+    def _initialize_inbound_distribution_cache(self, saddle_shares: Dict[str, float]):
+        """
+        Initialisiert den Cache für die Verteilung pro Tag und Sattel-Typ.
+        Wird nur einmal aufgerufen, um get_inbound_log_dataframe() nicht mehrfach aufzurufen.
+        
+        Args:
+            saddle_shares: Dictionary mit Sattel-Shares (für get_inbound_log_dataframe)
+        """
+        if self._inbound_distribution_initialized:
+            return
+        
+        if not self.china_transport_manager or not self.workday_calculator:
+            self._inbound_distribution_initialized = True
+            return
+        
+        try:
+            # PERFORMANCE: Berechne Verteilung einmal aus get_inbound_log_dataframe()
+            # Dies ist teuer beim ersten Aufruf, aber dann gecacht
+            inbound_df = self.china_transport_manager.get_inbound_log_dataframe(saddle_shares)
+            
+            if inbound_df.empty:
+                self._inbound_distribution_initialized = True
+                return
+            
+            # Parse alle Daten einmal und speichere Verteilung pro Tag
+            avail_col = 'Tatsächliche Ankunft LKW 🇩🇪'
+            if avail_col in inbound_df.columns:
+                import pandas as pd
+                from datetime import datetime
+                
+                # Filtere gültige Zeilen
+                valid_rows = inbound_df[inbound_df[avail_col].notna() & (inbound_df[avail_col].astype(str).str.strip() != '')]
+                if not valid_rows.empty:
+                    valid_rows = valid_rows.copy()
+                    # Parse Datum vektorisiert
+                    valid_rows['_parsed_date'] = pd.to_datetime(valid_rows[avail_col], format=self.master_data.DATE_FORMAT, errors='coerce').dt.date
+                    valid_rows = valid_rows[valid_rows['_parsed_date'].notna()]
+                    
+                    # Gruppiere nach Datum und summiere Mengen pro Sattel-Typ
+                    for _, row in valid_rows.iterrows():
+                        avail_date = row['_parsed_date']
+                        day_idx = (avail_date - date(self.workday_calculator.year, 1, 1)).days
+                        
+                        if 0 <= day_idx < 365:
+                            if day_idx not in self._inbound_distribution_cache:
+                                self._inbound_distribution_cache[day_idx] = {s: 0.0 for s in saddle_shares.keys()}
+                            
+                            for saddle_name in saddle_shares.keys():
+                                if saddle_name in row:
+                                    qty_val = row[saddle_name]
+                                    try:
+                                        if isinstance(qty_val, str):
+                                            qty_val = qty_val.strip()
+                                            if qty_val == '' or qty_val == '-':
+                                                continue
+                                        qty = float(qty_val) if qty_val else 0.0
+                                        if qty > 0:
+                                            self._inbound_distribution_cache[day_idx][saddle_name] += qty
+                                    except (ValueError, TypeError):
+                                        continue
+            
+            self._inbound_distribution_initialized = True
+        except Exception:
+            self._inbound_distribution_initialized = True
+    
     def _get_all_stocks_from_inbound_table(self, day: int, saddle_shares: Dict[str, float]) -> Dict[str, float]:
         """
         Holt die Bestände für ALLE Sattel-Typen für einen bestimmten Tag aus der Inbound-Tabelle.
         
         OPTIMIERUNG: Berechnet die Inbound-Tabelle nur einmal pro Tag und cached das Ergebnis.
         Dies vermeidet mehrfache Berechnung (8 Produkte = 8x Aufruf).
+        
+        PERFORMANCE: Verwendet gecachte Verteilung statt get_inbound_log_dataframe() jedes Mal aufzurufen.
         
         Args:
             day: Tag-Index (0-basiert, 0 = 01.01.2027)
@@ -594,10 +667,36 @@ class ProductionPlanner:
             return stock_by_saddle
         
         try:
-            # KRITISCH: Verwende die Inbound-Tabelle, um die KORREKTEN Mengen pro Sattel-Typ zu erhalten
-            # Die Inbound-Tabelle enthält bereits die spezifischen Mengen pro Sattel-Typ (nicht die Gesamtmenge verteilt)
-            # PERFORMANCE: Verwende gecachte Inbound-Tabelle
-            inbound_df = self.china_transport_manager.get_inbound_log_dataframe(saddle_shares)
+            # PERFORMANCE: Initialisiere Verteilungs-Cache einmal (wenn noch nicht geschehen)
+            self._initialize_inbound_distribution_cache(saddle_shares)
+            
+            # Verwende gecachte Verteilung für kumulativen Bestand
+            # Summiere alle Zugänge bis einschließlich heute
+            manager = self.china_transport_manager
+            if manager and hasattr(manager, 'get_daily_arrival_qty'):
+                # Verwende kumulativen Cache - berechne nur die Differenz zum vorherigen Tag
+                prev_day = day - 1
+                if prev_day >= 0 and prev_day in self._inbound_stock_cache:
+                    # Verwende vorherigen Tag als Basis
+                    prev_stock = self._inbound_stock_cache[prev_day]
+                    # Addiere Zugang von heute aus Verteilungs-Cache
+                    today_distribution = self._inbound_distribution_cache.get(day, {})
+                    
+                    for saddle_name in saddle_shares.keys():
+                        prev_qty = prev_stock.get(saddle_name, 0.0) or 0.0
+                        today_qty = today_distribution.get(saddle_name, 0.0) or 0.0
+                        stock_by_saddle[saddle_name] = prev_qty + today_qty
+                else:
+                    # Erster Tag oder Cache fehlt: Berechne kumulativen Bestand bis heute
+                    for saddle_name in saddle_shares.keys():
+                        total_qty = 0.0
+                        for d in range(day + 1):  # Bis einschließlich heute
+                            day_distribution = self._inbound_distribution_cache.get(d, {})
+                            total_qty += day_distribution.get(saddle_name, 0.0) or 0.0
+                        stock_by_saddle[saddle_name] = total_qty if total_qty > 0 else None
+            else:
+                # Fallback: Verwende get_inbound_log_dataframe() wenn get_daily_arrival_qty() nicht verfügbar
+                inbound_df = self.china_transport_manager.get_inbound_log_dataframe(saddle_shares)
             
             if inbound_df.empty:
                 # Cache leeres Ergebnis
@@ -607,28 +706,57 @@ class ProductionPlanner:
             # Konvertiere Tag-Index zu Datum
             target_date = self.workday_calculator.get_date_from_day(day)
             
+            # PERFORMANCE: Vektorisierte Berechnung statt iterrows()
             # Berechne Bestand morgens für ALLE Sattel-Typen auf einmal
             # Bestand morgens = Summe aller Verfügbar <= target_date
-            for saddle_name in saddle_shares.keys():
-                stock_morning = 0.0
-                
-                for _, row in inbound_df.iterrows():
-                    avail_str = row.get('Tatsächliche Ankunft LKW 🇩🇪', '')
-                    if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
-                        try:
-                            avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()
-                            
-                            if avail_date <= target_date:
-                                qty_val = row.get(saddle_name, 0)
-                                if qty_val and str(qty_val).strip() != '':
-                                    try:
-                                        stock_morning += float(qty_val)
-                                    except (ValueError, TypeError):
-                                        pass
-                        except (ValueError, TypeError):
-                            continue
-                
-                stock_by_saddle[saddle_name] = stock_morning if stock_morning > 0 else None
+            avail_col = 'Tatsächliche Ankunft LKW 🇩🇪'
+            if avail_col in inbound_df.columns:
+                try:
+                    import pandas as pd
+                    # Filtere gültige Zeilen
+                    valid_rows = inbound_df[inbound_df[avail_col].notna() & (inbound_df[avail_col].astype(str).str.strip() != '')]
+                    if not valid_rows.empty:
+                        valid_rows = valid_rows.copy()
+                        # Parse Datum vektorisiert
+                        valid_rows['_parsed_date'] = pd.to_datetime(valid_rows[avail_col], format=self.master_data.DATE_FORMAT, errors='coerce').dt.date
+                        valid_rows = valid_rows[valid_rows['_parsed_date'].notna()]
+                        # Filtere nur Zeilen <= target_date
+                        valid_rows = valid_rows[valid_rows['_parsed_date'] <= target_date]
+                        
+                        # Summiere Mengen pro Sattel-Typ vektorisiert
+                        for saddle_name in saddle_shares.keys():
+                            if saddle_name in valid_rows.columns:
+                                qty_series = pd.to_numeric(valid_rows[saddle_name], errors='coerce').fillna(0.0)
+                                stock_morning = float(qty_series.sum())
+                                stock_by_saddle[saddle_name] = stock_morning if stock_morning > 0 else None
+                            else:
+                                stock_by_saddle[saddle_name] = None
+                except Exception:
+                    # Fallback auf alte Methode bei Fehler
+                    for saddle_name in saddle_shares.keys():
+                        stock_morning = 0.0
+                        
+                        for _, row in inbound_df.iterrows():
+                            avail_str = row.get(avail_col, '')
+                            if avail_str and isinstance(avail_str, str) and len(avail_str.strip()) > 0:
+                                try:
+                                    avail_date = datetime.strptime(avail_str, self.master_data.DATE_FORMAT).date()
+                                    
+                                    if avail_date <= target_date:
+                                        qty_val = row.get(saddle_name, 0)
+                                        if qty_val and str(qty_val).strip() != '':
+                                            try:
+                                                stock_morning += float(qty_val)
+                                            except (ValueError, TypeError):
+                                                pass
+                                except (ValueError, TypeError):
+                                    continue
+                        
+                        stock_by_saddle[saddle_name] = stock_morning if stock_morning > 0 else None
+            else:
+                # Keine Spalte vorhanden - setze alle auf None
+                for saddle_name in saddle_shares.keys():
+                    stock_by_saddle[saddle_name] = None
             
             # Cache Ergebnis
             self._inbound_stock_cache[day] = stock_by_saddle

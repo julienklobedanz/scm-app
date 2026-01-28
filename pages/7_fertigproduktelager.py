@@ -153,6 +153,20 @@ def create_finished_goods_log():
                             finished_pm = float(finished_pm) if finished_pm > 0 else 0.0
                         except (ValueError, TypeError):
                             finished_pm = 0.0
+                    
+                    # KRITISCH: Am letzten Tag des Jahres (31.12.2027) addiere auch die tatsächliche PM
+                    # Die tatsächliche PM vom letzten Tag wird nicht als fertiggestellte PM am nächsten Tag berücksichtigt
+                    # weil es keinen nächsten Tag gibt. Daher müssen wir sie hier explizit addieren.
+                    if day == 364:  # Letzter Tag des Jahres
+                        last_date_str = date(planning_year, 12, 31).strftime(MasterData.DATE_FORMAT)
+                        last_row = df_prod[df_prod['Datum'] == last_date_str]
+                        if not last_row.empty:
+                            last_actual_pm = last_row.iloc[0].get('tatsächliche PM', 0.0)
+                            try:
+                                last_actual_pm = float(last_actual_pm) if last_actual_pm > 0 else 0.0
+                                finished_pm += last_actual_pm
+                            except (ValueError, TypeError):
+                                pass
                 
                 # Lagerzugang = fertiggestellte PM (pro Produkt)
                 total_receipt = finished_pm

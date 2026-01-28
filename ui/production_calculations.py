@@ -283,40 +283,86 @@ def _get_inbound_arrivals_by_day_and_saddle(simulator, planning_year: int) -> Di
     
     start_date_sim = date(planning_year, 1, 1)
     
-    # Iteriere über alle Zeilen der Inbound-Tabelle
-    for _, row in inbound_df.iterrows():
-        # Hole Ankunftsdatum (Tatsächliche Ankunft LKW 🇩🇪)
-        avail_str = row.get('Tatsächliche Ankunft LKW 🇩🇪', '')
-        if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
-            continue
+    # PERFORMANCE: Vektorisierte Verarbeitung statt iterrows()
+    avail_col = 'Tatsächliche Ankunft LKW 🇩🇪'
+    if avail_col not in inbound_df.columns:
+        return inbound_map
+    
+    # Filtere leere Ankunftsdaten
+    valid_rows = inbound_df[inbound_df[avail_col].notna() & (inbound_df[avail_col].astype(str).str.strip() != '')]
+    
+    if valid_rows.empty:
+        return inbound_map
+    
+    # Konvertiere Datumsspalte zu Datum-Objekten (vektorisiert)
+    try:
+        valid_rows = valid_rows.copy()
+        valid_rows['_parsed_date'] = pd.to_datetime(valid_rows[avail_col], format=MasterData.DATE_FORMAT, errors='coerce').dt.date
+        valid_rows = valid_rows[valid_rows['_parsed_date'].notna()]
         
-        try:
-            avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
-            day_idx = (avail_date - start_date_sim).days
-            
-            # Nur Tage im Planungsjahr berücksichtigen
-            if day_idx < 0 or day_idx >= 365:
+        if valid_rows.empty:
+            return inbound_map
+        
+        # Berechne day_idx für alle Zeilen auf einmal
+        valid_rows['_day_idx'] = (pd.to_datetime(valid_rows['_parsed_date']) - pd.Timestamp(start_date_sim)).dt.days
+        
+        # Filtere nur Tage im Planungsjahr
+        valid_rows = valid_rows[(valid_rows['_day_idx'] >= 0) & (valid_rows['_day_idx'] < 365)]
+        
+        if valid_rows.empty:
+            return inbound_map
+        
+        # Gruppiere nach day_idx und summiere Mengen pro Sattel-Typ (vektorisiert)
+        # KRITISCH: Verwende die ursprünglichen valid_rows, nicht gefilterte qty_series
+        # um sicherzustellen, dass alle Zeilen mit _day_idx berücksichtigt werden
+        for saddle_name in saddle_shares.keys():
+            if saddle_name in valid_rows.columns:
+                # Konvertiere zu numerisch (vektorisiert) - BEHALTE ALLE Zeilen
+                qty_series = pd.to_numeric(valid_rows[saddle_name], errors='coerce').fillna(0.0)
+                
+                # KRITISCH: Verwende valid_rows direkt für groupby, nicht gefilterte qty_series
+                # Dies stellt sicher, dass alle Zeilen mit _day_idx berücksichtigt werden
+                # auch wenn qty = 0 ist (könnte wichtig sein für Konsistenz)
+                grouped = valid_rows.groupby('_day_idx')[saddle_name].sum()
+                for day_idx, total_qty in grouped.items():
+                    # Nur hinzufügen wenn Menge > 0
+                    if float(total_qty) > 0:
+                        day_idx_int = int(day_idx)
+                        if day_idx_int not in inbound_map:
+                            inbound_map[day_idx_int] = {s: 0.0 for s in saddle_shares.keys()}
+                        inbound_map[day_idx_int][saddle_name] += float(total_qty)
+    except Exception:
+        # Fallback auf alte Methode bei Fehler
+        for _, row in inbound_df.iterrows():
+            avail_str = row.get(avail_col, '')
+            if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
                 continue
             
-            if day_idx not in inbound_map:
-                inbound_map[day_idx] = {s: 0.0 for s in saddle_shares.keys()}
-            
-            # Hole Mengen pro Sattel-Typ aus den Spalten
-            for saddle_name in saddle_shares.keys():
-                if saddle_name in row:
-                    qty_val = row[saddle_name]
-                    try:
-                        if isinstance(qty_val, str):
-                            qty_val = qty_val.strip()
-                            if qty_val == '' or qty_val == '-':
-                                continue
-                        qty = float(qty_val) if qty_val else 0.0
-                        if qty > 0:
-                            inbound_map[day_idx][saddle_name] += qty
-                    except (ValueError, TypeError):
-                        continue
-        except (ValueError, TypeError):
-            continue
+            try:
+                avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+                day_idx = (avail_date - start_date_sim).days
+                
+                if day_idx < 0 or day_idx >= 365:
+                    continue
+                
+                if day_idx not in inbound_map:
+                    inbound_map[day_idx] = {s: 0.0 for s in saddle_shares.keys()}
+                
+                for saddle_name in saddle_shares.keys():
+                    if saddle_name in row:
+                        qty_val = row[saddle_name]
+                        try:
+                            if isinstance(qty_val, str):
+                                qty_val = qty_val.strip()
+                                if qty_val == '' or qty_val == '-':
+                                    continue
+                            qty = float(qty_val) if qty_val else 0.0
+                            if qty > 0:
+                                inbound_map[day_idx][saddle_name] += qty
+                        except (ValueError, TypeError):
+                            continue
+            except (ValueError, TypeError):
+                continue
     
     return inbound_map
 
@@ -346,10 +392,10 @@ def calculate_production_logs():
     volume_planning_cache_key = st_module.session_state.get('volume_planning_cache_key', None)
     cache_key = f"production_logs_running_v4_{volume_planning_cache_key}"  # v4: Fix für Double-Counting Bug
     
-    # Prüfe Cache
-    if cache_key in st_module.session_state and 'production_logs_cache' in st_module.session_state:
-        if st_module.session_state.get('production_logs_cache_key') == cache_key:
-            return st_module.session_state.production_logs_cache
+    # PERFORMANCE: Prüfe Cache zuerst (schnellerer Check)
+    if ('production_logs_cache' in st_module.session_state and 
+        st_module.session_state.get('production_logs_cache_key') == cache_key):
+        return st_module.session_state.production_logs_cache
     
     planning_year = st_module.session_state.get('planning_year', 2027)
     workday_calc = WorkdayCalculator(year=planning_year)
@@ -362,37 +408,100 @@ def calculate_production_logs():
     # Init Running Stock (Laufender Bestand)
     running_stock = {s: 0.0 for s in saddles}
     
-    # Berechne Initialbestand aus Inbound-Tabelle (Daten vor Planungsjahr)
+    # PERFORMANCE: Berechne Initialbestand direkt aus transport_status statt get_inbound_log_dataframe()
+    # Dies vermeidet die teure Berechnung von get_inbound_log_dataframe() beim ersten Aufruf
     manager = simulator.china_transport_manager
     if manager:
         cutoff_date = date(planning_year, 1, 1)
-        inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
         
-        if not inbound_df.empty:
-            for _, row in inbound_df.iterrows():
-                avail_str = row.get('Tatsächliche Ankunft LKW 🇩🇪', '')
-                if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
+        # PERFORMANCE: Verwende get_daily_arrival_qty() statt get_inbound_log_dataframe()
+        # Dies ist viel schneller, da es direkt aus transport_status liest
+        # Nur wenn wirklich die vollständige Tabelle benötigt wird, verwende get_inbound_log_dataframe()
+        initial_stock = {s: 0.0 for s in saddles}
+        
+        # Berechne Initialbestand aus transport_status (Daten vor Planungsjahr)
+        if hasattr(manager, 'transport_status') and manager.transport_status:
+            for (order_day, order_id), status in manager.transport_status.items():
+                available_day = status.get('available_day')
+                if available_day is None:
                     continue
                 
                 try:
-                    avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+                    avail_date = workday_calc.get_date_from_day(available_day)
                     if avail_date < cutoff_date:
-                        # Diese Ware kam vor dem Planungsjahr an -> Initialbestand
-                        for saddle_name in saddles:
-                            if saddle_name in row:
-                                qty_val = row[saddle_name]
+                        # Summiere die tatsächliche Menge (nach Verlusten)
+                        qty = status.get('actual_quantity', status.get('quantity', 0.0))
+                        if qty > 0:
+                            # Verteile auf Sattel-Typen basierend auf saddle_shares
+                            for saddle_name in saddles:
+                                share = saddle_shares.get(saddle_name, 0.0)
+                                initial_stock[saddle_name] += qty * share
+                except Exception:
+                    continue
+        
+        # Setze Running Stock auf Initialbestand
+        running_stock = initial_stock.copy()
+        
+    # KRITISCH: Berechne inbound_arrivals IMMER für korrekte Verteilung basierend auf Produktion
+    # Die Verteilung kommt aus get_inbound_log_dataframe(), die bereits die korrekte Verteilung hat
+    inbound_arrivals = {}
+    if manager:
+        inbound_arrivals = _get_inbound_arrivals_by_day_and_saddle(simulator, planning_year)
+    
+    # PERFORMANCE: Hole Inbound-DF nur wenn wirklich benötigt (für Initialbestand)
+    # Verwende inbound_arrivals für tägliche Zugänge (korrekte Verteilung)
+    use_inbound_df = False  # Standard: Verwende inbound_arrivals
+    
+    if use_inbound_df:
+            # Fallback: Nur wenn get_daily_arrival_qty() nicht verfügbar ist
+            inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
+            
+            if not inbound_df.empty:
+                # PERFORMANCE: Vektorisierte Verarbeitung statt iterrows()
+                avail_col = 'Tatsächliche Ankunft LKW 🇩🇪'
+                if avail_col in inbound_df.columns:
+                    valid_rows = inbound_df[avail_col].notna() & (inbound_df[avail_col].astype(str).str.strip() != '')
+                    valid_rows = inbound_df[valid_rows]
+                    if not valid_rows.empty:
+                        try:
+                            valid_rows = valid_rows.copy()
+                            valid_rows['_parsed_date'] = pd.to_datetime(valid_rows[avail_col], format=MasterData.DATE_FORMAT, errors='coerce').dt.date
+                            valid_rows = valid_rows[valid_rows['_parsed_date'].notna()]
+                            valid_rows = valid_rows[valid_rows['_parsed_date'] < cutoff_date]
+                            
+                            # Summiere Mengen pro Sattel-Typ für alle Zeilen vor cutoff_date
+                            for saddle_name in saddles:
+                                if saddle_name in valid_rows.columns:
+                                    qty_series = pd.to_numeric(valid_rows[saddle_name], errors='coerce').fillna(0.0)
+                                    total_qty = qty_series.sum()
+                                    if total_qty > 0:
+                                        running_stock[saddle_name] += float(total_qty)
+                        except Exception:
+                            # Fallback auf alte Methode
+                            for _, row in inbound_df.iterrows():
+                                avail_str = row.get(avail_col, '')
+                                if not avail_str or (isinstance(avail_str, str) and avail_str.strip() == ''):
+                                    continue
+                                
                                 try:
-                                    if isinstance(qty_val, str):
-                                        qty_val = qty_val.strip()
-                                        if qty_val == '' or qty_val == '-':
-                                            continue
-                                    qty = float(qty_val) if qty_val else 0.0
-                                    if qty > 0:
-                                        running_stock[saddle_name] += qty
+                                    avail_date = datetime.strptime(avail_str, MasterData.DATE_FORMAT).date()
+                                    if avail_date < cutoff_date:
+                                        # Diese Ware kam vor dem Planungsjahr an -> Initialbestand
+                                        for saddle_name in saddles:
+                                            if saddle_name in row:
+                                                qty_val = row[saddle_name]
+                                                try:
+                                                    if isinstance(qty_val, str):
+                                                        qty_val = qty_val.strip()
+                                                        if qty_val == '' or qty_val == '-':
+                                                            continue
+                                                    qty = float(qty_val) if qty_val else 0.0
+                                                    if qty > 0:
+                                                        running_stock[saddle_name] += qty
+                                                except (ValueError, TypeError):
+                                                    continue
                                 except (ValueError, TypeError):
                                     continue
-                except (ValueError, TypeError):
-                    continue
     
     # Konvertiere Logs zu DataFrames
     production_logs = {}
@@ -420,8 +529,11 @@ def calculate_production_logs():
                 except (ValueError, TypeError):
                     pass
     
-    # Hole Inbound-Daten einmalig (Tag -> {Sattel: Menge})
-    inbound_arrivals = _get_inbound_arrivals_by_day_and_saddle(simulator, planning_year)
+    # KRITISCH: Berechne inbound_arrivals IMMER für korrekte Verteilung basierend auf Produktion
+    # Die Verteilung kommt aus get_inbound_log_dataframe(), die bereits die korrekte Verteilung hat
+    inbound_arrivals = {}
+    if manager:
+        inbound_arrivals = _get_inbound_arrivals_by_day_and_saddle(simulator, planning_year)
     
     # Backlog Tracker (chronologisch)
     # FIX: Garantiere deterministische Reihenfolge durch sorted()
@@ -437,10 +549,22 @@ def calculate_production_logs():
         current_date = workday_calc.get_date_from_day(day)
         
         # A. INBOUND: Was kommt heute an?
+        # KRITISCH: Verwende inbound_arrivals für korrekte Verteilung basierend auf Produktion
+        # Die Verteilung kommt aus get_inbound_log_dataframe(), die bereits die korrekte Verteilung hat
         if day in inbound_arrivals:
+            # Verwende inbound_arrivals für korrekte Verteilung pro Sattel-Typ
             for saddle_name, qty in inbound_arrivals[day].items():
                 if qty > 0:
                     running_stock[saddle_name] += qty
+        elif manager and hasattr(manager, 'get_daily_arrival_qty'):
+            # Fallback: Verwende get_daily_arrival_qty() nur wenn inbound_arrivals nicht verfügbar
+            # HINWEIS: Dies ist eine Näherung - die tatsächliche Verteilung hängt von der Produktion ab
+            total_arrival_qty = manager.get_daily_arrival_qty(day)
+            if total_arrival_qty > 0:
+                # Verteile auf Sattel-Typen basierend auf saddle_shares (Näherung)
+                for saddle_name in saddles:
+                    share = saddle_shares.get(saddle_name, 0.0)
+                    running_stock[saddle_name] += total_arrival_qty * share
         
         # B. WASSERSCHADEN: Prüfe Szenarien
         if scenario_manager:

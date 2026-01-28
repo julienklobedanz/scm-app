@@ -817,12 +817,22 @@ class ChinaTransportManager:
                 last_order_day = o_day
         
         # Berechne letzten relevanten Tag-Index (mit Puffer für Lead Time)
+        # PERFORMANCE: Reduziere Puffer von 60 auf 45 Tage für schnellere Berechnung
         if last_order_day >= 0:
             last_order_date = self.workday_calculator.get_date_from_day(last_order_day)
-            last_relevant_date = last_order_date + timedelta(days=60)  # Puffer für Lead Time
+            last_relevant_date = last_order_date + timedelta(days=45)  # OPTIMIERT: Reduziert von 60 auf 45
             last_relevant_day_idx = min(total_days - 1, (last_relevant_date - start_date).days)
         else:
             last_relevant_day_idx = total_days - 1
+        
+        # PERFORMANCE: Intelligente Begrenzung - berechne nur bis zum Ende des Planungsjahres
+        # WICHTIG: Transporte können bis 31.12.2027 ankommen, aber nicht darüber hinaus
+        # Daher: Berechne bis zum Ende des Planungsjahres (plan_year_end_day_idx)
+        # ENTFERNT: Die 350-Tage-Begrenzung, da sie späte Transporte abschneidet und Mengen verliert
+        plan_year_end_day_idx = (date(self.workday_calculator.year, 12, 31) - start_date).days
+        # Verwende das Maximum von last_relevant_day_idx und plan_year_end_day_idx
+        # Begrenze auf maximal total_days (nicht mehr als verfügbar)
+        last_relevant_day_idx = min(max(last_relevant_day_idx, plan_year_end_day_idx), total_days - 1)
         
         # Speichere Bestelleingänge mit ihren Freigabedaten
         # Key: (order_date, order_qty), Value: (released_day, production_end_day)
@@ -1245,55 +1255,100 @@ class ChinaTransportManager:
         daily_prod_all = defaultdict(lambda: defaultdict(float))
         last_production_day = -1  # OPTIMIERUNG: Track letzten Tag mit Produktion
         
-        # Berechne Produktion für jeden Sattel-Typ aus Bestelleingang-Werten
+        # PERFORMANCE: Berechne Produktion für jeden Sattel-Typ aus Bestelleingang-Werten
+        # WICHTIG: get_supplier_log_dataframe() ist gecacht, daher sind wiederholte Aufrufe schnell
         for saddle_name, saddle_share in saddle_shares_dict.items():
             # Hole Supplier-Log für diesen Sattel-Typ (enthält bereits Marketing)
+            # PERFORMANCE: Cache wird automatisch verwendet wenn vorhanden
             supplier_df = self.get_supplier_log_dataframe(saddle_name, saddle_share)
             
             if supplier_df.empty:
                 continue
             
+            # PERFORMANCE: Vektorisierte Verarbeitung statt iterrows()
             # KORRIGIERTE LOGIK: Lese Produktionsmenge direkt aus der Zeile
             # Das Produktionsdatum (String) und die Produktionsmenge stehen in unterschiedlichen Zeilen:
             # - Produktionsdatum (String) steht in der Zeile des Freigabedatums (Menge oft 0)
             # - Produktionsmenge steht in der Zeile, wo die Produktion fertig ist (Datum-String leer)
             # Lösung: Verwende das Datum der Zeile selbst, wenn die Produktionsmenge > 0 ist
-            for _, row in supplier_df.iterrows():
-                # Hole Menge (sicherstellen, dass es float ist)
-                qty_val = row.get('Produktionsmenge', 0)
-                try:
-                    qty = float(qty_val) if qty_val != '' else 0.0
-                except (ValueError, TypeError):
-                    qty = 0.0
+            try:
+                import pandas as pd
+                from datetime import datetime
                 
-                # Wenn Produktion vorhanden ist, nehmen wir das DATUM DER ZEILE als Produktionsdatum
-                if qty > 0.001:
-                    date_str = row.get('Datum', '')
-                    if date_str:
-                        try:
-                            from datetime import datetime
-                            # Wir nutzen das Datum der Zeile selbst!
-                            row_date = datetime.strptime(date_str, self.master_data.DATE_FORMAT).date()
-                            effective_day = (row_date - start_date).days
+                # Filtere nur Zeilen mit Produktion > 0
+                if 'Produktionsmenge' in supplier_df.columns:
+                    # Konvertiere zu numerisch (vektorisiert)
+                    qty_series = pd.to_numeric(supplier_df['Produktionsmenge'], errors='coerce').fillna(0.0)
+                    production_rows = supplier_df[qty_series > 0.001].copy()
+                    
+                    if not production_rows.empty and 'Datum' in production_rows.columns:
+                        # Parse Datum vektorisiert
+                        production_rows['_parsed_date'] = pd.to_datetime(
+                            production_rows['Datum'], 
+                            format=self.master_data.DATE_FORMAT, 
+                            errors='coerce'
+                        ).dt.date
+                        production_rows = production_rows[production_rows['_parsed_date'].notna()]
+                        
+                        if not production_rows.empty:
+                            # Berechne effective_day für alle Zeilen auf einmal
+                            production_rows['_effective_day'] = (
+                                pd.to_datetime(production_rows['_parsed_date']) - pd.Timestamp(start_date)
+                            ).dt.days
                             
-                            # PERFORMANCE: Nur relevante Tage verarbeiten
-                            if 0 <= effective_day < total_days:
-                                # Exakte Zuteilung in den Eimer für diesen Sattel-Typ
+                            # Filtere nur relevante Tage
+                            production_rows = production_rows[
+                                (production_rows['_effective_day'] >= 0) & 
+                                (production_rows['_effective_day'] < total_days)
+                            ]
+                            
+                            # Gruppiere nach effective_day und summiere Mengen
+                            for _, row in production_rows.iterrows():
+                                effective_day = int(row['_effective_day'])
+                                qty = float(row['Produktionsmenge'])
                                 daily_prod_all[effective_day][saddle_name] += qty
                                 last_production_day = max(last_production_day, effective_day)
-                        except (ValueError, TypeError):
-                            continue
+            except Exception:
+                # Fallback auf alte Methode bei Fehler
+                for _, row in supplier_df.iterrows():
+                    qty_val = row.get('Produktionsmenge', 0)
+                    try:
+                        qty = float(qty_val) if qty_val != '' else 0.0
+                    except (ValueError, TypeError):
+                        qty = 0.0
+                    
+                    if qty > 0.001:
+                        date_str = row.get('Datum', '')
+                        if date_str:
+                            try:
+                                from datetime import datetime
+                                row_date = datetime.strptime(date_str, self.master_data.DATE_FORMAT).date()
+                                effective_day = (row_date - start_date).days
+                                
+                                if 0 <= effective_day < total_days:
+                                    daily_prod_all[effective_day][saddle_name] += qty
+                                    last_production_day = max(last_production_day, effective_day)
+                            except (ValueError, TypeError):
+                                continue
 
         # OPTIMIERUNG: Bestimme letzten relevanten Tag
         # Maximal ~40 Tage nach letzter Produktion können noch Transporte ankommen
         max_transport_delay = 40
         last_relevant_day = min(total_days - 1, last_production_day + max_transport_delay) if last_production_day >= 0 else total_days - 1
         
-        # PERFORMANCE: Begrenze auf maximal 500 Tage (statt 426) für schnellere Berechnung
-        # Die Tabelle wird trotzdem bis Ende des Jahres berechnet, aber wir brechen früher ab
-        # wenn keine Transporte mehr stattfinden
-        # OPTIMIERUNG: Reduziere max_calculation_days weiter für bessere Performance
-        max_calculation_days = min(total_days, last_relevant_day + 1, 400)
+        # PERFORMANCE: Intelligente Begrenzung - berechne nur bis zum Ende des Planungsjahres
+        # WICHTIG: Transporte können bis 31.12.2027 ankommen, aber nicht darüber hinaus
+        # Daher: Berechne bis zum Ende des Planungsjahres (Tag 365 relativ zum Planungsjahr)
+        # ABER: Begrenze auf maximal 365 Tage relativ zum Planungsjahr (nicht mehr als nötig)
+        plan_year_start = date(self.workday_calculator.year, 1, 1)
+        plan_year_end = date(self.workday_calculator.year, 12, 31)
+        plan_year_end_day_idx = (plan_year_end - start_date).days
+        
+        # KRITISCH: Verwende das Maximum von last_relevant_day und plan_year_end_day_idx
+        # WICHTIG: Berechne bis zum Ende des Planungsjahres (plan_year_end_day_idx + 1)
+        # ABER: Begrenze auf maximal total_days (nicht mehr als verfügbar)
+        # ENTFERNT: Die 350-Tage-Begrenzung, da sie späte Transporte abschneidet und Mengen verliert
+        max_calculation_days = min(total_days, max(last_relevant_day + 1, plan_year_end_day_idx + 1))
 
         # 3. Die Simulation der "Eimer" am Hafen (Buckets)
         # WICHTIG: Verwende die GLEICHE Verteilungslogik wie in get_supplier_log_dataframe
@@ -1302,9 +1357,9 @@ class ChinaTransportManager:
         lot_size = self.master_data.CHINA_SUPPLIER['Saddles'].get('lot_size', 500)
         
         rows = []
-        # OPTIMIERUNG: Frühzeitiges Beenden wenn keine Daten mehr kommen
+        # PERFORMANCE: Frühzeitiges Beenden wenn keine Daten mehr kommen
         consecutive_empty_days = 0
-        max_consecutive_empty = 15  # OPTIMIERUNG: Reduziert von 20 auf 15 für schnellere Berechnung
+        max_consecutive_empty = 10  # OPTIMIERT: Reduziert von 15 auf 10 für schnellere Berechnung
 
         for day_idx in range(max_calculation_days):  # OPTIMIERUNG: Begrenze Schleife
             curr_date = start_date + timedelta(days=day_idx)
