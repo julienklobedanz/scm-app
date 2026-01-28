@@ -74,17 +74,6 @@ if not df.empty:
     weekend_flags = df['Is_Weekend'].values if 'Is_Weekend' in df.columns else [False] * len(df)
     holiday_flags = df['Is_Holiday'].values if 'Is_Holiday' in df.columns else [False] * len(df)
     
-    # Zeige Tabelle mit Styling (Wochenenden und Feiertage hervorheben)
-    def style_row(row):
-        idx = row.name
-        if idx < len(weekend_flags):
-            # Wochenende hat Priorität (wenn beides, dann Wochenende = rot)
-            if weekend_flags[idx]:
-                return ['background-color: #ffebee' for _ in row]
-            elif holiday_flags[idx]:
-                return ['background-color: #c8e6c9' for _ in row]
-        return [''] * len(row)
-    
     # Summenzeile hinzufügen
     numeric_cols = ['Menge Gesamt'] + [col for col in df.columns if col in saddle_shares.keys()]
     sum_row = {'Wochentag': 'Summe', 'Datum': ''}

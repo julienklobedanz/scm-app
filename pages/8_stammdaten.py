@@ -12,6 +12,49 @@ from models.scenarios import ScenarioManager
 from ui.scenario_sidebar import render_scenario_sidebar
 from ui.page_initialization import initialize_all_page_calculations
 
+
+def _invalidate_all_caches():
+    """
+    Invalidiert alle relevanten Caches bei Parameteränderungen.
+    Wird aufgerufen wenn Planungsparameter geändert werden.
+    """
+    keys_to_delete = [
+        'production_logs_cache',
+        'production_logs_cache_key',
+        'material_inventory_data',
+        'saddle_logs_cache',
+        'material_logs_cache',
+        'inventory_chart_cache',
+        'daily_demands_planned',
+        'daily_demands_actual',
+        'volume_planning_calculated',
+        'volume_planning_cache_key'
+    ]
+    
+    for k in keys_to_delete:
+        if k in st.session_state:
+            del st.session_state[k]
+    
+    # Lösche auch alle Caches die mit "material_inventory_" beginnen (außer last_cache_key)
+    for k in list(st.session_state.keys()):
+        if k.startswith('material_inventory_') and k != 'material_inventory_last_cache_key':
+            del st.session_state[k]
+    
+    # PERFORMANCE: Invalidiere auch Cache für geplante Ankunftsdaten
+    planning_year = st.session_state.get('planning_year', 2027)
+    for delay_stage in ["truck_china_arrival", "ship_arrival", "truck_de_arrival"]:
+        cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
+        if cache_key in st.session_state:
+            del st.session_state[cache_key]
+    
+    # Invalidiere auch ChinaTransportManager Caches (wenn Simulator vorhanden)
+    if 'simulator' in st.session_state and st.session_state.simulator:
+        if hasattr(st.session_state.simulator, 'china_transport_manager'):
+            manager = st.session_state.simulator.china_transport_manager
+            manager._supplier_log_cache = {}
+            manager._inbound_df_cache = {}
+            manager._inbound_df_cache_key = None
+
 st.set_page_config(page_title="Stammdaten", layout="wide", page_icon="📋")
 
 # WICHTIG: Initialisiere Berechnungen auch auf dieser Seite
@@ -259,28 +302,17 @@ with tab2:
     if config_changed:
         st.success("✅ Globale Konfiguration aktualisiert!")
         
-        # FIX: Cache-Invalidierung bei Parameteränderungen
-        # Lösche alle relevanten Caches, damit Berechnungen neu starten
-        keys_to_delete = [
-            'production_logs_cache',
-            'production_logs_cache_key',
-            'material_inventory_data',
-            'saddle_logs_cache',
-            'material_logs_cache',
-            'inventory_chart_cache',
-            'daily_demands_planned',
-            'volume_planning_calculated',
-            'volume_planning_cache_key'
-        ]
+        # KRITISCH: Synchronisiere ALLE Parameter mit MasterData.GLOBAL_CONFIG
+        # Nicht nur total_volume, sondern auch capacity_per_hour, working_hours_per_shift, etc.
+        for key, value in st.session_state.editable_global_config.items():
+            MasterData.GLOBAL_CONFIG[key] = value
         
-        for k in keys_to_delete:
-            if k in st.session_state:
-                del st.session_state[k]
+        # Spezielle Synchronisation für total_volume (auch yearly_volume)
+        if 'total_volume' in st.session_state.editable_global_config:
+            st.session_state.yearly_volume = st.session_state.editable_global_config['total_volume']
         
-        # Lösche auch alle Caches die mit "material_inventory_" beginnen (außer last_cache_key)
-        for k in list(st.session_state.keys()):
-            if k.startswith('material_inventory_') and k != 'material_inventory_last_cache_key':
-                del st.session_state[k]
+        # Cache-Invalidierung bei Parameteränderungen
+        _invalidate_all_caches()
         
         # Kein st.rerun() - Streamlit aktualisiert automatisch
     
@@ -310,6 +342,14 @@ with tab2:
     
     if workload_changed:
         st.success("✅ Tägliche Arbeitslast aktualisiert!")
+        
+        # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData
+        for day, workload in st.session_state.editable_daily_workload.items():
+            MasterData.DAILY_WORKLOAD[day] = workload
+        
+        # Cache-Invalidierung bei Parameteränderungen
+        _invalidate_all_caches()
+        
         # Kein st.rerun() - Streamlit aktualisiert automatisch
     
     # Verkaufsanteile (editierbar)
@@ -337,6 +377,7 @@ with tab2:
     )
     
     # Speichere Änderungen und normalisiere auf Dezimalwerte
+    sales_changed = False
     if not edited_sales.equals(sales_df):
         total = edited_sales['Verkaufsanteil (%)'].sum()
         if total > 0:
@@ -345,10 +386,19 @@ with tab2:
                 product = row['Produkt']
                 percentage = row['Verkaufsanteil (%)']
                 st.session_state.editable_product_sales_shares[product] = percentage / 100.0
+            
+            # KRITISCH: Synchronisiere PRODUCT_SALES_SHARES mit MasterData
+            for product, share in st.session_state.editable_product_sales_shares.items():
+                MasterData.PRODUCT_SALES_SHARES[product] = share
+            
             st.success(f"✅ Verkaufsanteile aktualisiert! (Gesamt: {total:.1f}%)")
-            # Kein st.rerun() - Streamlit aktualisiert automatisch
+            sales_changed = True
         else:
             st.error("⚠️ Summe der Verkaufsanteile muss größer als 0 sein!")
+    
+    if sales_changed:
+        # Cache-Invalidierung bei Parameteränderungen
+        _invalidate_all_caches()
     
     # Saisonalität (editierbar)
     st.subheader("Saisonaler Produktionsverlauf")
@@ -383,6 +433,7 @@ with tab2:
     )
     
     # Speichere Änderungen und normalisiere auf Dezimalwerte
+    seasonality_changed = False
     if not edited_seasonality.equals(seasonality_df):
         total = edited_seasonality['Produktionsanteil (%)'].sum()
         if total > 0:
@@ -393,10 +444,19 @@ with tab2:
                 month_num = month_name_to_num[month_name]
                 percentage = row['Produktionsanteil (%)']
                 st.session_state.editable_seasonality[month_num] = percentage / 100.0
+            
+            # KRITISCH: Synchronisiere SEASONALITY mit MasterData
+            for month, factor in st.session_state.editable_seasonality.items():
+                MasterData.SEASONALITY[month] = factor
+            
             st.success(f"✅ Saisonalität aktualisiert! (Gesamt: {total:.1f}%)")
-            # Kein st.rerun() - Streamlit aktualisiert automatisch
+            seasonality_changed = True
         else:
             st.error("⚠️ Summe der Produktionsanteile muss größer als 0 sein!")
+    
+    if seasonality_changed:
+        # Cache-Invalidierung bei Parameteränderungen
+        _invalidate_all_caches()
 
 with tab3:
     st.header("Märkte & Kunden")

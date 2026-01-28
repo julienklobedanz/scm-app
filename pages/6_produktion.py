@@ -167,16 +167,6 @@ for product in sorted(production_logs.keys()):
         </div>
         """, unsafe_allow_html=True)
     
-    # Styling-Funktion
-    def style_row_safe(row):
-        idx = row.name
-        if idx < len(weekend_flags):
-            if weekend_flags[idx]:
-                return ['background-color: #ffebee'] * len(row)
-            if holiday_flags[idx]:
-                return ['background-color: #c8e6c9'] * len(row)
-        return [''] * len(row)
-    
     # Identifiziere numerische Spalten für Summenzeile
     numeric_cols = []
     for col in df_display.columns:

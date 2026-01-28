@@ -210,51 +210,104 @@ class ChinaTransportManager:
             # Wir verschiffen immer exakt 500 Stück (nicht die gesamte Menge)
             ship_departure_day = current_day
             
-            # NEU: Prüfe Verspätungs-Szenarien an verschiedenen Zwischenstopps (nur Ankünfte)
-            # Verspätung verschiebt alle nachfolgenden Schritte
-            # WICHTIG: Alle Verspätungen werden am ABFAHRTSDATUM des LKW China geprüft
-            # Das Abfahrtsdatum des LKW China entspricht dem "Datum" in der Inbound-Tabelle
+            # KRITISCH: Berechne zuerst die GEPLANTEN Ankunftsdatums (ohne Verspätungen)
+            # Diese werden benötigt, um Verspätungen am richtigen Datum (ETA) zu prüfen
             
-            # Sammle alle Verspätungen für die Bestellungen in diesem Versand
-            # Prüfe am Abfahrtsdatum des LKW China (truck_china_start_day)
+            # Geplante Ankunft LKW China (für alle Bestellungen in diesem Versand gleich)
+            # Verwende das Abfahrtsdatum der ersten Bestellung als Referenz
+            first_order_truck_china_start = None
+            for status in ready_to_ship_orders:
+                truck_china_start = status.get('truck_china_start_day')
+                if truck_china_start is not None:
+                    first_order_truck_china_start = truck_china_start
+                    break
+            
+            if first_order_truck_china_start is None:
+                # Fallback: Verwende current_day
+                first_order_truck_china_start = current_day
+            
+            # Geplante Ankunft LKW China (Abfahrt + 2 AT)
+            truck_china_arrival_day_planned = self._add_workdays(first_order_truck_china_start, 2)
+            
+            # Geplante Schiff-Abfahrt (nächster Mittwoch nach Ankunft LKW China)
+            truck_china_arrival_date_planned = self.workday_calculator.get_date_from_day(truck_china_arrival_day_planned)
+            wd_planned = truck_china_arrival_date_planned.weekday()
+            days_to_wed_planned = (2 - wd_planned) % 7 if (2 - wd_planned) % 7 != 0 else 7
+            ship_departure_date_planned = truck_china_arrival_date_planned + timedelta(days=days_to_wed_planned)
+            ship_departure_day_planned = (ship_departure_date_planned - date(self.workday_calculator.year, 1, 1)).days
+            
+            # Geplante Ankunft Schiff (Abfahrt + 30 KT)
+            ship_arrival_date_planned = ship_departure_date_planned + timedelta(days=30)
+            ship_arrival_day_planned = (ship_arrival_date_planned - date(self.workday_calculator.year, 1, 1)).days
+            
+            # Geplante Abfahrt LKW DE (Ankunft Schiff, ggf. auf nächsten Arbeitstag verschoben)
+            truck_de_start_day_planned = ship_arrival_day_planned
+            truck_de_start_date_planned = ship_arrival_date_planned
+            
+            start_weekday_planned = truck_de_start_date_planned.weekday()
+            is_start_weekend_planned = start_weekday_planned >= 5
+            is_start_holiday_planned = truck_de_start_date_planned in self.workday_calculator.german_holidays
+            
+            if is_start_weekend_planned or is_start_holiday_planned:
+                days_to_add = 1
+                while True:
+                    next_date = truck_de_start_date_planned + timedelta(days=days_to_add)
+                    next_weekday = next_date.weekday()
+                    is_next_weekend = next_weekday >= 5
+                    is_next_holiday = next_date in self.workday_calculator.german_holidays
+                    if not is_next_weekend and not is_next_holiday:
+                        truck_de_start_date_planned = next_date
+                        truck_de_start_day_planned = (truck_de_start_date_planned - date(self.workday_calculator.year, 1, 1)).days
+                        break
+                    days_to_add += 1
+            
+            # Geplante Ankunft LKW DE (Abfahrt + 2 AT)
+            truck_de_end_day_planned = self._add_workdays(truck_de_start_day_planned, 2, exclude_start=False, use_chinese_holidays=False)
+            
+            # JETZT: Prüfe Verspätungen am GEPLANTEN ANKUNFTSDATUM (ETA), nicht am Abfahrtsdatum!
+            # Dies entspricht der Aufgabenstellung: Verspätungen beziehen sich auf (E)TA
             max_truck_china_delay = 0
             max_ship_arrival_delay = 0
             max_truck_de_arrival_delay = 0
             
-            for status in ready_to_ship_orders:
-                truck_china_start = status.get('truck_china_start_day')
-                if truck_china_start is not None and self.scenario_manager:
-                    # Prüfe alle DelayScenarios am Abfahrtsdatum des LKW China
-                    for scenario in self.scenario_manager.scenarios:
-                        if isinstance(scenario, DelayScenario) and scenario.active:
-                            if scenario.component_type == 'saddles' and scenario.start_day == scenario.end_day:
-                                if truck_china_start == scenario.start_day:
-                                    if scenario.delay_stage == 'truck_china_arrival':
-                                        max_truck_china_delay = max(max_truck_china_delay, scenario.delay_days)
-                                    elif scenario.delay_stage == 'ship_arrival':
-                                        max_ship_arrival_delay = max(max_ship_arrival_delay, scenario.delay_days)
-                                    elif scenario.delay_stage == 'truck_de_arrival':
-                                        max_truck_de_arrival_delay = max(max_truck_de_arrival_delay, scenario.delay_days)
+            if self.scenario_manager:
+                for scenario in self.scenario_manager.scenarios:
+                    if isinstance(scenario, DelayScenario) and scenario.active:
+                        if scenario.component_type == 'saddles' and scenario.start_day == scenario.end_day:
+                            # Prüfe Verspätungen am geplanten ANKUNFTSDATUM, nicht am Abfahrtsdatum!
+                            if scenario.delay_stage == 'truck_china_arrival':
+                                # Verspätung "Ankunft LKW China" wird am geplanten Ankunftsdatum LKW China geprüft
+                                if truck_china_arrival_day_planned == scenario.start_day:
+                                    max_truck_china_delay = max(max_truck_china_delay, scenario.delay_days)
+                            elif scenario.delay_stage == 'ship_arrival':
+                                # Verspätung "Ankunft Schiff" wird am geplanten Ankunftsdatum Schiff geprüft
+                                if ship_arrival_day_planned == scenario.start_day:
+                                    max_ship_arrival_delay = max(max_ship_arrival_delay, scenario.delay_days)
+                            elif scenario.delay_stage == 'truck_de_arrival':
+                                # Verspätung "Ankunft LKW Deutschland" wird am geplanten Ankunftsdatum LKW DE geprüft
+                                if truck_de_end_day_planned == scenario.start_day:
+                                    max_truck_de_arrival_delay = max(max_truck_de_arrival_delay, scenario.delay_days)
+            
+            # Berechne TATSÄCHLICHE Datums mit Verspätungen
             
             # Wenn Verspätung an Ankunft LKW China, verschiebt sich die Schiff-Abfahrt
             # (Schiff kann erst abfahren, wenn Ware im Hafen ist)
-            if max_truck_china_delay > 0:
-                # Verschiebe Schiff-Abfahrt um die Verspätung
-                ship_departure_day += max_truck_china_delay
+            truck_china_arrival_day_actual = truck_china_arrival_day_planned + max_truck_china_delay
+            truck_china_arrival_date_actual = self.workday_calculator.get_date_from_day(truck_china_arrival_day_actual)
+            
+            # Tatsächliche Schiff-Abfahrt (nächster Mittwoch nach tatsächlicher Ankunft LKW China)
+            wd_actual = truck_china_arrival_date_actual.weekday()
+            days_to_wed_actual = (2 - wd_actual) % 7 if (2 - wd_actual) % 7 != 0 else 7
+            ship_departure_date_actual = truck_china_arrival_date_actual + timedelta(days=days_to_wed_actual)
+            ship_departure_day = (ship_departure_date_actual - date(self.workday_calculator.year, 1, 1)).days
             
             # KRITISCH: Schiff fährt 30 KALENDERTAGE (KT), nicht Arbeitstage!
             # Das Schiff fährt kontinuierlich, Feiertage spielen keine Rolle
-            # Berechnung: Abfahrt + 30 Kalendertage
-            ship_departure_date = self.workday_calculator.get_date_from_day(ship_departure_day)
-            ship_arrival_date_planned = ship_departure_date + timedelta(days=30)  # 30 Kalendertage
-            
-            # Verschiebe Ankunft Schiff bei Verspätung (wenn am Abfahrtsdatum LKW China aktiv)
-            ship_arrival_date_actual = ship_arrival_date_planned + timedelta(days=max_ship_arrival_delay)
+            ship_arrival_date_actual = ship_departure_date_actual + timedelta(days=30) + timedelta(days=max_ship_arrival_delay)
             ship_arrival_day = (ship_arrival_date_actual - date(self.workday_calculator.year, 1, 1)).days
             
             # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 2 Arbeitstage
             # Start-Datum zählt MIT! Also: Abfahrt Tag X = Tag 1, Tag X+1 = Tag 2, Ankunft Tag X+1
-            # Prüfe zuerst, ob das Abfahrtsdatum ein deutscher Feiertag ist - wenn ja, verschiebe auf nächsten Arbeitstag
             truck_de_start_day = ship_arrival_day
             truck_de_start_date = self.workday_calculator.get_date_from_day(truck_de_start_day)
             
@@ -278,10 +331,10 @@ class ChinaTransportManager:
                     days_to_add += 1
             
             # Berechne Ankunft: Start-Tag zählt als Tag 1, nächster AT ist Tag 2 (Ankunft)
-            truck_de_end_day_planned = self._add_workdays(truck_de_start_day, 2, exclude_start=False, use_chinese_holidays=False)  # 2 Arbeitstage, Start zählt mit!
+            truck_de_end_day_planned_calc = self._add_workdays(truck_de_start_day, 2, exclude_start=False, use_chinese_holidays=False)  # 2 Arbeitstage, Start zählt mit!
             
-            # Verschiebe Ankunft LKW DE bei Verspätung (wenn am Abfahrtsdatum LKW China aktiv)
-            truck_de_end_day = truck_de_end_day_planned + max_truck_de_arrival_delay
+            # Verschiebe Ankunft LKW DE bei Verspätung
+            truck_de_end_day = truck_de_end_day_planned_calc + max_truck_de_arrival_delay
             physical_arrival_day = truck_de_end_day
             available_day = physical_arrival_day + 1
             
@@ -1349,13 +1402,25 @@ class ChinaTransportManager:
             if is_transport_day:
                 day_idx_sim = (curr_date - date(self.workday_calculator.year, 1, 1)).days
                 
-                # Prüfe Ladungsverlust-Szenarien basierend auf ABFAHRTSDATUM (day_idx_sim)
+                # Berechne geplantes Ankunftsdatum des Schiffes für diese Zeile
+                # (wird später für Ladungsverlust-Prüfung benötigt)
+                day_port_ideal_for_loss = self._add_workdays(day_idx_sim, 2)
+                date_port_ideal_for_loss = self.workday_calculator.get_date_from_day(day_port_ideal_for_loss)
+                wd_ideal_for_loss = date_port_ideal_for_loss.weekday()
+                days_to_wed_ideal_for_loss = (2 - wd_ideal_for_loss) % 7 if (2 - wd_ideal_for_loss) % 7 != 0 else 7
+                date_ship_dep_ideal_for_loss = date_port_ideal_for_loss + timedelta(days=days_to_wed_ideal_for_loss)
+                date_ship_arr_ideal_for_loss = date_ship_dep_ideal_for_loss + timedelta(days=30)
+                day_ship_arr_ideal_for_loss = (date_ship_arr_ideal_for_loss - date(self.workday_calculator.year, 1, 1)).days
+                
+                # KRITISCH: Prüfe Ladungsverlust-Szenarien basierend auf GEPLANTEM ANKUNFTSDATUM DES SCHIFFES
+                # Dies identifiziert eindeutig das betroffene Schiff (mehrere Schiffe können gleichzeitig auf See sein)
                 cargo_loss_active = False
                 if self.scenario_manager:
-                    cargo_loss_scenarios = self.scenario_manager.get_cargo_loss_scenarios(day_idx_sim)
+                    cargo_loss_scenarios = self.scenario_manager.get_cargo_loss_scenarios(day_ship_arr_ideal_for_loss)
                     for scenario in cargo_loss_scenarios:
                         if scenario.component_type == 'saddles' and scenario.start_day == scenario.end_day:
-                            if day_idx_sim == scenario.start_day:
+                            # Prüfung am geplanten Ankunftsdatum des Schiffes (nicht Abfahrtsdatum)
+                            if day_ship_arr_ideal_for_loss == scenario.start_day:
                                 cargo_loss_active = True
                                 break
                 
@@ -1445,7 +1510,8 @@ class ChinaTransportManager:
                 
                 day_port_planned = day_port_ideal # Basis ist gleich
                 
-                # Prüfe Verspätungen basierend auf ABFAHRTSDATUM (day_idx_sim)
+                # KRITISCH: Prüfe Verspätungen basierend auf GEPLANTEN ANKUNFTSDATUM (ETA), nicht Abfahrtsdatum!
+                # Dies entspricht der Aufgabenstellung: Verspätungen beziehen sich auf (E)TA (Estimated Time of Arrival)
                 truck_china_arrival_delay = 0
                 ship_arrival_delay = 0
                 truck_de_arrival_delay = 0
@@ -1454,13 +1520,18 @@ class ChinaTransportManager:
                     for scenario in self.scenario_manager.scenarios:
                         if isinstance(scenario, DelayScenario) and scenario.active:
                             if scenario.component_type == 'saddles' and scenario.start_day == scenario.end_day:
-                                # Vergleich mit Start-Datum der Zeile (Abfahrt LKW China)
-                                if day_idx_sim == scenario.start_day:
-                                    if scenario.delay_stage == 'truck_china_arrival':
+                                # Prüfe Verspätungen am geplanten ANKUNFTSDATUM, nicht am Abfahrtsdatum!
+                                if scenario.delay_stage == 'truck_china_arrival':
+                                    # Verspätung "Ankunft LKW China" wird am geplanten Ankunftsdatum LKW China geprüft
+                                    if day_port_ideal == scenario.start_day:
                                         truck_china_arrival_delay = max(truck_china_arrival_delay, scenario.delay_days)
-                                    elif scenario.delay_stage == 'ship_arrival':
+                                elif scenario.delay_stage == 'ship_arrival':
+                                    # Verspätung "Ankunft Schiff" wird am geplanten Ankunftsdatum Schiff geprüft
+                                    if day_ship_arr_ideal_idx == scenario.start_day:
                                         ship_arrival_delay = max(ship_arrival_delay, scenario.delay_days)
-                                    elif scenario.delay_stage == 'truck_de_arrival':
+                                elif scenario.delay_stage == 'truck_de_arrival':
+                                    # Verspätung "Ankunft LKW Deutschland" wird am geplanten Ankunftsdatum LKW DE geprüft
+                                    if day_arr_de_ideal == scenario.start_day:
                                         truck_de_arrival_delay = max(truck_de_arrival_delay, scenario.delay_days)
 
                 # Verschiebe Ankunft LKW China

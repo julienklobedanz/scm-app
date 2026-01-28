@@ -4,7 +4,8 @@ Wiederverwendbare Sidebar-Komponente für Szenarien-Management
 """
 
 import streamlit as st
-from datetime import date
+from datetime import date, datetime
+from typing import List, Optional
 from models.scenarios import (
     ScenarioManager,
     MarketingCampaignScenario,
@@ -17,6 +18,99 @@ from models.scenarios import (
 )
 from simulation.workday_calculator import WorkdayCalculator
 from config.master_data import MasterData
+
+
+def _get_planned_arrival_dates(delay_stage: str, planning_year: int) -> List[date]:
+    """
+    Extrahiert alle geplanten Ankunftsdaten für einen bestimmten Verspätungstyp aus der Inbound-Tabelle.
+    
+    PERFORMANCE-OPTIMIERT: Verwendet Caching um mehrfache Berechnungen zu vermeiden.
+    
+    Args:
+        delay_stage: "truck_china_arrival", "ship_arrival", oder "truck_de_arrival"
+        planning_year: Planungsjahr
+    
+    Returns:
+        Liste von Datums-Objekten (sortiert)
+    """
+    # PERFORMANCE: Cache-Key für geplante Ankunftsdaten
+    cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
+    
+    # Prüfe Cache zuerst
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+    
+    arrival_dates = []
+    
+    # Prüfe ob Simulator verfügbar ist
+    if 'simulator' not in st.session_state or not st.session_state.simulator:
+        # Cache leeres Ergebnis
+        st.session_state[cache_key] = arrival_dates
+        return arrival_dates
+    
+    try:
+        manager = st.session_state.simulator.china_transport_manager
+        if not manager:
+            # Cache leeres Ergebnis
+            st.session_state[cache_key] = arrival_dates
+            return arrival_dates
+        
+        # PERFORMANCE: Hole Inbound-Tabelle (verwendet internes Caching)
+        # Die get_inbound_log_dataframe() Methode cached bereits das Ergebnis,
+        # daher ist dieser Aufruf nicht so teuer wie es scheint
+        from config.master_data import MasterData
+        saddle_shares = MasterData.calculate_saddle_shares()
+        inbound_df = manager.get_inbound_log_dataframe(saddle_shares)
+        
+        if inbound_df.empty:
+            # Cache leeres Ergebnis
+            st.session_state[cache_key] = arrival_dates
+            return arrival_dates
+        
+        # Bestimme Spaltenname basierend auf delay_stage
+        # HINWEIS: "Ankunft LKW 🇨🇳" und "Ankunft Schiff 🇩🇪" zeigen die tatsächlichen Ankünfte,
+        # aber ohne Verspätungen sind sie gleich den geplanten Ankünften.
+        # Für die Verspätungsprüfung verwenden wir diese Spalten, da sie die geplanten Ankünfte repräsentieren
+        # (wenn keine Verspätungen aktiv sind).
+        column_map = {
+            "truck_china_arrival": "Ankunft LKW 🇨🇳",  # Tatsächliche Ankunft = geplante Ankunft (ohne Verspätungen)
+            "ship_arrival": "Ankunft Schiff 🇩🇪",  # Tatsächliche Ankunft = geplante Ankunft (ohne Verspätungen)
+            "truck_de_arrival": "Geplante Ankunft LKW 🇩🇪"  # Explizit geplante Ankunft
+        }
+        
+        column_name = column_map.get(delay_stage)
+        if not column_name or column_name not in inbound_df.columns:
+            # Cache leeres Ergebnis
+            st.session_state[cache_key] = arrival_dates
+            return arrival_dates
+        
+        # PERFORMANCE: Verwende Set für schnelleres Duplikat-Check
+        seen_dates = set()
+        
+        # Extrahiere alle eindeutigen Datums aus der Spalte
+        for _, row in inbound_df.iterrows():
+            date_str = row.get(column_name, '')
+            if date_str and isinstance(date_str, str) and date_str.strip():
+                try:
+                    parsed_date = datetime.strptime(date_str.strip(), MasterData.DATE_FORMAT).date()
+                    # Nur Daten im Planungsjahr oder 2026 (für Vorlauf)
+                    if (parsed_date.year == planning_year or parsed_date.year == 2026) and parsed_date not in seen_dates:
+                        arrival_dates.append(parsed_date)
+                        seen_dates.add(parsed_date)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Sortiere Datums
+        arrival_dates.sort()
+        
+        # Cache Ergebnis
+        st.session_state[cache_key] = arrival_dates
+        return arrival_dates
+        
+    except Exception:
+        # Bei Fehler: Cache leeres Ergebnis und zurückgeben
+        st.session_state[cache_key] = arrival_dates
+        return arrival_dates
 
 
 def render_scenario_sidebar(key_suffix=""):
@@ -170,7 +264,6 @@ def render_scenario_sidebar(key_suffix=""):
         
         elif scenario_type == "Verspätung":
             st.subheader("Verspätung")
-            delay_date = st.date_input("Datum", value=date(planning_year, 7, 19), min_value=min_date, max_value=max_date, key=f"delay_date_global{key_suffix}")
             delay_stage = st.selectbox(
                 "Logistik-Zwischenstopp",
                 ["truck_china_arrival", "ship_arrival", "truck_de_arrival"],
@@ -181,6 +274,46 @@ def render_scenario_sidebar(key_suffix=""):
                 }[x],
                 key=f"delay_stage_global{key_suffix}"
             )
+            
+            # Hole geplante Ankunftsdaten für den ausgewählten Verspätungstyp
+            planned_dates = _get_planned_arrival_dates(delay_stage, planning_year)
+            
+            if planned_dates:
+                # Zeige nur geplante Ankunftsdaten als Optionen
+                stage_name = {
+                    "truck_china_arrival": "Ankunft LKW China",
+                    "ship_arrival": "Ankunft Schiff",
+                    "truck_de_arrival": "Ankunft LKW Deutschland"
+                }[delay_stage]
+                
+                # Erstelle Options-Liste mit Format: "DD.MM.YYYY"
+                date_options = {d.strftime(MasterData.DATE_FORMAT): d for d in planned_dates}
+                default_date_str = planned_dates[0].strftime(MasterData.DATE_FORMAT) if planned_dates else date(planning_year, 7, 19).strftime(MasterData.DATE_FORMAT)
+                
+                selected_date_str = st.selectbox(
+                    f"Geplantes Ankunftsdatum ({stage_name})",
+                    options=list(date_options.keys()),
+                    index=0 if default_date_str in date_options else 0,
+                    help=f"Wählen Sie ein geplantes Ankunftsdatum für {stage_name}. Nur Daten mit tatsächlichen Ankünften werden angezeigt.",
+                    key=f"delay_date_select_{delay_stage}_{key_suffix}"
+                )
+                delay_date = date_options[selected_date_str]
+                
+                # Zeige Info wenn keine Daten verfügbar
+                if len(planned_dates) == 0:
+                    st.info("⚠️ Keine geplanten Ankunftsdaten verfügbar. Bitte starten Sie zuerst die Simulation.")
+            else:
+                # Fallback: Freie Datumsauswahl wenn keine geplanten Daten verfügbar
+                st.warning("⚠️ Keine geplanten Ankunftsdaten gefunden. Verwenden Sie freie Datumsauswahl.")
+                delay_date = st.date_input(
+                    "Datum (geplantes Ankunftsdatum)",
+                    value=date(planning_year, 7, 19),
+                    min_value=min_date,
+                    max_value=max_date,
+                    help="⚠️ Wichtig: Das Datum muss einem geplanten Ankunftsdatum entsprechen, sonst wird die Verspätung nicht angewendet.",
+                    key=f"delay_date_global{key_suffix}"
+                )
+            
             delay = st.number_input("Verspätung (Tage)", min_value=0, max_value=30, value=0, key=f"delay_days_global{key_suffix}")
             
             if st.button("➕ Verspätung hinzufügen", key=f"add_delay_global{key_suffix}"):
@@ -212,7 +345,37 @@ def render_scenario_sidebar(key_suffix=""):
         elif scenario_type == "Ladungsverlust auf See":
             st.subheader("Ladungsverlust auf See")
             st.caption("Verliert die gesamte Ladung einer Lieferung (Mengen werden auf 0 gesetzt)")
-            loss_date = st.date_input("Datum", value=date(planning_year, 8, 15), min_value=min_date, max_value=max_date, key=f"cargo_loss_date_global{key_suffix}")
+            st.info("💡 **Hinweis:** Datumsauswahl nach geplanter Ankunft des betreffenden Schiffes vornehmen. Zu jedem Zeitpunkt sind mehrere Schiffe gleichzeitig auf See - die Auswahl des Ankunftsdatums identifiziert das betroffene Schiff eindeutig.")
+            
+            # PERFORMANCE: Hole geplante Ankunftsdaten für Schiffe (verwendet Cache)
+            # Ladungsverlust bezieht sich immer auf Schiffe, daher verwenden wir "ship_arrival"
+            planned_ship_arrival_dates = _get_planned_arrival_dates("ship_arrival", planning_year)
+            
+            if planned_ship_arrival_dates:
+                # Zeige nur geplante Ankunftsdaten als Optionen
+                # Erstelle Options-Liste mit Format: "DD.MM.YYYY"
+                date_options = {d.strftime(MasterData.DATE_FORMAT): d for d in planned_ship_arrival_dates}
+                default_date_str = planned_ship_arrival_dates[0].strftime(MasterData.DATE_FORMAT) if planned_ship_arrival_dates else date(planning_year, 8, 15).strftime(MasterData.DATE_FORMAT)
+                
+                selected_date_str = st.selectbox(
+                    "Geplantes Ankunftsdatum des Schiffes",
+                    options=list(date_options.keys()),
+                    index=0 if default_date_str in date_options else 0,
+                    help="Wählen Sie das geplante Ankunftsdatum des Schiffes, dessen Ladung verloren geht. Nur Daten mit tatsächlichen Schiffsankünften werden angezeigt.",
+                    key=f"cargo_loss_date_select_{key_suffix}"
+                )
+                loss_date = date_options[selected_date_str]
+            else:
+                # Fallback: Freie Datumsauswahl wenn keine geplanten Daten verfügbar
+                st.warning("⚠️ Keine geplanten Schiffsankunftsdaten gefunden. Verwenden Sie freie Datumsauswahl.")
+                loss_date = st.date_input(
+                    "Datum (geplantes Ankunftsdatum des Schiffes)",
+                    value=date(planning_year, 8, 15),
+                    min_value=min_date,
+                    max_value=max_date,
+                    help="⚠️ Wichtig: Das Datum muss einem geplanten Ankunftsdatum eines Schiffes entsprechen, sonst wird der Ladungsverlust nicht angewendet.",
+                    key=f"cargo_loss_date_global{key_suffix}"
+                )
             
             if st.button("➕ Ladungsverlust hinzufügen", key=f"add_cargo_loss_global{key_suffix}"):
                 # Berechne loss_day relativ zum Planungsjahr
@@ -272,6 +435,12 @@ def render_scenario_sidebar(key_suffix=""):
                             del st.session_state.production_logs_cache
                         if 'production_logs_cache_key' in st.session_state:
                             del st.session_state.production_logs_cache_key
+                        # 5. PERFORMANCE: Invalidiere Cache für geplante Ankunftsdaten
+                        planning_year = st.session_state.get('planning_year', 2027)
+                        for delay_stage in ["truck_china_arrival", "ship_arrival", "truck_de_arrival"]:
+                            cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
+                            if cache_key in st.session_state:
+                                del st.session_state[cache_key]
                         st.rerun()
         else:
             st.caption("Keine zusätzlichen Szenarien aktiv")
@@ -282,5 +451,17 @@ def render_scenario_sidebar(key_suffix=""):
         if st.button("🔄 Simulation neu starten", type="primary", use_container_width=True):
             st.session_state.run_simulation = True
             st.session_state.manual_restart = True
+            # PERFORMANCE: Invalidiere Cache für geplante Ankunftsdaten bei Simulation-Neustart
+            planning_year = st.session_state.get('planning_year', 2027)
+            for delay_stage in ["truck_china_arrival", "ship_arrival", "truck_de_arrival"]:
+                cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
+                if cache_key in st.session_state:
+                    del st.session_state[cache_key]
+            # PERFORMANCE: Invalidiere Cache für geplante Ankunftsdaten bei Simulation-Neustart
+            planning_year = st.session_state.get('planning_year', 2027)
+            for delay_stage in ["truck_china_arrival", "ship_arrival", "truck_de_arrival"]:
+                cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
+                if cache_key in st.session_state:
+                    del st.session_state[cache_key]
             st.rerun()
 

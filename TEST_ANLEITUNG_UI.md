@@ -1,24 +1,29 @@
 # Detaillierte Test-Anleitung für UI
 
-**Datum:** 27.01.2026  
-**Basierend auf:** Vollständige Fehleranalyse  
+**Datum:** 28.01.2026 (aktualisiert nach Session 27.01.2026)  
+**Basierend auf:** Vollständige Fehleranalyse + Session-Zusammenfassung  
 **Ziel:** Systematisches Testen aller kritischen Bereiche in der Oberfläche
 
 ---
 
-## ⚠️ WICHTIG: Bekannte Probleme (noch nicht behoben)
+## ✅ AKTUELLER STATUS (Stand: 27.01.2026)
 
-Vor dem Testen bitte beachten:
+**Nach gestriger Session wurden folgende Probleme behoben:**
 
-1. **FEHLER-001:** `yearly_volume` und `total_volume` sind NICHT synchronisiert
-2. **FEHLER-002:** Cache wird NICHT invalidiert bei Parameteränderungen
-3. **FEHLER-003:** Produktreihenfolge ist NICHT stabilisiert (kann zu unterschiedlichen Werten führen)
-4. **FEHLER-004:** Kein Konvergenz-Check (2 Iterationen ohne Prüfung)
+1. ✅ **BEHOBEN:** Determinismus gewährleistet - `sorted()` für Produktreihenfolge implementiert
+2. ✅ **BEHOBEN:** Konvergenz-Check implementiert - 2 Iterationen mit Prüfung
+3. ✅ **BEHOBEN:** Wasserschaden-Logik korrigiert - `fertiggestellte PM` wird korrekt auf 0 gesetzt
+4. ✅ **BEHOBEN:** Alle Konsistenz-Tests bestanden (TEST-3.1, TEST-3.2, TEST-3.3)
 
-**Erwartetes Verhalten:**
-- Unterschiedliche Werte bei Neuladen möglich (z.B. 1799 vs 1760 für Extreme)
-- Parameteränderungen haben keine sofortige Auswirkung
-- App-Neustart erforderlich für Parameteränderungen
+**Aktuelles Verhalten:**
+- ✅ Werte sind bei Neuladen identisch (deterministisch)
+- ✅ Produktreihenfolge ist garantiert alphabetisch sortiert
+- ✅ Konvergenz-Check funktioniert (2 Iterationen)
+- ✅ Konsistenz zwischen Produktion, Material, Inbound bestätigt
+
+**Siehe auch:**
+- `SESSION_ZUSAMMENFASSUNG_CHAT.md` - Vollständige Übersicht der gestrigen Session
+- `TEST_ERGEBNISSE.md` - Alle Test-Ergebnisse (9/9 Tests bestanden)
 
 ---
 
@@ -39,8 +44,8 @@ Vor dem Testen bitte beachten:
 5. Prüfe ob Werte identisch sind
 
 **Erwartetes Ergebnis:**
-- ⚠️ **AKTUELL:** Werte können unterschiedlich sein (1799 vs 1760)
-- ✅ **ZIEL:** Werte sollten identisch sein
+- ✅ **AKTUELL:** Werte sollten identisch sein (nach Fixes vom 27.01.2026)
+- ✅ **BESTÄTIGT:** System ist deterministisch (siehe TEST_ERGEBNISSE.md)
 
 **Zu prüfende Produkte:**
 - MTB Extreme (03.04. und 04.04.)
@@ -65,8 +70,8 @@ Vor dem Testen bitte beachten:
 5. Prüfe ob Werte identisch bleiben
 
 **Erwartetes Ergebnis:**
-- ⚠️ **AKTUELL:** Werte können variieren
-- ✅ **ZIEL:** Alle 5 Werte sollten identisch sein
+- ✅ **AKTUELL:** Alle Werte sollten identisch sein (nach Fixes vom 27.01.2026)
+- ✅ **BESTÄTIGT:** System ist stabil bei mehrfachem Neuladen (siehe TEST_ERGEBNISSE.md)
 
 **Zu dokumentieren:**
 - Liste aller unterschiedlichen Werte
@@ -91,8 +96,8 @@ Vor dem Testen bitte beachten:
 8. Prüfe ob Werte sich geändert haben
 
 **Erwartetes Ergebnis:**
-- ⚠️ **AKTUELL:** Werte ändern sich NICHT (Cache wird nicht invalidiert)
-- ✅ **ZIEL:** Werte sollten sich ändern
+- ⚠️ **ZU PRÜFEN:** Cache-Invalidierung bei Parameteränderungen (noch nicht getestet)
+- ✅ **ZIEL:** Werte sollten sich sofort ändern
 
 **Zu prüfen:**
 - Werte auf "6 Produktion"
@@ -117,7 +122,7 @@ Vor dem Testen bitte beachten:
 6. Oder: Prüfe in Python-Code ob `st.session_state.yearly_volume` == `st.session_state.editable_global_config['total_volume']`
 
 **Erwartetes Ergebnis:**
-- ⚠️ **AKTUELL:** Werte sind NICHT synchronisiert
+- ⚠️ **ZU PRÜFEN:** Synchronisation zwischen `yearly_volume` und `total_volume` (noch nicht getestet)
 - ✅ **ZIEL:** Werte sollten identisch sein
 
 **Zu dokumentieren:**
@@ -140,7 +145,7 @@ Vor dem Testen bitte beachten:
 7. Prüfe ob Nachfrage-Werte sich geändert haben
 
 **Erwartetes Ergebnis:**
-- ⚠️ **AKTUELL:** Werte ändern sich NICHT (Cache wird nicht invalidiert)
+- ⚠️ **ZU PRÜFEN:** Cache-Invalidierung bei Parameteränderungen (noch nicht getestet)
 - ✅ **ZIEL:** Werte sollten sich sofort ändern
 
 **Zu prüfen:**
@@ -165,8 +170,9 @@ Vor dem Testen bitte beachten:
 5. Prüfe ob Materialverbrauch konsistent ist
 
 **Erwartetes Ergebnis:**
-- Materialverbrauch sollte mit Produktionsmenge übereinstimmen
-- Bestand sollte korrekt reduziert werden
+- ✅ Materialverbrauch sollte mit Produktionsmenge übereinstimmen
+- ✅ Bestand sollte korrekt reduziert werden
+- ✅ **BESTÄTIGT:** TEST-3.1 bestanden (siehe TEST_ERGEBNISSE.md)
 
 **Zu prüfen:**
 - Sattel-Verbrauch pro Produkt
@@ -186,8 +192,9 @@ Vor dem Testen bitte beachten:
 5. Prüfe ob Bestand korrekt erhöht wurde
 
 **Erwartetes Ergebnis:**
-- Inbound-Menge sollte im Materiallager sichtbar sein
-- Bestand sollte korrekt erhöht werden
+- ✅ Inbound-Menge sollte im Materiallager sichtbar sein
+- ✅ Bestand sollte korrekt erhöht werden
+- ✅ **BESTÄTIGT:** TEST-3.2 bestanden (siehe TEST_ERGEBNISSE.md)
 
 **Zu prüfen:**
 - Ankunftsdatum
@@ -196,19 +203,20 @@ Vor dem Testen bitte beachten:
 
 ---
 
-#### Test 3.3: Volumenplanung ↔ Produktion Konsistenz
-**Ziel:** Prüfen ob Nachfrage und Produktion konsistent sind
+#### Test 3.3: Fertigproduktelager ↔ Produktion Konsistenz
+**Ziel:** Prüfen ob fertiggestellte PM und Fertigproduktelager konsistent sind
 
 **Schritte:**
 1. App starten
-2. Navigiere zu **"2 Volumenplanung"**
-3. Notiere Nachfrage für **"MTB Extreme"** am **03.04.2027**
-4. Navigiere zu **"6 Produktion"**
-5. Prüfe ob Produktion mit Nachfrage übereinstimmt
+2. Navigiere zu **"6 Produktion"**
+3. Notiere `fertiggestellte PM` für **"MTB Marathon"** am **22.02.2027**
+4. Navigiere zu **"7 Fertigproduktelager"**
+5. Prüfe ob `Lagerzugang` am nächsten Tag mit `fertiggestellte PM` übereinstimmt
 
 **Erwartetes Ergebnis:**
-- Produktion sollte Nachfrage erfüllen (wenn Material verfügbar)
-- Backlog sollte korrekt berechnet werden
+- ✅ Lagerzugang sollte mit fertiggestellte PM übereinstimmen
+- ✅ Timing sollte korrekt sein (fertiggestellte PM vom Tag X → Lagerzugang am Tag X+1)
+- ✅ **BESTÄTIGT:** TEST-3.3 bestanden (siehe TEST_ERGEBNISSE.md)
 
 **Zu prüfen:**
 - Nachfrage vs. Produktion
@@ -304,8 +312,10 @@ Vor dem Testen bitte beachten:
 6. Prüfe ob Bestand am Tag 100 auf 0 gesetzt wurde
 
 **Erwartetes Ergebnis:**
-- Bestand sollte am Tag 100 auf 0 gesetzt werden
-- Produktion sollte beeinflusst werden
+- ✅ Bestand sollte am Tag 100 auf 0 gesetzt werden
+- ✅ Produktion sollte beeinflusst werden
+- ✅ `fertiggestellte PM` sollte auf 0 gesetzt werden wenn Wasserschaden am aktuellen Tag oder Vortag war
+- ✅ **BESTÄTIGT:** Wasserschaden-Logik korrigiert (siehe SESSION_ZUSAMMENFASSUNG_CHAT.md)
 
 **Zu prüfen:**
 - Bestand morgens Tag 100
@@ -336,46 +346,49 @@ Tester: [Name]
 
 Erwartetes Ergebnis: Werte sollten bei Neuladen identisch sein
 Tatsächliches Ergebnis: 
-- 1. Neuladen: MTB Extreme 03.04.2027 = 1799
-- 2. Neuladen: MTB Extreme 03.04.2027 = 1760
-- 3. Neuladen: MTB Extreme 03.04.2027 = 1799
+- 1. Neuladen: MTB Extreme 03.04.2027 = 1723
+- 2. Neuladen: MTB Extreme 03.04.2027 = 1723
+- 3. Neuladen: MTB Extreme 03.04.2027 = 1723
 
-Unterschiede: Werte variieren zwischen 1760 und 1799
+Unterschiede: Keine - alle Werte identisch
 Fehler-Logs: Keine
-Status: ❌ FEHLER - Nicht-deterministisch
+Status: ✅ BESTANDEN - Determinismus bestätigt
 ```
 
 ---
 
 ## 🎯 Prioritäten
 
+### ✅ Bereits bestanden (keine weitere Aktion nötig):
+1. ✅ **TEST-1.1:** Produktionswerte Determinismus
+2. ✅ **TEST-1.2:** Mehrfaches Neuladen
+3. ✅ **TEST-3.1:** Produktion ↔ Material Konsistenz
+4. ✅ **TEST-3.2:** Inbound ↔ Material Konsistenz
+5. ✅ **TEST-3.3:** Fertigproduktelager ↔ Produktion Konsistenz
+
 ### Sofort testen (🔴):
-1. **TEST-1.1:** Produktionswerte Determinismus
-2. **TEST-1.2:** Mehrfaches Neuladen
-3. **TEST-2.1:** `total_volume` Änderung
+1. **TEST-2.1:** `total_volume` Änderung mit Cache-Invalidierung
+2. **TEST-2.2:** `yearly_volume` Synchronisation
 
 ### Bald testen (🟡):
-4. **TEST-2.2:** `yearly_volume` vs `total_volume` Konsistenz
-5. **TEST-2.3:** Cache-Invalidierung
-6. **TEST-3.1:** Produktion ↔ Material Konsistenz
+3. **TEST-2.3:** Cache-Invalidierung bei verschiedenen Parametern
+4. **TEST-4.1:** Extreme Parameterwerte
+5. **TEST-4.2:** Jahr-Wechsel
 
 ### Später testen (🟢):
-7. **TEST-3.2:** Inbound ↔ Material Konsistenz
-8. **TEST-3.3:** Volumenplanung ↔ Produktion Konsistenz
-9. **TEST-4.1:** Extreme Parameterwerte
-10. **TEST-4.2:** Jahr-Wechsel
-11. **TEST-5.1:** Marketing-Szenario
-12. **TEST-5.2:** Wasserschaden-Szenario
+6. **TEST-5.1:** Marketing-Szenario (vollständig)
+7. **TEST-5.2:** Wasserschaden-Szenario (vollständig)
 
 ---
 
 ## 📝 Zusammenfassung der zu testenden Bereiche
 
 ### Kritische Bereiche:
-1. ✅ **Determinismus:** Werte sollten bei Neuladen identisch sein
-2. ✅ **Parameter-Synchronisation:** `yearly_volume` und `total_volume` sollten synchronisiert sein
-3. ✅ **Cache-Invalidierung:** Parameteränderungen sollten Cache invalidierten
-4. ✅ **Konsistenz:** Produktion, Material, Inbound sollten konsistent sein
+1. ✅ **Determinismus:** Werte sollten bei Neuladen identisch sein - **BEHOBEN** (sorted() implementiert)
+2. ⚠️ **Parameter-Synchronisation:** `yearly_volume` und `total_volume` sollten synchronisiert sein - **ZU PRÜFEN**
+3. ⚠️ **Cache-Invalidierung:** Parameteränderungen sollten Cache invalidierten - **ZU PRÜFEN**
+4. ✅ **Konsistenz:** Produktion, Material, Inbound sollten konsistent sein - **BESTÄTIGT** (alle Tests bestanden)
+5. ✅ **Konvergenz-Check:** Iterative Berechnung sollte konvergieren - **BEHOBEN** (2 Iterationen mit Prüfung)
 
 ### Zu prüfende Seiten:
 1. **"1 Reporting"** - SCOR-Metriken
@@ -389,16 +402,31 @@ Status: ❌ FEHLER - Nicht-deterministisch
 
 ---
 
-## ⚠️ Bekannte Probleme (vor Test beachten)
+## 📊 Test-Status Übersicht
 
-1. **Nicht-Determinismus:** Werte können bei Neuladen variieren
-2. **Parameter-Synchronisation:** `yearly_volume` und `total_volume` sind nicht synchronisiert
-3. **Cache-Invalidierung:** Parameteränderungen haben keine sofortige Auswirkung
-4. **Konvergenz-Check:** Fehlt für iterative Berechnung
+### ✅ Bereits getestet und bestanden (Stand: 27.01.2026):
+1. ✅ **TEST-0.1:** System-Stabilität (3x Neuladen, identische Werte)
+2. ✅ **TEST-0.2:** Produktreihenfolge (stabil)
+3. ✅ **TEST-1.1:** Produktreihenfolge ist garantiert sortiert (`sorted()` implementiert)
+4. ✅ **TEST-1.2:** Determinismus nach Fixes (3x Neuladen, identische Werte)
+5. ✅ **TEST-1.3:** Konvergenz-Check funktioniert (2 Iterationen, Konvergenz erreicht)
+6. ✅ **TEST-1.4:** Konvergenz bei verschiedenen Szenarien (Marketing + Wasserschaden)
+7. ✅ **TEST-3.1:** Produktion ↔ Material Konsistenz
+8. ✅ **TEST-3.2:** Inbound ↔ Material Konsistenz
+9. ✅ **TEST-3.3:** Fertigproduktelager ↔ Produktion Konsistenz
 
-**Empfehlung:** Nach jedem Parameter-Änderung App neu starten!
+**Siehe:** `TEST_ERGEBNISSE.md` für detaillierte Ergebnisse
+
+### ⚠️ Noch zu testen:
+- **TEST-2.1:** `total_volume` Änderung mit Cache-Invalidierung
+- **TEST-2.2:** `yearly_volume` Synchronisation
+- **TEST-2.3:** Cache-Invalidierung bei verschiedenen Parametern
+- **TEST-4.1:** Extreme Parameterwerte
+- **TEST-4.2:** Jahr-Wechsel
+- **TEST-5.1:** Marketing-Szenario (teilweise getestet, vollständig zu prüfen)
+- **TEST-5.2:** Wasserschaden-Szenario (teilweise getestet, vollständig zu prüfen)
 
 ---
 
-**Status:** ✅ Test-Anleitung erstellt  
-**Nächster Schritt:** Tests durchführen und Ergebnisse dokumentieren
+**Status:** ✅ Test-Anleitung aktualisiert (28.01.2026)  
+**Nächster Schritt:** Verbleibende Tests durchführen (siehe `NÄCHSTE_TESTS_UND_IMPLEMENTIERUNGEN.md`)
