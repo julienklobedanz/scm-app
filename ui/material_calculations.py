@@ -34,16 +34,14 @@ def calculate_material_inventory():
     cache_key = f"material_inventory_v2_{volume_planning_cache_key}_{production_logs_cache_key}"
     
     # PERFORMANCE: Prüfe Cache zuerst (schnellerer Check)
+    # KRITISCH: Prüfe auch ob saddle_logs_cache vorhanden ist, da material_inventory_data allein nicht ausreicht
     if ('material_inventory_data' in st.session_state and 
-        st.session_state.get('material_inventory_cache_key') == cache_key):
+        st.session_state.get('material_inventory_cache_key') == cache_key and
+        'saddle_logs_cache' in st.session_state):
         # Lade aus Cache
         material_inventory_data = st.session_state.material_inventory_data
-        # Berechne saddle_logs aus material_inventory_data (schneller als Neuberechnung)
-        saddle_logs = {}
-        saddle_shares = MasterData.calculate_saddle_shares()
-        saddle_types = list(saddle_shares.keys())
-        for saddle_type in saddle_types:
-            saddle_logs[saddle_type] = []
+        # Verwende gecachte saddle_logs (wurden bereits berechnet)
+        saddle_logs = st.session_state.saddle_logs_cache
         return material_inventory_data, saddle_logs
     
     simulator = st.session_state.simulator
@@ -177,8 +175,10 @@ def calculate_material_inventory():
     # 3. MATERIALVERBRAUCH & BESTAND BERECHNEN
     # -------------------------------------------------------
     # Start etwas früher, um Übertrag aus Vorjahr korrekt aufzubauen
+    # KRITISCH: Erweitert bis 10.01.2028, um auch die ersten Tage des neuen Jahres zu erfassen
+    # Dies stellt sicher, dass alle Berechnungen konsistent sind
     start_date_log = date(planning_year - 1, 11, 1)
-    end_date_log = date(planning_year, 12, 31)
+    end_date_log = date(planning_year + 1, 1, 10)  # Erweitert bis 10.01.2028
     total_days = (end_date_log - start_date_log).days + 1
     
     stock_by_saddle = {saddle_type: 0.0 for saddle_type in saddle_types}
@@ -272,4 +272,6 @@ def calculate_material_inventory():
     # PERFORMANCE: Speichere im Session State mit Cache-Key
     st.session_state.material_inventory_data = material_inventory_data
     st.session_state.material_inventory_cache_key = cache_key
+    # KRITISCH: Speichere auch saddle_logs im Cache, damit sie beim nächsten Aufruf verfügbar sind
+    st.session_state.saddle_logs_cache = saddle_logs
     return material_inventory_data, saddle_logs

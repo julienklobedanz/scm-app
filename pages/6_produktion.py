@@ -179,11 +179,13 @@ for product in sorted(production_logs.keys()):
                 pass
     
     # Erstelle Summenzeile
+    # KRITISCH: Summe wird über das GESAMTE JAHR berechnet (df_prod), nicht nur über gefilterten Zeitraum (df_display)
+    # Dies stellt sicher, dass die Summen korrekt sind, auch wenn nur ein Teil des Jahres angezeigt wird
     if numeric_cols and len(df_display) > 0:
         sum_row = {'Wochentag': 'Summe', 'Datum': ''}
         for col in df_display.columns:
             if col in numeric_cols:
-                # Für Auslastung: Durchschnitt statt Summe
+                # Für Auslastung: Durchschnitt statt Summe (nur über angezeigten Zeitraum)
                 if col == 'Auslastung (%)':
                     # Konvertiere String-Werte zurück zu Float für Berechnung
                     numeric_values = df_display[col].apply(
@@ -192,7 +194,13 @@ for product in sorted(production_logs.keys()):
                     avg_utilization = numeric_values.mean()
                     sum_row[col] = f"{avg_utilization:.2f}" if pd.notna(avg_utilization) else ""
                 else:
-                    sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
+                    # KRITISCH: Summe über GESAMTES JAHR (df_prod), nicht nur gefilterten Zeitraum
+                    # Dies stellt sicher, dass die Summen korrekt sind
+                    if col in df_prod.columns:
+                        sum_row[col] = int(pd.to_numeric(df_prod[col].replace('', 0), errors='coerce').sum())
+                    else:
+                        # Fallback: Summe über angezeigten Zeitraum
+                        sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
             elif col not in sum_row:
                 sum_row[col] = ''
         

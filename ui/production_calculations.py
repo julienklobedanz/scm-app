@@ -390,7 +390,7 @@ def calculate_production_logs():
     
     # Cache-Key für Invalidierung
     volume_planning_cache_key = st_module.session_state.get('volume_planning_cache_key', None)
-    cache_key = f"production_logs_running_v4_{volume_planning_cache_key}"  # v4: Fix für Double-Counting Bug
+    cache_key = f"production_logs_running_v5_{volume_planning_cache_key}"  # v5: Fix für material_verbrauch - immer setzen
     
     # PERFORMANCE: Prüfe Cache zuerst (schnellerer Check)
     if ('production_logs_cache' in st_module.session_state and 
@@ -511,6 +511,18 @@ def calculate_production_logs():
         else:
             production_logs[product] = pd.DataFrame()
     
+    # KRITISCH: Initialisiere Sattel-Spalten und material_verbrauch für alle Produkte
+    # Dies stellt sicher, dass die Spalten immer existieren, auch wenn der Bestand immer 0 war
+    for product, df in production_logs.items():
+        if not df.empty:
+            saddle_name = MasterData.BOM.get(product, {}).get('saddle')
+            if saddle_name and saddle_name not in df.columns:
+                df[saddle_name] = 0  # Initialisiere Spalte mit 0 für alle Zeilen
+            # KRITISCH: Initialisiere material_verbrauch für alle Zeilen mit 0
+            # Dies stellt sicher, dass der Verbrauch für alle Tage erfasst wird
+            if 'material_verbrauch' not in df.columns:
+                df['material_verbrauch'] = 0
+    
     # Mapping für schnellen Zugriff: Tag -> {Produkt: ZeilenIndex}
     day_row_map = {}
     for p, df in production_logs.items():
@@ -591,6 +603,10 @@ def calculate_production_logs():
             for p, idx in day_row_map[day].items():
                 saddle = MasterData.BOM[p]['saddle']
                 df = production_logs[p]
+                # KRITISCH: Initialisiere Sattel-Spalte falls nicht vorhanden
+                # Dies stellt sicher, dass die Spalte in der Tabelle angezeigt wird, auch wenn der Bestand = 0 ist
+                if saddle not in df.columns:
+                    df[saddle] = 0
                 df.at[idx, saddle] = int(round(daily_start_stock[saddle])) if daily_start_stock[saddle] > 0 else 0
                 df.at[idx, 'Backlog'] = int(round(current_backlog[p]))
         
@@ -645,22 +661,36 @@ def calculate_production_logs():
             current_backlog[p] = max(0.0, total_requirement - qty_to_book)
             
             # 3. Schreiben in DataFrame
-            if day in day_row_map and p in day_row_map[day]:
-                idx = day_row_map[day][p]
-                df = production_logs[p]
-                
-                df.at[idx, 'tatsächliche PM'] = qty_to_book
-                if 'material_verbrauch' not in df.columns:
-                    df['material_verbrauch'] = 0
-                df.at[idx, 'material_verbrauch'] = qty_to_book
-                df.at[idx, 'Backlog'] = int(round(current_backlog[p]))
-                
-                # ANZEIGE: Bestand Morgens (statisch für den ganzen Tag)
-                # Hier nutzen wir daily_start_stock statt running_stock!
-                df.at[idx, saddle] = int(round(daily_start_stock[saddle])) if daily_start_stock[saddle] > 0 else 0
-                
-                planned_pm = todays_demand_map.get(p, 0)
-                df.at[idx, 'geplante PM'] = int(planned_pm)
+            # KRITISCH: material_verbrauch MUSS IMMER gesetzt werden für ALLE Produkte an ALLEN Tagen
+            # Material wird bereits abgebucht (Zeile 656), daher muss es auch im DataFrame gespeichert werden
+            df = production_logs[p]
+            if not df.empty and 'Datum' in df.columns:
+                current_date_str = current_date.strftime(MasterData.DATE_FORMAT)
+                matching_rows = df[df['Datum'] == current_date_str]
+                if not matching_rows.empty:
+                    idx = matching_rows.index[0]
+                    # KRITISCH: Initialisiere material_verbrauch Spalte falls nicht vorhanden
+                    if 'material_verbrauch' not in df.columns:
+                        df['material_verbrauch'] = 0
+                    # KRITISCH: Setze material_verbrauch IMMER (auch wenn qty_to_book = 0)
+                    # Dies stellt sicher, dass der Verbrauch für ALLE Tage korrekt erfasst wird
+                    df.at[idx, 'material_verbrauch'] = qty_to_book
+                    
+                    # Setze weitere Felder nur wenn Tag in day_row_map ist
+                    if day in day_row_map and p in day_row_map[day]:
+                        df.at[idx, 'tatsächliche PM'] = qty_to_book
+                        df.at[idx, 'Backlog'] = int(round(current_backlog[p]))
+                        
+                        # ANZEIGE: Bestand Morgens (statisch für den ganzen Tag)
+                        # Hier nutzen wir daily_start_stock statt running_stock!
+                        # KRITISCH: Setze die Sattel-Spalte IMMER, auch wenn der Bestand = 0 ist
+                        # Dies stellt sicher, dass die Spalte in der Tabelle angezeigt wird
+                        if saddle not in df.columns:
+                            df[saddle] = 0  # Initialisiere Spalte falls nicht vorhanden
+                        df.at[idx, saddle] = int(round(daily_start_stock[saddle])) if daily_start_stock[saddle] > 0 else 0
+                        
+                        planned_pm = todays_demand_map.get(p, 0)
+                        df.at[idx, 'geplante PM'] = int(planned_pm)
     
     # Aktualisiere "fertiggestellte PM" (Produktion vom Vortag)
     # OPTIMIERT: Vereinfachte Logik für bessere Performance
@@ -730,7 +760,9 @@ def calculate_production_logs():
                         # Normale Logik: Finde vorherigen Arbeitstag (mit Limit für Performance)
                         prev_workday_found = False
                         prev_day = day - 1
-                        max_lookback = 10  # Maximal 10 Tage zurück suchen (Performance-Optimierung)
+                        # KRITISCH: Erhöhtes Limit, um sicherzustellen, dass der erste Tag des Jahres gefunden wird
+                        # (z.B. wenn der erste Tag am 04.01 ist, müssen wir bis zum 01.01 zurückgehen können)
+                        max_lookback = 15  # Maximal 15 Tage zurück suchen (Performance-Optimierung, aber ausreichend für Jahresanfang)
                         lookback_count = 0
                         
                         while prev_day >= 0 and lookback_count < max_lookback:
@@ -766,7 +798,21 @@ def calculate_production_logs():
                             lookback_count += 1  # FIX: Auch bei Nicht-Arbeitstagen zählen
                         
                         if not prev_workday_found:
-                            df_sorted.at[idx, 'fertiggestellte PM'] = 0
+                            # KRITISCH: Am ersten Arbeitstag des Jahres (kein vorheriger Arbeitstag gefunden)
+                            # Wenn am aktuellen Tag produziert wurde, sollte diese Produktion als fertiggestellt gezählt werden
+                            # Dies verhindert, dass produzierten Einheiten am ersten Tag "verloren gehen"
+                            current_actual_pm = row.get('tatsächliche PM', 0)
+                            try:
+                                current_actual_pm = float(current_actual_pm) if current_actual_pm > 0 else 0.0
+                            except (ValueError, TypeError):
+                                current_actual_pm = 0.0
+                            
+                            # Am ersten Tag: fertiggestellte PM = tatsächliche PM (keine Verzögerung, da es der erste Tag ist)
+                            # ABER: Nur wenn tatsächlich produziert wurde
+                            if current_actual_pm > 0:
+                                df_sorted.at[idx, 'fertiggestellte PM'] = int(round(current_actual_pm))
+                            else:
+                                df_sorted.at[idx, 'fertiggestellte PM'] = 0
                 except (ValueError, TypeError):
                     df_sorted.at[idx, 'fertiggestellte PM'] = 0
             
