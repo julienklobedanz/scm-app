@@ -390,7 +390,7 @@ def calculate_production_logs():
     
     # Cache-Key für Invalidierung
     volume_planning_cache_key = st_module.session_state.get('volume_planning_cache_key', None)
-    cache_key = f"production_logs_running_v5_{volume_planning_cache_key}"  # v5: Fix für material_verbrauch - immer setzen
+    cache_key = f"production_logs_running_v6_{volume_planning_cache_key}"  # v6: Fix für material_verbrauch - alle Tage + fertiggestellte PM Summe
     
     # PERFORMANCE: Prüfe Cache zuerst (schnellerer Check)
     if ('production_logs_cache' in st_module.session_state and 
@@ -599,6 +599,23 @@ def calculate_production_logs():
         
         # Bestand für UI schreiben (auch an Wochenenden)
         # ANZEIGE: Bestand Morgens (der sich am WE nicht ändert)
+        # KRITISCH: Stelle sicher, dass material_verbrauch für ALLE Tage gesetzt wird, auch für Wochenenden/Feiertage
+        # Auch wenn kein Arbeitstag ist, muss material_verbrauch = 0 gesetzt werden
+        current_date_str = current_date.strftime(MasterData.DATE_FORMAT)
+        for p in sorted(MasterData.BOM.keys()):
+            df = production_logs[p]
+            if not df.empty and 'Datum' in df.columns:
+                matching_rows = df[df['Datum'] == current_date_str]
+                if not matching_rows.empty:
+                    idx = matching_rows.index[0]
+                    # KRITISCH: Initialisiere material_verbrauch Spalte falls nicht vorhanden
+                    if 'material_verbrauch' not in df.columns:
+                        df['material_verbrauch'] = 0
+                    # KRITISCH: Setze material_verbrauch für Wochenenden/Feiertage auf 0
+                    # Dies stellt sicher, dass der Verbrauch für ALLE Tage erfasst wird
+                    if not is_workday:
+                        df.at[idx, 'material_verbrauch'] = 0
+        
         if day in day_row_map:
             for p, idx in day_row_map[day].items():
                 saddle = MasterData.BOM[p]['saddle']
@@ -727,6 +744,19 @@ def calculate_production_logs():
                     if not workday_calc.is_workday(day):
                         df_sorted.at[idx, 'fertiggestellte PM'] = 0
                         continue
+                    
+                    # KRITISCH: Am letzten Tag des Jahres (31.12.2027) setze fertiggestellte PM = tatsächliche PM
+                    # Die tatsächliche PM vom letzten Tag wird nicht als fertiggestellte PM am nächsten Tag berücksichtigt
+                    # weil es keinen nächsten Tag gibt. Daher müssen wir sie hier explizit setzen.
+                    if day == 364:  # Letzter Tag des Jahres (31.12.2027)
+                        current_actual_pm = row.get('tatsächliche PM', 0)
+                        try:
+                            current_actual_pm = float(current_actual_pm) if current_actual_pm > 0 else 0.0
+                            # Am letzten Tag: fertiggestellte PM = tatsächliche PM (keine Verzögerung, da es der letzte Tag ist)
+                            df_sorted.at[idx, 'fertiggestellte PM'] = int(round(current_actual_pm))
+                            continue  # Überspringe normale Logik für letzten Tag
+                        except (ValueError, TypeError):
+                            pass  # Fallback auf normale Logik
                     
                     # FIX: Prüfe ob Wasserschaden am aktuellen Tag ODER am Vortag war
                     # Wenn am Vortag Wasserschaden war, wurde nichts produziert → fertiggestellte PM = 0

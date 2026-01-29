@@ -197,7 +197,24 @@ for product in sorted(production_logs.keys()):
                     # KRITISCH: Summe über GESAMTES JAHR (df_prod), nicht nur gefilterten Zeitraum
                     # Dies stellt sicher, dass die Summen korrekt sind
                     if col in df_prod.columns:
-                        sum_row[col] = int(pd.to_numeric(df_prod[col].replace('', 0), errors='coerce').sum())
+                        sum_value = int(pd.to_numeric(df_prod[col].replace('', 0), errors='coerce').sum())
+                        
+                        # KRITISCH: Für fertiggestellte PM addiere auch die tatsächliche PM vom letzten Tag
+                        # Die tatsächliche PM vom letzten Tag wird nicht als fertiggestellte PM am nächsten Tag berücksichtigt
+                        # weil es keinen nächsten Tag gibt. Daher müssen wir sie hier explizit addieren.
+                        if col == 'fertiggestellte PM' and 'tatsächliche PM' in df_prod.columns and 'Datum' in df_prod.columns:
+                            last_date_str = date(planning_year, 12, 31).strftime('%d.%m.%Y')
+                            last_row = df_prod[df_prod['Datum'] == last_date_str]
+                            if not last_row.empty:
+                                last_actual_pm_val = last_row.iloc[0].get('tatsächliche PM', 0)
+                                try:
+                                    last_actual_pm = float(pd.to_numeric(last_actual_pm_val, errors='coerce')) if pd.notna(pd.to_numeric(last_actual_pm_val, errors='coerce')) else 0.0
+                                    if last_actual_pm > 0:
+                                        sum_value += int(last_actual_pm)
+                                except (ValueError, TypeError):
+                                    pass
+                        
+                        sum_row[col] = sum_value
                     else:
                         # Fallback: Summe über angezeigten Zeitraum
                         sum_row[col] = int(pd.to_numeric(df_display[col].replace('', 0), errors='coerce').sum())
