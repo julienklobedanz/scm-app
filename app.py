@@ -77,81 +77,84 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     # 1. Perfect Order Fulfillment (Inbound)
     st.header("Perfect Order Fulfillment (Inbound)")
     
-    def calculate_inbound_metrics():
-        """Berechnet Inbound-Metriken für alle Lieferanten"""
-        inbound_metrics = {}
-        
-        # Nur China (Deutschland und Spanien entfernt, da wir nur einen Lieferanten haben)
-        suppliers = ['China']
-        
-        for supplier in suppliers:
-            if supplier == 'China':
-                transport_manager = simulator.china_transport_manager
-                transport_status = transport_manager.transport_status
-                
-                # Analysiere alle Transporte
-                total_deliveries = 0
-                total_failures = 0
-                quantity_losses = 0
-                late_deliveries = 0
-                late_delivery_days = []
-                machine_downtime_days = 0
-                
-                # Zähle Versendungen (shipped = True)
-                shipments = {}
-                for (order_day, order_id), status in transport_status.items():
-                    if status.get('shipped', False):
-                        ship_day = status.get('ship_departure_day')
-                        if ship_day is not None:
-                            if ship_day not in shipments:
-                                shipments[ship_day] = []
-                            shipments[ship_day].append(status)
-                
-                # Analysiere jede Versendung
-                for ship_day, status_list in shipments.items():
-                    for status in status_list:
-                        if status.get('received', False):
-                            total_deliveries += 1
-                            
-                            # Prüfe auf Totalausfall (100% Verlust)
-                            original_qty = status.get('quantity', 0.0)
-                            actual_qty = status.get('actual_quantity', 0.0)
-                            if actual_qty <= 0 and original_qty > 0:
-                                total_failures += 1
-                            
-                            # Prüfe auf Mengenverlust (0 < actual < original)
-                            elif actual_qty < original_qty and original_qty > 0:
-                                quantity_losses += 1
-                            
-                            # Prüfe auf Verspätung
-                            if status.get('available_day') is not None and status.get('order_day') is not None:
-                                # Erwartete Lead Time: 49 Tage (Standard)
-                                expected_days = 49
-                                actual_days = status['available_day'] - status['order_day']
-                                if actual_days > expected_days:
-                                    late_deliveries += 1
-                                    late_delivery_days.append(actual_days - expected_days)
-                            
-                            # Maschinenausfall: Wenn production_loss_percentage > 0
-                            if status.get('production_loss_percentage', 0.0) > 0:
-                                machine_downtime_days += 1
-                
-                perfect_deliveries_pct = ((total_deliveries - total_failures - quantity_losses - late_deliveries) / total_deliveries * 100) if total_deliveries > 0 else 100.0
-                avg_late_days = sum(late_delivery_days) / len(late_delivery_days) if late_delivery_days else 0.0
-                
-                inbound_metrics[supplier] = {
-                    'Anzahl Lieferungen': total_deliveries,
-                    'Anzahl Lieferungen mit Totalausfall': total_failures,
-                    'Anzahl Lieferungen mit Mengenverlust': quantity_losses,
-                    'verspätete Lieferungen': late_deliveries,
-                    'Perfekte Lieferungen in %': round(perfect_deliveries_pct, 2),
-                    'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': round(avg_late_days, 2) if late_deliveries > 0 else 0.0,
-                    'Anzahl von Tagen eines Maschinenausfalls': machine_downtime_days
-                }
-        
-        return inbound_metrics
+    def calculate_inbound_metrics_from_table():
+        """POF aus der Inbound-Tabelle (Single Source of Truth, reagiert auf Szenarien)."""
+        from datetime import datetime
+        transport_manager = simulator.china_transport_manager
+        saddle_shares = MasterData.calculate_saddle_shares()
+        df = transport_manager.get_inbound_log_dataframe(saddle_shares)
+        if df.empty:
+            return {'China': {
+                'Anzahl Lieferungen': 0, 'Anzahl Lieferungen mit Totalausfall': 0,
+                'Anzahl Lieferungen mit Mengenverlust': 0, 'verspätete Lieferungen': 0,
+                'Perfekte Lieferungen in %': 100.0,
+                'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': 0.0,
+                'Anzahl von Tagen eines Maschinenausfalls': 0
+            }}
+        # Lieferungen = Zeilen mit Versand (Abfahrt LKW China gesetzt)
+        abfahrt_col = 'Abfahrt LKW 🇨🇳'
+        shipment_mask = df[abfahrt_col].notna() & (df[abfahrt_col].astype(str).str.strip() != '')
+        shipments_df = df[shipment_mask]
+        total = len(shipments_df)
+        if total == 0:
+            downtime_days = 0
+            if saddle_shares:
+                first_saddle = next(iter(saddle_shares))
+                supplier_df = transport_manager.get_supplier_log_dataframe(first_saddle, saddle_shares[first_saddle])
+                if not supplier_df.empty and 'Störung' in supplier_df.columns:
+                    stoerung = supplier_df['Störung'].astype(str).str.strip().str.lower()
+                    downtime_days = int((stoerung == 'ja').sum())
+            return {'China': {
+                'Anzahl Lieferungen': 0, 'Anzahl Lieferungen mit Totalausfall': 0,
+                'Anzahl Lieferungen mit Mengenverlust': 0, 'verspätete Lieferungen': 0,
+                'Perfekte Lieferungen in %': 100.0,
+                'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': 0.0,
+                'Anzahl von Tagen eines Maschinenausfalls': downtime_days
+            }}
+        # Totalausfall: Ladungsverlust = 'Ja' (Vollverlust). Mengenverlust nur bei Teilmengen – in der Tabelle nur Vollverlust.
+        loss_str = shipments_df['Ladungsverlust'].astype(str).str.strip().str.lower()
+        fail_total = int((loss_str == 'ja').sum())
+        fail_qty = 0  # Inbound-Tabelle kennt nur Vollverlust (Ladungsverlust), kein Teilmengenverlust
+        # Verspätung: Verspätung = 'Ja'
+        delay_str = shipments_df['Verspätung'].astype(str).str.strip().str.lower()
+        fail_time = int((delay_str == 'ja').sum())
+        # Durchschnitt Verspätung in Tagen (Geplante vs. Tatsächliche Ankunft LKW DE)
+        planned_col = 'Geplante Ankunft LKW 🇩🇪'
+        actual_col = 'Tatsächliche Ankunft LKW 🇩🇪'
+        fmt = MasterData.DATE_FORMAT
+        delay_days_list = []
+        for _, row in shipments_df[delay_str == 'ja'].iterrows():
+            try:
+                p = row.get(planned_col, '')
+                a = row.get(actual_col, '')
+                if p and a:
+                    d_plan = datetime.strptime(str(p).strip(), fmt).date()
+                    d_act = datetime.strptime(str(a).strip(), fmt).date()
+                    delay_days_list.append((d_act - d_plan).days)
+            except (ValueError, TypeError):
+                pass
+        avg_delay = (sum(delay_days_list) / len(delay_days_list)) if delay_days_list else 0.0
+        error_count = min(fail_total + fail_qty + fail_time, total)
+        pct_perfect = ((total - error_count) / total * 100) if total > 0 else 100.0
+        # Maschinenausfall aus Lieferant-China-Tabelle (Spalte „Störung“), ein Sattel reicht (Störung global)
+        downtime_days = 0
+        if saddle_shares:
+            first_saddle = next(iter(saddle_shares))
+            supplier_df = transport_manager.get_supplier_log_dataframe(first_saddle, saddle_shares[first_saddle])
+            if not supplier_df.empty and 'Störung' in supplier_df.columns:
+                stoerung = supplier_df['Störung'].astype(str).str.strip().str.lower()
+                downtime_days = int((stoerung == 'ja').sum())
+        return {'China': {
+            'Anzahl Lieferungen': total,
+            'Anzahl Lieferungen mit Totalausfall': fail_total,
+            'Anzahl Lieferungen mit Mengenverlust': fail_qty,
+            'verspätete Lieferungen': fail_time,
+            'Perfekte Lieferungen in %': round(pct_perfect, 2),
+            'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': round(avg_delay, 2),
+            'Anzahl von Tagen eines Maschinenausfalls': downtime_days
+        }}
     
-    inbound_metrics = calculate_inbound_metrics()
+    inbound_metrics = calculate_inbound_metrics_from_table()
     inbound_df = pd.DataFrame(inbound_metrics).T
     # Formatierung: Ganze Zahlen für Zählungen, 2 Dezimalstellen für % und Durchschnitt
     for col in inbound_df.columns:
@@ -166,45 +169,60 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
     # 2. Source Cycle Time
     st.header("Source Cycle Time")
     
-    def calculate_source_cycle_time():
-        """Berechnet Source Cycle Time für alle Lieferanten"""
-        source_metrics = {}
-        
-        # Nur China (Deutschland und Spanien entfernt, da wir nur einen Lieferanten haben)
-        suppliers = ['China']
-        
-        for supplier in suppliers:
-            if supplier == 'China':
-                transport_manager = simulator.china_transport_manager
-                transport_status = transport_manager.transport_status
-                
-                lead_time = MasterData.SUPPLIERS[supplier]['lead_time']
-                delivery_times = []
-                
-                for (order_day, order_id), status in transport_status.items():
-                    if status.get('received', False) and status.get('available_day') is not None:
-                        actual_days = status['available_day'] - status['order_day']
-                        delivery_times.append(actual_days)
-                
-                if delivery_times:
-                    fastest = min(delivery_times)
-                    slowest = max(delivery_times)
-                    avg = sum(delivery_times) / len(delivery_times)
-                else:
-                    fastest = lead_time
-                    slowest = lead_time
-                    avg = lead_time
-                
-                source_metrics[supplier] = {
-                    'Vorlaufzeit in Tagen': lead_time,
-                    'Schnellste Lieferung in Tagen': fastest,
-                    'Langsamste Lieferung in Tagen': slowest,
-                    'Durchschnittliche Lieferzeit in Tagen': round(avg, 2)
-                }
-        
-        return source_metrics
+    def calculate_source_cycle_time_from_table():
+        """SCT aus der Inbound-Tabelle: Lieferzeit pro Zeile = Tatsächliche Ankunft − Abfahrt (in Tagen)."""
+        from datetime import datetime
+        transport_manager = simulator.china_transport_manager
+        saddle_shares = MasterData.calculate_saddle_shares()
+        df = transport_manager.get_inbound_log_dataframe(saddle_shares)
+        lead_time = MasterData.SUPPLIERS['China']['lead_time']
+        if df.empty:
+            return {'China': {
+                'Vorlaufzeit in Tagen (Soll)': lead_time,
+                'Schnellste Lieferung in Tagen': lead_time,
+                'Langsamste Lieferung in Tagen': lead_time,
+                'Durchschnittliche Lieferzeit in Tagen': float(lead_time)
+            }}
+        abfahrt_col = 'Abfahrt LKW 🇨🇳'
+        ankunft_col = 'Tatsächliche Ankunft LKW 🇩🇪'
+        shipment_mask = df[abfahrt_col].notna() & (df[abfahrt_col].astype(str).str.strip() != '')
+        shipments_df = df[shipment_mask]
+        if shipments_df.empty:
+            return {'China': {
+                'Vorlaufzeit in Tagen (Soll)': lead_time,
+                'Schnellste Lieferung in Tagen': lead_time,
+                'Langsamste Lieferung in Tagen': lead_time,
+                'Durchschnittliche Lieferzeit in Tagen': float(lead_time)
+            }}
+        fmt = MasterData.DATE_FORMAT
+        cycle_times = []
+        for _, row in shipments_df.iterrows():
+            try:
+                abfahrt = row.get(abfahrt_col, '')
+                ankunft = row.get(ankunft_col, '')
+                if abfahrt and ankunft:
+                    d_abfahrt = datetime.strptime(str(abfahrt).strip(), fmt).date()
+                    d_ankunft = datetime.strptime(str(ankunft).strip(), fmt).date()
+                    tage = (d_ankunft - d_abfahrt).days
+                    cycle_times.append(tage)
+            except (ValueError, TypeError):
+                pass
+        if cycle_times:
+            fastest = int(min(cycle_times))
+            slowest = int(max(cycle_times))
+            avg = sum(cycle_times) / len(cycle_times)
+        else:
+            fastest = lead_time
+            slowest = lead_time
+            avg = float(lead_time)
+        return {'China': {
+            'Vorlaufzeit in Tagen (Soll)': lead_time,
+            'Schnellste Lieferung in Tagen': fastest,
+            'Langsamste Lieferung in Tagen': slowest,
+            'Durchschnittliche Lieferzeit in Tagen': round(avg, 2)
+        }}
     
-    source_metrics = calculate_source_cycle_time()
+    source_metrics = calculate_source_cycle_time_from_table()
     source_df = pd.DataFrame(source_metrics).T
     # Formatierung: Ganze Zahlen für Tage, 2 Dezimalstellen für Durchschnitt
     for col in source_df.columns:
@@ -214,120 +232,5 @@ if st.session_state.results_df is not None and 'simulator' in st.session_state:
             source_df[col] = source_df[col].astype(int)
     st.dataframe(source_df, width='stretch')
     
-    st.divider()
-    
-    # 3. Produktionsmetriken
-    st.header("Produktionsmetriken")
-    
-    def calculate_production_metrics():
-        """Berechnet Produktionsmetriken"""
-        # Hole Produktionslogs
-        planner = simulator.production_planner
-        if not hasattr(planner, 'production_logs') or not planner.production_logs:
-            return {}
-        
-        production_logs = planner.production_logs
-        
-        # Berechne Gesamtmetriken
-        total_produced = 0.0
-        total_planned = 0.0
-        total_demand = 0.0
-        total_backlog_end = 0.0
-        days_with_production = 0
-        days_stopped_materials = 0
-        utilization_sum = 0.0
-        utilization_count = 0
-        
-        # OPTIMIERUNG: Nutze bereits berechnete Nachfrage aus Session State (nicht neu berechnen!)
-        daily_demands_actual = st.session_state.get('daily_demands_actual', {})
-        # Falls nicht vorhanden, verwende leeres Dict (verhindert Neuberechnung)
-        if not daily_demands_actual:
-            daily_demands_actual = {}
-        
-        for day in range(365):
-            day_total_produced = 0.0
-            day_total_planned = 0.0
-            day_total_demand = 0.0
-            day_utilization = 0.0
-            day_materials_complete = True
-            
-            # Summiere über alle Produkte
-            for product, logs in production_logs.items():
-                if logs and day < len(logs):
-                    log_entry = logs[day]
-                    day_total_produced += log_entry.get('tatsächliche PM', 0.0)
-                    day_total_planned += log_entry.get('geplante PM', 0.0)
-                    
-                    # Auslastung (nur wenn geplante PM > 0)
-                    if log_entry.get('geplante PM', 0) > 0:
-                        util = log_entry.get('Auslastung (%)', 0.0)
-                        if isinstance(util, (int, float)) and util > 0:
-                            day_utilization = max(day_utilization, util)
-                    
-                    # Materialien vollständig?
-                    if log_entry.get('Materialien vollständig?', 'Ja') != 'Ja':
-                        day_materials_complete = False
-            
-            # Nachfrage für diesen Tag
-            day_demand = daily_demands_actual.get(day, {})
-            day_total_demand = sum(day_demand.values()) if isinstance(day_demand, dict) else 0.0
-            
-            total_produced += day_total_produced
-            total_planned += day_total_planned
-            total_demand += day_total_demand
-            
-            if day_total_produced > 0:
-                days_with_production += 1
-            
-            if not day_materials_complete:
-                days_stopped_materials += 1
-            
-            if day_utilization > 0:
-                utilization_sum += day_utilization
-                utilization_count += 1
-        
-        # Backlog am Ende (letzter Tag)
-        for product, logs in production_logs.items():
-            if logs and len(logs) > 0:
-                last_log = logs[-1]
-                total_backlog_end += last_log.get('Backlog', 0.0)
-        
-        # Berechne Durchschnitte
-        avg_utilization = (utilization_sum / utilization_count) if utilization_count > 0 else 0.0
-        avg_daily_production = (total_produced / days_with_production) if days_with_production > 0 else 0.0
-        
-        # Service Level
-        service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
-        
-        # Planabweichung
-        plan_deviation_pct = ((total_produced - total_planned) / total_planned * 100) if total_planned > 0 else 0.0
-        
-        return {
-            'Gesamtproduktion': int(round(total_produced)),
-            'Geplante Produktion': int(round(total_planned)),
-            'Gesamtnachfrage': int(round(total_demand)),
-            'Service Level (%)': round(service_level, 2),
-            'Planabweichung (%)': round(plan_deviation_pct, 2),
-            'Durchschnittliche Auslastung (%)': round(avg_utilization, 2),
-            'Durchschnittliche Tagesproduktion': int(round(avg_daily_production)),
-            'Produktionstage': days_with_production,
-            'Tage mit Materialmangel': days_stopped_materials,
-            'Backlog am Jahresende': int(round(total_backlog_end))
-        }
-    
-    production_metrics = calculate_production_metrics()
-    if production_metrics:
-        # Erstelle DataFrame (eine Zeile)
-        production_df = pd.DataFrame([production_metrics])
-        # Formatierung: Ganze Zahlen für Zählungen, 2 Dezimalstellen für %
-        for col in production_df.columns:
-            if '%' in col or 'Auslastung' in col:
-                production_df[col] = production_df[col].round(2)
-            else:
-                production_df[col] = production_df[col].astype(int)
-        st.dataframe(production_df, width='stretch', hide_index=True)
-    else:
-        st.info("Keine Produktionsmetriken verfügbar.")
-
 else:
     st.info("🔄 Die Simulation wird automatisch gestartet...")
