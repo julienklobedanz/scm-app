@@ -127,8 +127,8 @@ class ChinaTransportManager:
         production_end_day = self._add_workdays(production_start_day, 5, exclude_start=True, use_chinese_holidays=True)
         
         # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden
-        # PERFORMANCE: Prüfe nur wenn production_end_day im gültigen Bereich liegt
-        if 0 <= production_end_day < 365:
+        # Vorjahr: production_end_day kann negativ sein (China arbeitet schon im Vorjahr)
+        if -366 <= production_end_day < 365:
             # Prüfe ob production_end_day während eines Ausfalls liegt
             if self._is_day_during_breakdown(production_end_day):
                 # Verschiebe production_start_day weiter nach hinten, bis production_end_day nach dem Ausfall liegt
@@ -480,17 +480,18 @@ class ChinaTransportManager:
     def _find_first_workday_after_breakdowns(self, day: int, use_chinese_holidays: bool = True) -> int:
         """
         Findet den ersten Arbeitstag nach ALLEN aktiven SupplierBreakdownScenarios für einen Tag.
-        
-        PERFORMANCE: Prüft nur einmal alle aktiven Breakdowns und findet dann den nächsten freien Tag.
+        Unterstützt Vorjahr: day kann negativ sein (z. B. -365 … -1 für Vorjahr), da China schon im Vorjahr arbeitet.
         
         Args:
-            day: Tag (0-basiert), für den geprüft werden soll
+            day: Tag (0-basiert, 0 = 1.1. Planungsjahr; negativ = Vorjahr)
             use_chinese_holidays: Wenn True, verwendet chinesische Feiertage
             
         Returns:
             Erster Arbeitstag nach allen aktiven Ausfällen (kann auch day selbst sein, wenn kein Ausfall aktiv)
         """
-        if not self.scenario_manager or not (0 <= day < 365):
+        if not self.scenario_manager:
+            return day
+        if day < -366 or day >= 365:
             return day
         
         # PERFORMANCE: Hole alle aktiven Breakdowns einmalig
@@ -511,16 +512,17 @@ class ChinaTransportManager:
     def _is_day_during_breakdown(self, day: int) -> bool:
         """
         Prüft ob ein Tag während eines aktiven SupplierBreakdownScenario liegt.
-        
-        PERFORMANCE: Prüft nur einmal alle aktiven Breakdowns.
+        Unterstützt Vorjahr: day kann negativ sein (z. B. -365 … -1 für Maschinenausfall im Vorjahr).
         
         Args:
-            day: Tag (0-basiert)
+            day: Tag (0-basiert, negativ = Vorjahr)
             
         Returns:
             True wenn Tag während eines aktiven Ausfalls liegt
         """
-        if not self.scenario_manager or not (0 <= day < 365):
+        if not self.scenario_manager:
+            return False
+        if day < -366 or day >= 365:
             return False
         
         breakdowns = self.scenario_manager.get_supplier_breakdown_scenarios(day)
@@ -912,10 +914,9 @@ class ChinaTransportManager:
                     
                     production_end_day = self._add_workdays(production_start_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
                     
-                    # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden
-                    if 0 <= production_end_day < 365:
+                    # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden (Vorjahr: production_end_day kann negativ sein)
+                    if -366 <= production_end_day < 365:
                         if self._is_day_during_breakdown(production_end_day):
-                            # Verschiebe production_start_day weiter nach hinten, bis production_end_day nach dem Ausfall liegt
                             max_iterations = 365
                             iteration = 0
                             while self._is_day_during_breakdown(production_end_day) and iteration < max_iterations:
@@ -997,10 +998,9 @@ class ChinaTransportManager:
                 
                 production_end_day = self._add_workdays(production_start_day, production_time_days, exclude_start=True, use_chinese_holidays=True)
                 
-                # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden
-                if 0 <= production_end_day < 365:
+                # KRITISCH: Prüfe auch production_end_day - wenn es während des Ausfalls liegt, muss production_start_day verschoben werden (Vorjahr: production_end_day kann negativ sein)
+                if -366 <= production_end_day < 365:
                     if self._is_day_during_breakdown(production_end_day):
-                        # Verschiebe production_start_day weiter nach hinten, bis production_end_day nach dem Ausfall liegt
                         max_iterations = 365
                         iteration = 0
                         while self._is_day_during_breakdown(production_end_day) and iteration < max_iterations:
@@ -1031,8 +1031,8 @@ class ChinaTransportManager:
             for day_idx in range(total_days):
                 curr_date = start_date + timedelta(days=day_idx)
                 order_day = (curr_date - date(self.workday_calculator.year, 1, 1)).days
-                
-                if 0 <= order_day < 365:
+                # Vorjahr: order_day kann negativ sein (-365 … -1), China arbeitet schon im Vorjahr
+                if -366 <= order_day < 365:
                     breakdowns = self.scenario_manager.get_supplier_breakdown_scenarios(order_day)
                     if breakdowns:
                         # Zeige Störung an (Bestellungen werden verschoben, nicht blockiert)
