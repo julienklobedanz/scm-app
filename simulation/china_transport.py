@@ -738,7 +738,7 @@ class ChinaTransportManager:
                         affected_products = getattr(s, "affected_products", None)
                         # Konvertiere Liste zu Tuple für Hashbarkeit, sortiere für Konsistenz
                         affected_products_tuple = tuple(sorted(affected_products)) if affected_products else None
-                        extra = (getattr(s, "demand_increase_factor", None), affected_products_tuple)
+                        extra = (getattr(s, "additional_demand_total", None), getattr(s, "workdays_in_period", None), affected_products_tuple)
                     elif isinstance(s, WarehouseDamageScenario):
                         extra = (
                             getattr(s, "stock_loss_percentage", None),
@@ -1213,7 +1213,7 @@ class ChinaTransportManager:
                         affected_products = getattr(s, "affected_products", None)
                         # Konvertiere Liste zu Tuple für Hashbarkeit, sortiere für Konsistenz
                         affected_products_tuple = tuple(sorted(affected_products)) if affected_products else None
-                        extra = (getattr(s, "demand_increase_factor", None), affected_products_tuple)
+                        extra = (getattr(s, "additional_demand_total", None), getattr(s, "workdays_in_period", None), affected_products_tuple)
                     elif isinstance(s, WarehouseDamageScenario):
                         extra = (
                             getattr(s, "stock_loss_percentage", None),

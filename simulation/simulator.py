@@ -263,20 +263,26 @@ class Simulator:
                     base_daily_floats = self.demand_calculator._base_daily_float_cache[month]
                     
                     for scenario in marketing_scenarios:
-                        factor = scenario.demand_increase_factor
-                        # Bestimme betroffene Produkte: Wenn None, dann alle Produkte (Rückwärtskompatibilität)
+                        workdays = max(1, getattr(scenario, 'workdays_in_period', 1))
+                        total_additional = getattr(scenario, 'additional_demand_total', 0.0) / workdays
                         affected_products = scenario.affected_products if scenario.affected_products is not None else list(self.master_data.BOM.keys())
-                        
-                        for product in affected_products:
-                            if product not in self.master_data.BOM:
-                                continue  # Überspringe ungültige Produkte
-                            base_float = base_daily_floats.get(product, 0.0)
-                            # Marketing-Add-on = zusätzliche Nachfrage durch Marketing (auf Float-Basis)
-                            # Add-on = Base * (Factor - 1.0), z.B. bei Factor 1.5: Add-on = Base * 0.5
-                            add_on = base_float * (factor - 1.0)
-                            if product not in marketing_add_ons:
-                                marketing_add_ons[product] = 0.0
-                            marketing_add_ons[product] += add_on
+                        affected_products = [p for p in affected_products if p in self.master_data.BOM]
+                        if not affected_products or total_additional <= 0:
+                            continue
+                        total_base = sum(base_daily_floats.get(p, 0.0) for p in affected_products)
+                        if total_base > 0:
+                            for product in affected_products:
+                                share = base_daily_floats.get(product, 0.0) / total_base
+                                add_on = total_additional * share
+                                if product not in marketing_add_ons:
+                                    marketing_add_ons[product] = 0.0
+                                marketing_add_ons[product] += add_on
+                        else:
+                            add_on_each = total_additional / len(affected_products)
+                            for product in affected_products:
+                                if product not in marketing_add_ons:
+                                    marketing_add_ons[product] = 0.0
+                                marketing_add_ons[product] += add_on_each
             
             # Prüfe, ob es der letzte Arbeitstag des Jahres ist (für Rest-Aufsummierung)
             # PERFORMANCE: Cache für letzten Arbeitstag (wird nur einmal berechnet)
@@ -385,18 +391,26 @@ class Simulator:
                         base_daily_floats = self.demand_calculator._base_daily_float_cache[month]
                         
                         for scenario in future_marketing_scenarios:
-                            factor = scenario.demand_increase_factor
-                            # Bestimme betroffene Produkte: Wenn None, dann alle Produkte (Rückwärtskompatibilität)
+                            workdays = max(1, getattr(scenario, 'workdays_in_period', 1))
+                            total_additional = getattr(scenario, 'additional_demand_total', 0.0) / workdays
                             affected_products = scenario.affected_products if scenario.affected_products is not None else list(self.master_data.BOM.keys())
-                            
-                            for product in affected_products:
-                                if product not in self.master_data.BOM:
-                                    continue  # Überspringe ungültige Produkte
-                                base_float = base_daily_floats.get(product, 0.0)
-                                add_on = base_float * (factor - 1.0)
-                                if product not in future_marketing_add_ons:
-                                    future_marketing_add_ons[product] = 0.0
-                                future_marketing_add_ons[product] += add_on
+                            affected_products = [p for p in affected_products if p in self.master_data.BOM]
+                            if not affected_products or total_additional <= 0:
+                                continue
+                            total_base = sum(base_daily_floats.get(p, 0.0) for p in affected_products)
+                            if total_base > 0:
+                                for product in affected_products:
+                                    share = base_daily_floats.get(product, 0.0) / total_base
+                                    add_on = total_additional * share
+                                    if product not in future_marketing_add_ons:
+                                        future_marketing_add_ons[product] = 0.0
+                                    future_marketing_add_ons[product] += add_on
+                            else:
+                                add_on_each = total_additional / len(affected_products)
+                                for product in affected_products:
+                                    if product not in future_marketing_add_ons:
+                                        future_marketing_add_ons[product] = 0.0
+                                    future_marketing_add_ons[product] += add_on_each
                     
                     # 2. WICHTIG: Verwende Nachfrage aus Volumenplanung (Basis), falls verfügbar
                     # Die Volumenplanung ist die Basis, der Simulator verarbeitet diese Daten weiter

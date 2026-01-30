@@ -120,9 +120,14 @@ class ProductionPlanner:
                             has_future_workdays = True
                             break
                     is_last_workday_of_year = not has_future_workdays
-                
+                is_last_workday_of_marketing = False
+                if scenario_manager and self.workday_calculator:
+                    is_last_workday_of_marketing = scenario_manager.get_is_last_workday_of_marketing_period(
+                        day, self.workday_calculator
+                    )
                 product_demands = self.demand_calculator.calculate_daily_demand_per_product_dict(
-                    day, marketing_add_ons, is_last_workday_of_year
+                    day, marketing_add_ons, is_last_workday_of_year,
+                    is_last_workday_of_marketing_period=is_last_workday_of_marketing
                 )
             else:
                 # Fallback für Unit-Tests ohne DemandCalculator

@@ -90,7 +90,7 @@ def calculate_volume_planning_demand():
                 affected_products = getattr(s, "affected_products", None)
                 # Konvertiere Liste zu Tuple für Hashbarkeit, sortiere für Konsistenz
                 affected_products_tuple = tuple(sorted(affected_products)) if affected_products else None
-                extra = (getattr(s, "demand_increase_factor", None), affected_products_tuple)
+                extra = (getattr(s, "additional_demand_total", None), getattr(s, "workdays_in_period", None), affected_products_tuple)
             elif isinstance(s, WarehouseDamageScenario):
                 extra = (
                     getattr(s, "stock_loss_percentage", None),
@@ -165,27 +165,41 @@ def calculate_volume_planning_demand():
                 base_daily_floats = demand_calculator_actual._calculate_monthly_base_daily_float(month)
                 
                 for scenario in marketing_scenarios:
-                    factor = scenario.demand_increase_factor
-                    # Bestimme betroffene Produkte: Wenn None, dann alle Produkte (Rückwärtskompatibilität)
+                    workdays = max(1, getattr(scenario, "workdays_in_period", 1))
+                    total_additional = getattr(scenario, "additional_demand_total", 0.0) / workdays
                     affected_products = scenario.affected_products if scenario.affected_products is not None else list(MasterData.BOM.keys())
-                    
-                    for product in affected_products:
-                        if product not in MasterData.BOM:
-                            continue  # Überspringe ungültige Produkte
-                        base_float = base_daily_floats.get(product, 0.0)
-                        add_on = base_float * (factor - 1.0)
-                        if product not in marketing_add_ons:
-                            marketing_add_ons[product] = 0.0
-                        marketing_add_ons[product] += add_on
+                    affected_products = [p for p in affected_products if p in MasterData.BOM]
+                    if not affected_products or total_additional <= 0:
+                        continue
+                    total_base = sum(base_daily_floats.get(p, 0.0) for p in affected_products)
+                    if total_base > 0:
+                        for product in affected_products:
+                            share = base_daily_floats.get(product, 0.0) / total_base
+                            add_on = total_additional * share
+                            if product not in marketing_add_ons:
+                                marketing_add_ons[product] = 0.0
+                            marketing_add_ons[product] += add_on
+                    else:
+                        add_on_each = total_additional / len(affected_products)
+                        for product in affected_products:
+                            if product not in marketing_add_ons:
+                                marketing_add_ons[product] = 0.0
+                            marketing_add_ons[product] += add_on_each
             
+            # Letzter Arbeitstag eines Marketing-Zeitraums (für Marketing-Carry-Over)
+            is_last_workday_of_marketing = scenario_manager.get_is_last_workday_of_marketing_period(
+                day, workday_calc
+            )
             # Berechne Nachfrage für alle Produkte gleichzeitig (wichtig für korrekte Carry-Over-Logik)
             # Geplante Nachfrage (ohne Marketing)
             planned_demands = demand_calculator_planned.calculate_daily_demand_per_product_dict(
-                day, {}, is_last_workday_of_year=is_last_workday
+                day, {}, is_last_workday_of_year=is_last_workday,
+                is_last_workday_of_marketing_period=False
             )
-            # Tatsächliche Nachfrage (mit Marketing)
+            # Tatsächliche Nachfrage (mit Marketing, inkl. Marketing-Carry-Over bei krummen Werten)
             actual_demands = demand_calculator_actual.calculate_daily_demand_per_product_dict(
-                day, marketing_add_ons, is_last_workday_of_year=is_last_workday
+                day, marketing_add_ons, is_last_workday_of_year=is_last_workday,
+                is_last_workday_of_marketing_period=is_last_workday_of_marketing
             )
             
             for product in MasterData.BOM.keys():

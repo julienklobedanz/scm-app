@@ -19,8 +19,9 @@ class Scenario:
 
 @dataclass
 class MarketingCampaignScenario(Scenario):
-    """Marketingaktion: Erhöht die Nachfrage für einen Zeitraum"""
-    demand_increase_factor: float = 1.5  # 50% mehr Nachfrage
+    """Marketingaktion: Erhöht die Nachfrage um einen absoluten Gesamtbedarf für den Zeitraum (wird auf Arbeitstage verteilt)"""
+    additional_demand_total: float = 0.0  # Zusätzlicher Bedarf gesamt für den Zeitraum (Stück)
+    workdays_in_period: int = 1  # Anzahl Arbeitstage im Zeitraum (für Verteilung: pro Tag = total / workdays_in_period)
     affected_products: Optional[List[str]] = None  # Liste von Produktnamen, None = alle Produkte (Rückwärtskompatibilität)
 
 
@@ -132,4 +133,22 @@ class ScenarioManager:
             s for s in self.get_active_scenarios(day)
             if isinstance(s, CargoLossScenario)
         ]
+
+    def get_is_last_workday_of_marketing_period(self, day: int, workday_calculator) -> bool:
+        """
+        Prüft, ob day der letzte Arbeitstag mindestens eines aktiven Marketing-Zeitraums ist.
+        Wird für Carry-Over des Marketing-Zusatzbedarfs benötigt (Rest am letzten Kampagnentag aufrunden).
+        """
+        for s in self.scenarios:
+            if not isinstance(s, MarketingCampaignScenario) or not s.active:
+                continue
+            if day < s.start_day or day > s.end_day:
+                continue
+            # Letzter Arbeitstag im Zeitraum [start_day, end_day]
+            last_workday = s.end_day
+            while last_workday >= s.start_day and not workday_calculator.is_workday(last_workday):
+                last_workday -= 1
+            if last_workday >= s.start_day and day == last_workday:
+                return True
+        return False
 

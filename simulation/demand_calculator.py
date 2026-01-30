@@ -17,10 +17,13 @@ class DemandCalculator:
         self.master_data = MasterData
         self.workday_calculator = workday_calculator
         
-        # Remainder-Speicher pro Produkt (für Carry-Over-Logik)
+        # Remainder-Speicher pro Produkt (für Carry-Over-Logik Basis-Nachfrage)
         self.product_remainders: Dict[str, float] = {}
+        # Remainder-Speicher pro Produkt für Marketing-Zusatzbedarf (Carry-Over bei krummen Werten)
+        self.marketing_remainders: Dict[str, float] = {}
         for product in self.master_data.BOM.keys():
             self.product_remainders[product] = 0.0
+            self.marketing_remainders[product] = 0.0
         
         # Monatliche Base_Daily_Float pro Produkt (wird bei Monatswechsel neu berechnet)
         self.monthly_base_daily_float: Dict[int, Dict[str, float]] = {}
@@ -77,22 +80,21 @@ class DemandCalculator:
         day: int, 
         product: str,
         marketing_add_on: float = 0.0,
-        is_last_workday_of_year: bool = False
+        is_last_workday_of_year: bool = False,
+        is_last_workday_of_marketing_period: bool = False
     ) -> int:
         """
         Berechnet tägliche Nachfrage für ein spezifisches Produkt mit Carry-Over-Logik
         
-        Berechnungslogik:
-        - Wenn Wochenende oder Feiertag: 0 (Rest bleibt unverändert vom letzten Arbeitstag)
-        - Sonst: ABRUNDEN((Base * Share / AT) + Rest; 0) + Marketing-Add-on
-        - Rest für nächsten Tag: (Base + Rest) - ABRUNDEN(Base + Rest; 0)
-        - Wenn vorheriger Tag 0 war: Rest vom Vortag übernommen (nicht neu berechnet)
+        Basis: ABRUNDEN((Base + Rest); 0), Rest für nächsten Tag. Marketing: eigener Carry-Over,
+        sodass krumme Werte (z. B. 100/7 Tage) über den Zeitraum exakt ankommen.
         
         Args:
             day: Tag (0-basiert)
             product: Produktname
-            marketing_add_on: Marketing-Add-on (Float)
-            is_last_workday_of_year: Wenn True, werden Reste am Jahresende aufsummiert
+            marketing_add_on: Marketing-Add-on (Float, kann Dezimal sein)
+            is_last_workday_of_year: Wenn True, werden Basis-Reste am Jahresende aufsummiert
+            is_last_workday_of_marketing_period: Wenn True, wird Marketing-Rest am Kampagnenende aufsummiert
         
         Returns:
             Ganzzahlige Nachfrage (int)
@@ -138,28 +140,29 @@ class DemandCalculator:
         else:
             rounded_base = math.floor(base_with_remainder)  # Round down to nearest integer
         
-        # 3. Marketing-Add-on addieren (NACH der Rundung)
-        # Marketing-Add-on wird als Float addiert
-        daily_target_float = rounded_base + marketing_add_on
+        # 3. Marketing-Carry-Over: Rest vom Marketing-Zusatzbedarf (krumme Werte) weiterführen
+        effective_marketing = marketing_add_on + self.marketing_remainders.get(product, 0.0)
+        if is_last_workday_of_marketing_period:
+            marketing_int = int(round(effective_marketing))
+            self.marketing_remainders[product] = 0.0
+        else:
+            marketing_int = math.floor(effective_marketing)
+            self.marketing_remainders[product] = round(effective_marketing - marketing_int, 12)
         
-        # 4. Marketing-Add-on addieren (NACH der Rundung)
-        # Marketing-Add-on wird als Float addiert
-        daily_target_float = rounded_base + marketing_add_on
+        # 4. Tagesziel = Basis (gerundet) + Marketing (ganzzahlig)
+        daily_target_float = float(rounded_base + marketing_int)
         
-        # 5. Am letzten Arbeitstag des Jahres: Reste aufsummieren
+        # 5. Am letzten Arbeitstag des Jahres: Basis-Reste aufsummieren
         # WICHTIG: Am letzten Arbeitstag müssen ALLE Reste aufsummiert werden
         # Am letzten Arbeitstag wird der Rest nicht verworfen, sondern addiert
         if is_last_workday_of_year:
             # Addiere den Rest vom Base+Rest (wird normalerweise verworfen)
-            # Dies stellt sicher, dass alle Reste am Jahresende aufsummiert werden
             remainder_to_add = base_with_remainder - rounded_base
-            daily_target_float = rounded_base + remainder_to_add + marketing_add_on
-            # KRITISCH: Am letzten Arbeitstag RUNDEN statt ABRUNDEN, um Reste nicht zu verlieren
-            # Die Excel-Formel zeigt: Reste werden aufsummiert, dann gerundet (nicht abgerundet)
-            daily_target_int = round(daily_target_float)
+            daily_target_float = rounded_base + remainder_to_add + marketing_int
+            daily_target_int = int(round(daily_target_float))
         else:
-            # Normale Tage: Abrunden (ABRUNDEN in Excel)
-            daily_target_int = math.floor(daily_target_float)
+            # Tagesziel ist bereits ganzzahlig (rounded_base + marketing_int)
+            daily_target_int = int(daily_target_float)
         
         # 6. Berechne neuen Rest (nur aus Base + Rest, Marketing-Add-on wird nicht in Rest übernommen)
         # (Base + Rest) - ABRUNDEN(Base + Rest; 0)
@@ -207,7 +210,8 @@ class DemandCalculator:
         self, 
         day: int,
         marketing_add_ons: Dict[str, float] = None,
-        is_last_workday_of_year: bool = False
+        is_last_workday_of_year: bool = False,
+        is_last_workday_of_marketing_period: bool = False
     ) -> Dict[str, int]:
         """
         Berechnet tägliche Nachfrage für alle Produkte als Dictionary
@@ -215,7 +219,8 @@ class DemandCalculator:
         Args:
             day: Tag (0-basiert)
             marketing_add_ons: Optional dict mit Marketing-Add-ons pro Produkt
-            is_last_workday_of_year: Wenn True, werden Reste am Jahresende aufsummiert
+            is_last_workday_of_year: Wenn True, werden Basis-Reste am Jahresende aufsummiert
+            is_last_workday_of_marketing_period: Wenn True, wird Marketing-Rest am Kampagnenende aufsummiert
         
         Returns:
             Dict mit Produktname -> Ganzzahlige Nachfrage
@@ -227,7 +232,7 @@ class DemandCalculator:
         for product in self.master_data.BOM.keys():
             add_on = marketing_add_ons.get(product, 0.0)
             product_demands[product] = self.calculate_daily_demand_per_product(
-                day, product, add_on, is_last_workday_of_year
+                day, product, add_on, is_last_workday_of_year, is_last_workday_of_marketing_period
             )
         
         return product_demands

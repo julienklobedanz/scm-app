@@ -150,7 +150,21 @@ def render_scenario_sidebar(key_suffix=""):
             st.subheader("Marketingaktion")
             start_date = st.date_input("Start-Datum", value=date(planning_year, 2, 19), min_value=min_date, max_value=max_date, key=f"marketing_start_global{key_suffix}")
             end_date = st.date_input("End-Datum", value=date(planning_year, 3, 11), min_value=min_date, max_value=max_date, key=f"marketing_end_global{key_suffix}")
-            demand_factor = st.slider("Nachfrage-Erhöhung (Faktor)", 1.0, 3.0, 1.5, 0.1, key=f"marketing_factor_global{key_suffix}")
+            # Anzahl Arbeitstage im gewählten Zeitraum (für Info und Verteilung)
+            start_of_year = date(planning_year, 1, 1)
+            _start_day = (start_date - start_of_year).days if start_date.year == planning_year else (start_date - date(2026, 1, 1)).days + (date(2026, 1, 1) - start_of_year).days
+            _end_day = (end_date - start_of_year).days if end_date.year == planning_year else (end_date - date(2026, 1, 1)).days + (date(2026, 1, 1) - start_of_year).days
+            workdays_in_range = sum(1 for d in range(_start_day, _end_day + 1) if workday_calc.is_workday(d))
+            if workdays_in_range > 0:
+                st.caption(f"Im gewählten Zeitraum: **{workdays_in_range}** Arbeitstage. Der Gesamtbedarf wird gleichmäßig auf diese Tage verteilt.")
+            additional_demand_total = st.number_input(
+                "Zusätzlicher Bedarf gesamt (Zeitraum, Stück)",
+                min_value=0,
+                value=5000,
+                step=500,
+                key=f"marketing_additional_global{key_suffix}",
+                help="Gesamtmenge an zusätzlicher Nachfrage für den gesamten ausgewählten Zeitraum. Wird automatisch auf die Arbeitstage im Zeitraum verteilt und auf die betroffenen Produkte anteilig."
+            )
             
             # Produktauswahl: Multi-Select für betroffene Produkte
             all_products = list(MasterData.BOM.keys())
@@ -182,6 +196,9 @@ def render_scenario_sidebar(key_suffix=""):
                 else:
                     end_day = (end_date - start_of_year).days
                 
+                workdays_in_period = sum(1 for d in range(start_day, end_day + 1) if workday_calc.is_workday(d))
+                workdays_in_period = max(1, workdays_in_period)
+                
                 # Wenn alle Produkte ausgewählt oder keine Auswahl, dann None (alle Produkte)
                 affected_products = None if (not selected_products or len(selected_products) == len(all_products)) else selected_products
                 
@@ -198,7 +215,8 @@ def render_scenario_sidebar(key_suffix=""):
                     name=name,
                     start_day=start_day,
                     end_day=end_day,
-                    demand_increase_factor=demand_factor,
+                    additional_demand_total=float(additional_demand_total),
+                    workdays_in_period=workdays_in_period,
                     affected_products=affected_products
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
