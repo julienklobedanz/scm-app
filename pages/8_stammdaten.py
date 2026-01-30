@@ -354,47 +354,100 @@ with tab2:
     
     # Verkaufsanteile (editierbar)
     st.subheader("Verkaufsanteile pro Produkt")
-    st.write("**Verkaufsanteile in Prozent (Summe sollte 100% ergeben):**")
+    st.write("**Verkaufsanteile in Prozent (Summe muss exakt 100% ergeben):**")
     
-    sales_data = []
-    for product in sorted(st.session_state.editable_product_sales_shares.keys()):
-        share = st.session_state.editable_product_sales_shares[product]
-        sales_data.append({
-            'Produkt': product,
-            'Verkaufsanteil (%)': share * 100
-        })
-    sales_df = pd.DataFrame(sales_data)
+    # Berechne aktuelle Summe für Validierung
+    current_total = sum(st.session_state.editable_product_sales_shares.values()) * 100
     
-    edited_sales = st.data_editor(
-        sales_df,
-        column_config={
-            "Produkt": st.column_config.TextColumn("Produkt", disabled=True),
-            "Verkaufsanteil (%)": st.column_config.NumberColumn("Verkaufsanteil (%)", min_value=0.0, max_value=100.0, step=0.1, format="%.1f")
-        },
-        width='stretch',
-        hide_index=True,
-        key="sales_editor"
+    # Warnung wenn Summe nicht 100%
+    if abs(current_total - 100.0) >= 0.01:
+        st.error(f"⚠️ **ACHTUNG:** Die Summe der Verkaufsanteile beträgt aktuell {current_total:.1f}%. Berechnungen können erst erfolgen, wenn die Summe exakt 100% beträgt!")
+        st.info("💡 **Hinweis:** Bitte passen Sie die Werte unten an, bis die Summe genau 100% ergibt. Sie können auch die automatische Normalisierung verwenden.")
+    
+    # Editierbare Parameter mit st.number_input() (wie Planungs-Parameter)
+    sales_changed = False
+    sales_values = {}
+    
+    # Erstelle zwei Spalten für bessere Übersicht
+    col1, col2 = st.columns(2)
+    
+    products = sorted(st.session_state.editable_product_sales_shares.keys())
+    mid_point = len(products) // 2
+    
+    with col1:
+        for product in products[:mid_point]:
+            current_share = st.session_state.editable_product_sales_shares[product]
+            new_share = st.number_input(
+                product,
+                min_value=0.0,
+                max_value=100.0,
+                value=float(current_share * 100),
+                step=0.1,
+                format="%.1f",
+                key=f"sales_{product}"
+            )
+            sales_values[product] = new_share
+    
+    with col2:
+        for product in products[mid_point:]:
+            current_share = st.session_state.editable_product_sales_shares[product]
+            new_share = st.number_input(
+                product,
+                min_value=0.0,
+                max_value=100.0,
+                value=float(current_share * 100),
+                step=0.1,
+                format="%.1f",
+                key=f"sales_{product}"
+            )
+            sales_values[product] = new_share
+    
+    # Berechne neue Summe
+    new_total = sum(sales_values.values())
+    
+    # Zeige aktuelle Summe
+    st.markdown(f"**Aktuelle Summe: {new_total:.1f}%**")
+    
+    # Prüfe ob sich Werte geändert haben
+    values_changed = any(
+        abs(sales_values[p] - st.session_state.editable_product_sales_shares[p] * 100) >= 0.01
+        for p in products
     )
     
-    # Speichere Änderungen und normalisiere auf Dezimalwerte
-    sales_changed = False
-    if not edited_sales.equals(sales_df):
-        total = edited_sales['Verkaufsanteil (%)'].sum()
-        if total > 0:
-            # Normalisiere auf 1.0 (100%)
-            for _, row in edited_sales.iterrows():
-                product = row['Produkt']
-                percentage = row['Verkaufsanteil (%)']
+    if values_changed:
+        # Validierung: Summe muss genau 100% sein
+        if abs(new_total - 100.0) < 0.01:  # Toleranz von 0.01%
+            # Summe ist genau 100% - speichere Änderungen
+            for product, percentage in sales_values.items():
                 st.session_state.editable_product_sales_shares[product] = percentage / 100.0
             
             # KRITISCH: Synchronisiere PRODUCT_SALES_SHARES mit MasterData
             for product, share in st.session_state.editable_product_sales_shares.items():
                 MasterData.PRODUCT_SALES_SHARES[product] = share
             
-            st.success(f"✅ Verkaufsanteile aktualisiert! (Gesamt: {total:.1f}%)")
+            st.success(f"✅ Verkaufsanteile aktualisiert! (Gesamt: {new_total:.1f}%)")
             sales_changed = True
+        elif new_total > 0:
+            # Summe ist nicht 100%, aber > 0
+            diff = abs(new_total - 100.0)
+            st.error(f"❌ **Summe beträgt {new_total:.1f}% (Abweichung: {diff:.1f}%). Die Summe muss exakt 100% ergeben, damit Berechnungen erfolgen können!**")
+            
+            # Option zur automatischen Normalisierung
+            if st.button("🔧 Automatisch auf 100% normalisieren", key="normalize_sales"):
+                # Normalisiere auf 100%
+                for product, percentage in sales_values.items():
+                    normalized = (percentage / new_total) * 100.0
+                    st.session_state.editable_product_sales_shares[product] = normalized / 100.0
+                
+                # KRITISCH: Synchronisiere PRODUCT_SALES_SHARES mit MasterData
+                for product, share in st.session_state.editable_product_sales_shares.items():
+                    MasterData.PRODUCT_SALES_SHARES[product] = share
+                
+                st.success("✅ Verkaufsanteile automatisch normalisiert!")
+                sales_changed = True
+                st.rerun()
         else:
-            st.error("⚠️ Summe der Verkaufsanteile muss größer als 0 sein!")
+            st.error("❌ **Summe der Verkaufsanteile muss größer als 0 sein!**")
     
     if sales_changed:
         # Cache-Invalidierung bei Parameteränderungen
@@ -402,7 +455,7 @@ with tab2:
     
     # Saisonalität (editierbar)
     st.subheader("Saisonaler Produktionsverlauf")
-    st.write("**Produktionsanteil pro Monat in Prozent (Summe sollte 100% ergeben):**")
+    st.write("**Produktionsanteil pro Monat in Prozent (Summe muss exakt 100% ergeben):**")
     
     month_names = {
         1: "Januar", 2: "Februar", 3: "März", 4: "April",
@@ -410,49 +463,114 @@ with tab2:
         9: "September", 10: "Oktober", 11: "November", 12: "Dezember"
     }
     
-    seasonality_data = []
-    for month in sorted(st.session_state.editable_seasonality.keys()):
-        factor = st.session_state.editable_seasonality[month]
-        seasonality_data.append({
-            'Monat': month_names[month],
-            'Produktionsanteil (%)': factor * 100,
-            'Tage': MasterData.DAYS_PER_MONTH[month]
-        })
-    seasonality_df = pd.DataFrame(seasonality_data)
+    # Berechne aktuelle Summe für Validierung
+    current_total = sum(st.session_state.editable_seasonality.values()) * 100
     
-    edited_seasonality = st.data_editor(
-        seasonality_df,
-        column_config={
-            "Monat": st.column_config.TextColumn("Monat", disabled=True),
-            "Produktionsanteil (%)": st.column_config.NumberColumn("Produktionsanteil (%)", min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
-            "Tage": st.column_config.NumberColumn("Tage", disabled=True)
-        },
-        width='stretch',
-        hide_index=True,
-        key="seasonality_editor"
+    # Warnung wenn Summe nicht 100%
+    if abs(current_total - 100.0) >= 0.01:
+        st.error(f"⚠️ **ACHTUNG:** Die Summe der Produktionsanteile beträgt aktuell {current_total:.1f}%. Berechnungen können erst erfolgen, wenn die Summe exakt 100% beträgt!")
+        st.info("💡 **Hinweis:** Bitte passen Sie die Werte unten an, bis die Summe genau 100% ergibt. Sie können auch die automatische Normalisierung verwenden.")
+    
+    # Editierbare Parameter mit st.number_input() (wie Planungs-Parameter)
+    seasonality_changed = False
+    seasonality_values = {}
+    
+    # Erstelle drei Spalten für bessere Übersicht (4 Monate pro Spalte)
+    col1, col2, col3 = st.columns(3)
+    
+    months = sorted(st.session_state.editable_seasonality.keys())
+    
+    with col1:
+        for month in months[:4]:
+            month_name = month_names[month]
+            current_factor = st.session_state.editable_seasonality[month]
+            new_factor = st.number_input(
+                month_name,
+                min_value=0.0,
+                max_value=100.0,
+                value=float(current_factor * 100),
+                step=0.1,
+                format="%.1f",
+                key=f"seasonality_{month}"
+            )
+            seasonality_values[month] = new_factor
+    
+    with col2:
+        for month in months[4:8]:
+            month_name = month_names[month]
+            current_factor = st.session_state.editable_seasonality[month]
+            new_factor = st.number_input(
+                month_name,
+                min_value=0.0,
+                max_value=100.0,
+                value=float(current_factor * 100),
+                step=0.1,
+                format="%.1f",
+                key=f"seasonality_{month}"
+            )
+            seasonality_values[month] = new_factor
+    
+    with col3:
+        for month in months[8:]:
+            month_name = month_names[month]
+            current_factor = st.session_state.editable_seasonality[month]
+            new_factor = st.number_input(
+                month_name,
+                min_value=0.0,
+                max_value=100.0,
+                value=float(current_factor * 100),
+                step=0.1,
+                format="%.1f",
+                key=f"seasonality_{month}"
+            )
+            seasonality_values[month] = new_factor
+    
+    # Berechne neue Summe
+    new_total = sum(seasonality_values.values())
+    
+    # Zeige aktuelle Summe
+    st.markdown(f"**Aktuelle Summe: {new_total:.1f}%**")
+    
+    # Prüfe ob sich Werte geändert haben
+    values_changed = any(
+        abs(seasonality_values[m] - st.session_state.editable_seasonality[m] * 100) >= 0.01
+        for m in months
     )
     
-    # Speichere Änderungen und normalisiere auf Dezimalwerte
-    seasonality_changed = False
-    if not edited_seasonality.equals(seasonality_df):
-        total = edited_seasonality['Produktionsanteil (%)'].sum()
-        if total > 0:
-            # Normalisiere auf 1.0 (100%)
-            month_name_to_num = {v: k for k, v in month_names.items()}
-            for _, row in edited_seasonality.iterrows():
-                month_name = row['Monat']
-                month_num = month_name_to_num[month_name]
-                percentage = row['Produktionsanteil (%)']
-                st.session_state.editable_seasonality[month_num] = percentage / 100.0
+    if values_changed:
+        # Validierung: Summe muss genau 100% sein
+        if abs(new_total - 100.0) < 0.01:  # Toleranz von 0.01%
+            # Summe ist genau 100% - speichere Änderungen
+            for month, percentage in seasonality_values.items():
+                st.session_state.editable_seasonality[month] = percentage / 100.0
             
             # KRITISCH: Synchronisiere SEASONALITY mit MasterData
             for month, factor in st.session_state.editable_seasonality.items():
                 MasterData.SEASONALITY[month] = factor
             
-            st.success(f"✅ Saisonalität aktualisiert! (Gesamt: {total:.1f}%)")
+            st.success(f"✅ Saisonalität aktualisiert! (Gesamt: {new_total:.1f}%)")
             seasonality_changed = True
+        elif new_total > 0:
+            # Summe ist nicht 100%, aber > 0
+            diff = abs(new_total - 100.0)
+            st.error(f"❌ **Summe beträgt {new_total:.1f}% (Abweichung: {diff:.1f}%). Die Summe muss exakt 100% ergeben, damit Berechnungen erfolgen können!**")
+            
+            # Option zur automatischen Normalisierung
+            if st.button("🔧 Automatisch auf 100% normalisieren", key="normalize_seasonality"):
+                # Normalisiere auf 100%
+                for month, percentage in seasonality_values.items():
+                    normalized = (percentage / new_total) * 100.0
+                    st.session_state.editable_seasonality[month] = normalized / 100.0
+                
+                # KRITISCH: Synchronisiere SEASONALITY mit MasterData
+                for month, factor in st.session_state.editable_seasonality.items():
+                    MasterData.SEASONALITY[month] = factor
+                
+                st.success("✅ Saisonalität automatisch normalisiert!")
+                seasonality_changed = True
+                st.rerun()
         else:
-            st.error("⚠️ Summe der Produktionsanteile muss größer als 0 sein!")
+            st.error("❌ **Summe der Produktionsanteile muss größer als 0 sein!**")
     
     if seasonality_changed:
         # Cache-Invalidierung bei Parameteränderungen
@@ -518,29 +636,6 @@ with tab4:
     st.dataframe(suppliers_df, width='stretch', hide_index=True)
     
     st.divider()
-    
-    # Auslieferungs-Routen
-    st.subheader("Auslieferungs-Routen")
-    
-    delivery_data = []
-    for route in MasterData.DELIVERY_ROUTES:
-        delivery_data.append({
-            'Ziel': route['destination'],
-            'Abfahrt': route['departure'],
-            'Ankunft': route['arrival'],
-            'Transportmittel': route['transport'],
-            'Dauer': route['duration'],
-            'Art': route['type']
-        })
-    delivery_df = pd.DataFrame(delivery_data)
-    st.dataframe(delivery_df, width='stretch', hide_index=True)
-    
-    # Gruppierung nach Ziel
-    st.subheader("Auslieferung nach Ziel")
-    for destination in delivery_df['Ziel'].unique():
-        with st.expander(f"📦 {destination}"):
-            dest_routes = delivery_df[delivery_df['Ziel'] == destination]
-            st.dataframe(dest_routes, width='stretch', hide_index=True)
 
 with tab5:
     st.header("Beschaffung")
@@ -548,6 +643,10 @@ with tab5:
     
     # Lieferanten-Parameter und Standorte (aus Auslieferung hierher verschoben)
     st.subheader("Lieferanten-Parameter und Standorte")
+    
+    # Standard-Vorlaufzeit für Label (49 Tage)
+    standard_lead_time = MasterData.CHINA_SUPPLIER['Saddles']['lead_time']
+    
     suppliers_data = []
     # Nur China (Deutschland und Spanien entfernt)
     for supplier, params in MasterData.SUPPLIERS.items():
@@ -561,17 +660,92 @@ with tab5:
                 'Losgröße': params['lot_size']
             })
     if suppliers_data:
+        # Zeige Tabelle mit statischen Werten
         suppliers_df = pd.DataFrame(suppliers_data)
-        st.dataframe(suppliers_df, width='stretch', hide_index=True)
+        st.dataframe(suppliers_df[['Lieferant', 'Bundesland/Region']], width='stretch', hide_index=True)
+        
+        # Editierbare Parameter mit st.number_input() (wie Planungs-Parameter)
+        supplier_changed = False
+        china_params = MasterData.SUPPLIERS['China']
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            new_lead_time = st.number_input(
+                "Vorlaufzeit (Tage)",
+                min_value=1,
+                max_value=365,
+                value=int(china_params['lead_time']),
+                step=1,
+                key="supplier_lead_time"
+            )
+            new_order_entry = st.number_input(
+                "Dauer Auftragserfassung (Tage)",
+                min_value=1,
+                max_value=30,
+                value=int(china_params['order_entry_duration']),
+                step=1,
+                key="supplier_order_entry"
+            )
+        
+        with col2:
+            new_production_time = st.number_input(
+                "Produktionszeit (Tage)",
+                min_value=1,
+                max_value=30,
+                value=int(china_params['production_time']),
+                step=1,
+                key="supplier_production_time"
+            )
+            new_lot_size = st.number_input(
+                "Losgröße",
+                min_value=1,
+                max_value=10000,
+                value=int(china_params['lot_size']),
+                step=1,
+                key="supplier_lot_size"
+            )
+        
+        # Prüfe auf Änderungen und synchronisiere
+        if (new_lead_time != china_params['lead_time'] or
+            new_order_entry != china_params['order_entry_duration'] or
+            new_production_time != china_params['production_time'] or
+            new_lot_size != china_params['lot_size']):
+            
+            # Synchronisiere SUPPLIERS
+            MasterData.SUPPLIERS['China']['lead_time'] = new_lead_time
+            MasterData.SUPPLIERS['China']['order_entry_duration'] = new_order_entry
+            MasterData.SUPPLIERS['China']['production_time'] = new_production_time
+            MasterData.SUPPLIERS['China']['lot_size'] = new_lot_size
+            
+            # KRITISCH: Synchronisiere auch CHINA_SUPPLIER
+            MasterData.CHINA_SUPPLIER['Saddles']['lead_time'] = new_lead_time
+            MasterData.CHINA_SUPPLIER['Saddles']['lot_size'] = new_lot_size
+            MasterData.CHINA_SUPPLIER['Frames']['lead_time'] = new_lead_time
+            MasterData.CHINA_SUPPLIER['Frames']['lot_size'] = new_lot_size
+            
+            st.success("✅ Lieferanten-Parameter aktualisiert! Bitte Simulation neu starten.")
+            # Cache-Invalidierung bei Parameteränderungen
+            _invalidate_all_caches()
+            supplier_changed = True
+        
+        # Zeige berechnete Vorlaufzeit mit Standard-Referenz
+        current_lead_time = MasterData.SUPPLIERS['China']['lead_time']
+        st.markdown(f"**Berechnete Vorlaufzeit (Worst Case/Standard: {standard_lead_time} Tage):** {current_lead_time} Tage")
     
     st.divider()
     
     # Beschaffungs-Routen (nur China - Deutschland und Spanien entfernt)
     st.subheader("Beschaffungs-Routen")
+    st.warning("⚠️ Änderungen an Routen-Dauer erfordern Neustart der Simulation für korrekte Berechnungen!")
+    
     procurement_data = []
+    route_keys = []  # Speichere Keys für Synchronisierung
     for route in MasterData.PROCUREMENT_ROUTES:
         # Nur China-Routen anzeigen (Deutschland und Spanien entfernt)
         if route['supplier'] == 'China':
+            route_key = (route['supplier'], route['component'], route['departure'], route['arrival'], route['transport'])
+            route_keys.append(route_key)
             procurement_data.append({
                 'Lieferant': route['supplier'],
                 'Produktkomponente': route['component'],
@@ -582,9 +756,51 @@ with tab5:
                 'Art': route['type'],
                 'Dauer Standard': route.get('standard_duration', route['duration'])
             })
+    
     if procurement_data:
+        # Zeige Tabelle mit statischen Werten
         procurement_df = pd.DataFrame(procurement_data)
-        st.dataframe(procurement_df, width='stretch', hide_index=True)
+        display_df = procurement_df[['Lieferant', 'Produktkomponente', 'Abfahrt', 'Ankunft', 'Transportmittel', 'Art']].copy()
+        st.dataframe(display_df, width='stretch', hide_index=True)
+        st.caption("💡 **Hinweis:** 'Dauer Standard' (z.B. 22 KT für Schiff) ist ein Referenzwert aus den ursprünglichen Stammdaten. Die aktuelle 'Dauer' kann unten geändert werden.")
+        
+        # Editierbare Dauer-Werte mit st.number_input()
+        procurement_changed = False
+        for idx, route_info in enumerate(procurement_data):
+            route_key = route_keys[idx]
+            current_duration = route_info['Dauer']
+            transport_name = route_info['Transportmittel']
+            route_label = f"{route_info['Abfahrt']} → {route_info['Ankunft']} ({transport_name})"
+            
+            # Finde entsprechende Route in MasterData für Updates
+            target_route = None
+            for route in MasterData.PROCUREMENT_ROUTES:
+                if (route['supplier'] == route_key[0] and 
+                    route['component'] == route_key[1] and
+                    route['departure'] == route_key[2] and
+                    route['arrival'] == route_key[3] and
+                    route['transport'] == route_key[4]):
+                    target_route = route
+                    break
+            
+            if target_route:
+                new_duration = st.number_input(
+                    f"Dauer: {route_label}",
+                    min_value=1,
+                    max_value=365,
+                    value=int(current_duration),
+                    step=1,
+                    key=f"procurement_duration_{idx}_{route_key[4]}"
+                )
+                
+                if new_duration != current_duration:
+                    target_route['duration'] = new_duration
+                    procurement_changed = True
+        
+        if procurement_changed:
+            st.success("✅ Beschaffungs-Routen aktualisiert! Bitte Simulation neu starten.")
+            # Cache-Invalidierung bei Parameteränderungen
+            _invalidate_all_caches()
 
 with tab6:
     st.header("Feiertage")
@@ -598,7 +814,7 @@ with tab6:
         # Länder-Namen und Flaggen (nur relevante Länder - Deutschland und China, da nur Inbound von China)
         country_info = {
             'DE': {'name': 'Deutschland', 'flag': '🇩🇪'},
-            'CN': {'name': 'China', 'flag': '🇨🇳'}
+            'CN': {'name': 'China (Shanghai)', 'flag': '🇨🇳', 'note': 'Enthält nationale chinesische Feiertage + lokale Shanghai-Feiertage'}
         }
         
         # Zusammenfassung ZUERST (nach oben verschoben)
@@ -623,6 +839,10 @@ with tab6:
             if country_code in country_info:
                 info = country_info[country_code]
                 st.subheader(f"{info['flag']} {info['name']} ({country_code})")
+                
+                # Zeige Hinweis für Shanghai-Feiertage
+                if country_code == 'CN' and 'note' in info:
+                    st.info(f"ℹ️ {info['note']}")
                 
                 if holidays_list:
                     holidays_df = pd.DataFrame(holidays_list)

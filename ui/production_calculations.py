@@ -243,7 +243,15 @@ def calculate_production_logs():
     
     FIX: Startbestand wird nun ZWINGEND aus der Inbound-Tabelle berechnet,
     genau wie im Materiallager. Keine Verwendung von transport_status mehr!
+    
+    WICHTIG: Berechnungen werden nur durchgeführt, wenn PRODUCT_SALES_SHARES und SEASONALITY jeweils 100% ergeben.
     """
+    # KRITISCH: Validiere Parameter bevor Berechnungen erfolgen
+    from ui.volume_planning_utils import _validate_parameters
+    is_valid, error_message = _validate_parameters()
+    if not is_valid:
+        return {}
+    
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
         return {}
     

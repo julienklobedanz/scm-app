@@ -65,6 +65,17 @@ def create_simulator(scenario_manager=None):
 
 def run_happy_path_simulation():
     """
+    Führt die Happy Path Simulation aus.
+    
+    WICHTIG: Berechnungen werden nur durchgeführt, wenn PRODUCT_SALES_SHARES und SEASONALITY jeweils 100% ergeben.
+    """
+    # KRITISCH: Validiere Parameter bevor Berechnungen erfolgen
+    from ui.volume_planning_utils import _validate_parameters
+    is_valid, error_message = _validate_parameters()
+    if not is_valid:
+        # Simulator wird nicht erstellt wenn Parameter ungültig sind
+        return
+    """
     Führt die Happy Path Simulation aus, wenn noch keine Ergebnisse vorhanden sind.
     Wird automatisch beim ersten Laden einer Seite aufgerufen.
     

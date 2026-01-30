@@ -18,16 +18,50 @@ from models.scenarios import (
 )
 
 
+def _validate_parameters() -> tuple[bool, str]:
+    """
+    Validiert, ob PRODUCT_SALES_SHARES und SEASONALITY jeweils 100% ergeben.
+    
+    Returns:
+        (is_valid, error_message)
+        - is_valid: True wenn beide Summen genau 100% sind
+        - error_message: Fehlermeldung wenn nicht gültig
+    """
+    # Prüfe PRODUCT_SALES_SHARES
+    sales_total = sum(MasterData.PRODUCT_SALES_SHARES.values()) * 100
+    if abs(sales_total - 100.0) >= 0.01:
+        return False, f"Verkaufsanteile: Summe beträgt {sales_total:.1f}% statt 100%"
+    
+    # Prüfe SEASONALITY
+    seasonality_total = sum(MasterData.SEASONALITY.values()) * 100
+    if abs(seasonality_total - 100.0) >= 0.01:
+        return False, f"Saisonalität: Summe beträgt {seasonality_total:.1f}% statt 100%"
+    
+    return True, ""
+
+
 def calculate_volume_planning_demand():
     """
     Berechnet die Nachfrage aus Volumenplanung für alle 365 Tage.
     Diese Funktion wird beim Start der App ausgeführt, damit die Daten für den Simulator verfügbar sind.
+    
+    WICHTIG: Berechnungen werden nur durchgeführt, wenn PRODUCT_SALES_SHARES und SEASONALITY jeweils 100% ergeben.
     
     Returns:
         Tuple (daily_demands_planned, daily_demands_actual)
         - daily_demands_planned: dict[day] -> dict[product] -> demand (ohne Marketing)
         - daily_demands_actual: dict[day] -> dict[product] -> demand (mit Marketing)
     """
+    # KRITISCH: Validiere Parameter bevor Berechnungen erfolgen
+    is_valid, error_message = _validate_parameters()
+    if not is_valid:
+        st.error(f"⚠️ **Berechnungen können nicht erfolgen:** {error_message}")
+        st.info("💡 Bitte passen Sie die Werte in 'Stammdaten → Planungsparameter' an, bis beide Summen genau 100% ergeben.")
+        # Setze leere Dictionaries als Fallback
+        st.session_state['daily_demands_planned'] = {}
+        st.session_state['daily_demands_actual'] = {}
+        return
+    
     # Prüfe ob bereits berechnet (mit strikter Prüfung, um Endlosschleifen zu vermeiden)
     # WICHTIG: Cache ist abhängig von Jahr, yearly_volume und aktiven Szenarien
     planning_year = st.session_state.get('planning_year', 2027)

@@ -143,17 +143,24 @@ class Simulator:
     def _place_initial_orders(self) -> None:
         """
         Platziert initiale Bestellungen vor Simulationsbeginn.
-        Bestellt täglich basierend auf dem täglichen Bedarf, 49 Tage vor dem jeweiligen Bedarfstag.
+        Bestellt täglich basierend auf dem täglichen Bedarf, lead_time_days vor dem jeweiligen Bedarfstag.
+        
+        WICHTIG: Bestellt für das GESAMTE JAHR (365 Tage), nicht nur für lead_time_days,
+        um sicherzustellen, dass die Gesamtmenge immer 370.000 bleibt, unabhängig von den Beschaffungszeiten.
         
         OPTIMIERUNG: Verwendet Nachfrage aus Volumenplanung, falls verfügbar.
         Das ist schneller als eigene Berechnung.
         
-        Beispiel: Für Bedarf am Tag 3 wird am Tag -46 (49 Tage vorher) bestellt.
+        Beispiel: Für Bedarf am Tag 3 wird am Tag (3 - lead_time_days) bestellt.
         """
         # WICHTIG: Wir müssen den Bedarf für die gesamte Lead-Time vorbestellen,
         # damit am Tag 0 (Start der run-Schleife) nahtlos weitergemacht wird.
-        # Die Schleife muss mindestens lead_time_days lang sein, um alle Bedarfstage 0-48 abzudecken.
-        lead_time_days = 49
+        lead_time_days = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time', 49)
+        
+        # KRITISCH: Bestelle für das GESAMTE JAHR (365 Tage), nicht nur für lead_time_days
+        # Dies stellt sicher, dass die Gesamtmenge immer 370.000 bleibt, unabhängig von den Beschaffungszeiten
+        # Die Beschaffungszeiten beeinflussen nur das Timing, nicht die Gesamtmenge
+        total_days = 365  # Immer für das gesamte Jahr bestellen
         
         # OPTIMIERUNG: Versuche Nachfrage aus Volumenplanung zu holen
         daily_demands_actual = None
@@ -163,8 +170,8 @@ class Simulator:
             except Exception:
                 pass
         
-        for day in range(lead_time_days):  # KORREKTUR: lead_time_days statt 30
-            # KORREKTUR: Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen
+        for day in range(total_days):  # Immer für das gesamte Jahr bestellen
+            # Bestellung findet an jedem Wochentag (Mo-Fr) statt, auch an deutschen Feiertagen
             if not self.workday_calculator.is_weekend(day):
                 # OPTIMIERUNG: Verwende Nachfrage aus Volumenplanung, falls verfügbar
                 if daily_demands_actual and day in daily_demands_actual:
@@ -351,7 +358,7 @@ class Simulator:
                 
                 # PROAKTIVE LOGIK (Look-Ahead): Schauen in die Zukunft statt in die Vergangenheit
                 # Bestelle heute für den Bedarf in 49 Tagen (Lead Time)
-                lead_time = 49
+                lead_time = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time', 49)
                 future_day = day + lead_time
                 
                 # Berechne erwartete Nachfrage für den Zukunftstag

@@ -638,15 +638,21 @@ with tab3:
             service_level = (total_produced / total_demand * 100) if total_demand > 0 else 0.0
     
     # Farblogik für Service Level
-    if service_level >= 95.0:
+    if service_level >= 100.0:
+        service_level_color = "normal"
+        service_level_delta = f"⭐ Ausgezeichnet"
+    elif service_level >= 99.0:
+        service_level_color = "normal"
+        service_level_delta = f"✅ Sehr gut"
+    elif service_level >= 95.0:
         service_level_color = "normal"
         service_level_delta = f"✅ Gut"
-    elif service_level >= 90.0:
+    elif service_level >= 80.0:
         service_level_color = "normal"
-        service_level_delta = f"⚠️ Akzeptabel"
+        service_level_delta = f"⚠️ OK"
     else:
         service_level_color = "inverse"
-        service_level_delta = f"❌ Kritisch"
+        service_level_delta = f"❌ Schlecht"
     
     # KPI-Kacheln
     col1, col2, col3 = st.columns(3)

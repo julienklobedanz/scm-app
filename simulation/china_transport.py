@@ -51,6 +51,31 @@ class ChinaTransportManager:
         self._chinese_holidays_cache: Optional[set] = None
         self._chinese_holidays_year: Optional[int] = None
     
+    def _get_route_duration(self, departure: str, arrival: str, transport: str, route_type: str = 'AT') -> int:
+        """
+        Holt die Dauer einer Route aus PROCUREMENT_ROUTES.
+        
+        Args:
+            departure: Abfahrtsort (z.B. 'China', 'Deutschland')
+            arrival: Ankunftsort (z.B. 'China', 'Deutschland')
+            transport: Transportmittel (z.B. 'LKW-Typ2', 'Schiff-Typ30')
+            route_type: Art der Route ('AT' für Arbeitstage, 'KT' für Kalendertage)
+        
+        Returns:
+            Dauer in Tagen (Fallback: 2 für AT, 30 für KT)
+        """
+        for route in self.master_data.PROCUREMENT_ROUTES:
+            if (route['supplier'] == 'China' and
+                route['component'] == 'Sattel' and
+                route['departure'] == departure and
+                route['arrival'] == arrival and
+                route['transport'] == transport and
+                route['type'] == route_type):
+                return route['duration']
+        
+        # Fallback zu Standard-Werten
+        return 2 if route_type == 'AT' else 30
+    
     def place_order(self, order_day: int, quantity: float, saddle_name: str = None) -> Optional[int]:
         """
         Platziert eine Bestellung in China
@@ -123,7 +148,7 @@ class ChinaTransportManager:
         # Schritt 2: LKW zum Hafen (China) - 2 AT
         # HINWEIS: Verspätungen werden erst beim Versand (in process_shipments) angewendet
         truck_china_start_day = production_end_day
-        truck_china_duration = 2
+        truck_china_duration = self._get_route_duration('China', 'China', 'LKW-Typ2', 'AT')
         truck_china_end_day = self._add_workdays(truck_china_start_day, truck_china_duration)
         
         # Schritt 3: Ankunft im Hafen
@@ -226,8 +251,9 @@ class ChinaTransportManager:
                 # Fallback: Verwende current_day
                 first_order_truck_china_start = current_day
             
-            # Geplante Ankunft LKW China (Abfahrt + 2 AT)
-            truck_china_arrival_day_planned = self._add_workdays(first_order_truck_china_start, 2)
+            # Geplante Ankunft LKW China (Abfahrt + Dauer aus PROCUREMENT_ROUTES)
+            truck_china_duration = self._get_route_duration('China', 'China', 'LKW-Typ2', 'AT')
+            truck_china_arrival_day_planned = self._add_workdays(first_order_truck_china_start, truck_china_duration)
             
             # Geplante Schiff-Abfahrt (nächster Mittwoch nach Ankunft LKW China)
             truck_china_arrival_date_planned = self.workday_calculator.get_date_from_day(truck_china_arrival_day_planned)
@@ -236,8 +262,9 @@ class ChinaTransportManager:
             ship_departure_date_planned = truck_china_arrival_date_planned + timedelta(days=days_to_wed_planned)
             ship_departure_day_planned = (ship_departure_date_planned - date(self.workday_calculator.year, 1, 1)).days
             
-            # Geplante Ankunft Schiff (Abfahrt + 30 KT)
-            ship_arrival_date_planned = ship_departure_date_planned + timedelta(days=30)
+            # Geplante Ankunft Schiff (Abfahrt + Dauer aus PROCUREMENT_ROUTES)
+            ship_duration = self._get_route_duration('China', 'Deutschland', 'Schiff-Typ30', 'KT')
+            ship_arrival_date_planned = ship_departure_date_planned + timedelta(days=ship_duration)
             ship_arrival_day_planned = (ship_arrival_date_planned - date(self.workday_calculator.year, 1, 1)).days
             
             # Geplante Abfahrt LKW DE (Ankunft Schiff, ggf. auf nächsten Arbeitstag verschoben)
@@ -261,8 +288,9 @@ class ChinaTransportManager:
                         break
                     days_to_add += 1
             
-            # Geplante Ankunft LKW DE (Abfahrt + 2 AT)
-            truck_de_end_day_planned = self._add_workdays(truck_de_start_day_planned, 2, exclude_start=False, use_chinese_holidays=False)
+            # Geplante Ankunft LKW DE (Abfahrt + Dauer aus PROCUREMENT_ROUTES)
+            truck_de_duration = self._get_route_duration('Deutschland', 'Deutschland', 'LKW-Typ2', 'AT')
+            truck_de_end_day_planned = self._add_workdays(truck_de_start_day_planned, truck_de_duration, exclude_start=False, use_chinese_holidays=False)
             
             # JETZT: Prüfe Verspätungen am GEPLANTEN ANKUNFTSDATUM (ETA), nicht am Abfahrtsdatum!
             # Dies entspricht der Aufgabenstellung: Verspätungen beziehen sich auf (E)TA
@@ -301,9 +329,10 @@ class ChinaTransportManager:
             ship_departure_date_actual = truck_china_arrival_date_actual + timedelta(days=days_to_wed_actual)
             ship_departure_day = (ship_departure_date_actual - date(self.workday_calculator.year, 1, 1)).days
             
-            # KRITISCH: Schiff fährt 30 KALENDERTAGE (KT), nicht Arbeitstage!
+            # KRITISCH: Schiff fährt KALENDERTAGE (KT), nicht Arbeitstage!
             # Das Schiff fährt kontinuierlich, Feiertage spielen keine Rolle
-            ship_arrival_date_actual = ship_departure_date_actual + timedelta(days=30) + timedelta(days=max_ship_arrival_delay)
+            ship_duration = self._get_route_duration('China', 'Deutschland', 'Schiff-Typ30', 'KT')
+            ship_arrival_date_actual = ship_departure_date_actual + timedelta(days=ship_duration) + timedelta(days=max_ship_arrival_delay)
             ship_arrival_day = (ship_arrival_date_actual - date(self.workday_calculator.year, 1, 1)).days
             
             # KRITISCH: ARBEITSTAG für geplante/tatsächliche Ankunft: Ankunft Schiff + 2 Arbeitstage
@@ -331,7 +360,8 @@ class ChinaTransportManager:
                     days_to_add += 1
             
             # Berechne Ankunft: Start-Tag zählt als Tag 1, nächster AT ist Tag 2 (Ankunft)
-            truck_de_end_day_planned_calc = self._add_workdays(truck_de_start_day, 2, exclude_start=False, use_chinese_holidays=False)  # 2 Arbeitstage, Start zählt mit!
+            truck_de_duration = self._get_route_duration('Deutschland', 'Deutschland', 'LKW-Typ2', 'AT')
+            truck_de_end_day_planned_calc = self._add_workdays(truck_de_start_day, truck_de_duration, exclude_start=False, use_chinese_holidays=False)
             
             # Verschiebe Ankunft LKW DE bei Verspätung
             truck_de_end_day = truck_de_end_day_planned_calc + max_truck_de_arrival_delay
@@ -507,10 +537,12 @@ class ChinaTransportManager:
     def _get_chinese_holidays(self) -> set:
         """
         PERFORMANCE: Lädt chinesische Feiertage nur einmal und cached sie.
+        Verwendet explizit Shanghai-Feiertage (nationale + lokale).
         """
         if self._chinese_holidays_cache is None or self._chinese_holidays_year != self.workday_calculator.year:
             from config.holidays_config import HolidaysConfig
-            holidays_dict = HolidaysConfig.get_holidays_for_year(self.workday_calculator.year, 'CN')
+            # WICHTIG: Verwende explizit Shanghai-Feiertage (nationale + lokale)
+            holidays_dict = HolidaysConfig.get_shanghai_holidays_for_year(self.workday_calculator.year)
             self._chinese_holidays_cache = set(holidays_dict.keys()) if holidays_dict else set()
             self._chinese_holidays_year = self.workday_calculator.year
         return self._chinese_holidays_cache
@@ -643,7 +675,7 @@ class ChinaTransportManager:
             daily_demands_actual_cache = st.session_state.get('daily_demands_actual', {})
         
         # Hole Lead Time (49 Tage)
-        lead_time_days = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time_days', 49)
+        lead_time_days = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time', 49)
         
         # Berechne Zieltag (Tag, für den bestellt wird)
         # Konvertiere order_date zu Tag (0-basiert, beginnend am 01.01. des Planungsjahres)
@@ -1459,12 +1491,14 @@ class ChinaTransportManager:
                 
                 # Berechne geplantes Ankunftsdatum des Schiffes für diese Zeile
                 # (wird später für Ladungsverlust-Prüfung benötigt)
-                day_port_ideal_for_loss = self._add_workdays(day_idx_sim, 2)
+                truck_china_duration = self._get_route_duration('China', 'China', 'LKW-Typ2', 'AT')
+                day_port_ideal_for_loss = self._add_workdays(day_idx_sim, truck_china_duration)
                 date_port_ideal_for_loss = self.workday_calculator.get_date_from_day(day_port_ideal_for_loss)
                 wd_ideal_for_loss = date_port_ideal_for_loss.weekday()
                 days_to_wed_ideal_for_loss = (2 - wd_ideal_for_loss) % 7 if (2 - wd_ideal_for_loss) % 7 != 0 else 7
                 date_ship_dep_ideal_for_loss = date_port_ideal_for_loss + timedelta(days=days_to_wed_ideal_for_loss)
-                date_ship_arr_ideal_for_loss = date_ship_dep_ideal_for_loss + timedelta(days=30)
+                ship_duration = self._get_route_duration('China', 'Deutschland', 'Schiff-Typ30', 'KT')
+                date_ship_arr_ideal_for_loss = date_ship_dep_ideal_for_loss + timedelta(days=ship_duration)
                 day_ship_arr_ideal_for_loss = (date_ship_arr_ideal_for_loss - date(self.workday_calculator.year, 1, 1)).days
                 
                 # KRITISCH: Prüfe Ladungsverlust-Szenarien basierend auf GEPLANTEM ANKUNFTSDATUM DES SCHIFFES
@@ -1499,8 +1533,9 @@ class ChinaTransportManager:
                 # --- PFAD 1: IDEALER ABLAUF (für die "Geplante"-Spalte) ---
                 # Dies ignoriert alle Szenarien und berechnet den Happy Path.
                 
-                # Ideal: Ankunft Hafen China (Start + 2 AT)
-                day_port_ideal = self._add_workdays(day_idx_sim, 2)
+                # Ideal: Ankunft Hafen China (Start + Dauer aus PROCUREMENT_ROUTES)
+                truck_china_duration = self._get_route_duration('China', 'China', 'LKW-Typ2', 'AT')
+                day_port_ideal = self._add_workdays(day_idx_sim, truck_china_duration)
                 date_port_ideal = self.workday_calculator.get_date_from_day(day_port_ideal)
                 
                 # Ideal: Abfahrt Schiff (Nächster Mittwoch)
@@ -1508,8 +1543,9 @@ class ChinaTransportManager:
                 days_to_wed_ideal = (2 - wd_ideal) % 7 if (2 - wd_ideal) % 7 != 0 else 7
                 date_ship_dep_ideal = date_port_ideal + timedelta(days=days_to_wed_ideal)
                 
-                # Ideal: Ankunft Schiff DE (Abfahrt + 30 KT)
-                date_ship_arr_ideal = date_ship_dep_ideal + timedelta(days=30)
+                # Ideal: Ankunft Schiff DE (Abfahrt + Dauer aus PROCUREMENT_ROUTES)
+                ship_duration = self._get_route_duration('China', 'Deutschland', 'Schiff-Typ30', 'KT')
+                date_ship_arr_ideal = date_ship_dep_ideal + timedelta(days=ship_duration)
                 day_ship_arr_ideal_idx = (date_ship_arr_ideal - date(self.workday_calculator.year, 1, 1)).days
                 
                 # Ideal: Abfahrt LKW DE (Ankunft Schiff, aber nur wenn Arbeitstag, sonst nächster AT)
@@ -1534,8 +1570,9 @@ class ChinaTransportManager:
                             break
                         days_to_add += 1
                 
-                # Ideal: Ankunft LKW DE (Abfahrt + 2 AT, Start-Tag zählt mit)
-                day_arr_de_ideal = self._add_workdays(truck_de_start_day_ideal, 2, exclude_start=False, use_chinese_holidays=False)
+                # Ideal: Ankunft LKW DE (Abfahrt + Dauer aus PROCUREMENT_ROUTES, Start-Tag zählt mit)
+                truck_de_duration = self._get_route_duration('Deutschland', 'Deutschland', 'LKW-Typ2', 'AT')
+                day_arr_de_ideal = self._add_workdays(truck_de_start_day_ideal, truck_de_duration, exclude_start=False, use_chinese_holidays=False)
                 date_arr_de_ideal = self.workday_calculator.get_date_from_day(day_arr_de_ideal)
                 
                 # Prüfe ob geplante Ankunft auf Wochenende oder Feiertag fällt - verschiebe auf nächsten Arbeitstag
@@ -1600,8 +1637,9 @@ class ChinaTransportManager:
                 date_ship_dep_actual = date_port_actual + timedelta(days=days_to_wed_actual)
                 row['Abfahrt Schiff 🇨🇳'] = date_ship_dep_actual.strftime(self.master_data.DATE_FORMAT)
                 
-                # Ankunft Schiff (Real: Tatsächliche Abfahrt + 30 KT + Schiff-Verspätung)
-                date_ship_arr_planned_real = date_ship_dep_actual + timedelta(days=30)
+                # Ankunft Schiff (Real: Tatsächliche Abfahrt + Dauer aus PROCUREMENT_ROUTES + Schiff-Verspätung)
+                ship_duration = self._get_route_duration('China', 'Deutschland', 'Schiff-Typ30', 'KT')
+                date_ship_arr_planned_real = date_ship_dep_actual + timedelta(days=ship_duration)
                 date_ship_arr_actual = date_ship_arr_planned_real + timedelta(days=ship_arrival_delay)
                 row['Ankunft Schiff 🇩🇪'] = date_ship_arr_actual.strftime(self.master_data.DATE_FORMAT)
                 
@@ -1631,8 +1669,9 @@ class ChinaTransportManager:
                 
                 row['Abfahrt LKW 🇩🇪'] = truck_de_start_date_real.strftime(self.master_data.DATE_FORMAT)
                 
-                # LKW DE Transport (Real: Abfahrt + 2 AT, Start-Tag zählt mit)
-                day_arr_de_planned_real = self._add_workdays(truck_de_start_day_real, 2, exclude_start=False, use_chinese_holidays=False)
+                # LKW DE Transport (Real: Abfahrt + Dauer aus PROCUREMENT_ROUTES, Start-Tag zählt mit)
+                truck_de_duration = self._get_route_duration('Deutschland', 'Deutschland', 'LKW-Typ2', 'AT')
+                day_arr_de_planned_real = self._add_workdays(truck_de_start_day_real, truck_de_duration, exclude_start=False, use_chinese_holidays=False)
                 
                 # Verschiebe Ankunft LKW DE (mit LKW-DE Verspätung)
                 day_arr_de_actual = day_arr_de_planned_real + truck_de_arrival_delay

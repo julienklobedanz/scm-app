@@ -20,11 +20,19 @@ def calculate_material_inventory():
     für den Wareneingang. Das garantiert, dass Materiallager und Produktion dieselben
     (bereits berechneten) Ankunftsdaten und Mengen sehen – inkl. Vorlauf (z.B. Nov/Dez 2026).
     
+    WICHTIG: Berechnungen werden nur durchgeführt, wenn PRODUCT_SALES_SHARES und SEASONALITY jeweils 100% ergeben.
+    
     Returns:
         Tuple (material_inventory_data, saddle_logs)
         - material_inventory_data: Dict[date] -> Dict[saddle] -> stock_morning
         - saddle_logs: Dict[saddle] -> List[Dict] (für UI-Anzeige)
     """
+    # KRITISCH: Validiere Parameter bevor Berechnungen erfolgen
+    from ui.volume_planning_utils import _validate_parameters
+    is_valid, error_message = _validate_parameters()
+    if not is_valid:
+        return {}, {}
+    
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
         return {}, {}
     

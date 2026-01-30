@@ -81,7 +81,7 @@ class ProcurementManager:
         if expected_demand is not None and expected_demand > 0:
             # Prüfe, ob das Ankunftsdatum ein Feiertag ist
             if self.workday_calculator:
-                lead_time = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time_days', 49)
+                lead_time = self.master_data.CHINA_SUPPLIER['Saddles'].get('lead_time', 49)
                 target_day = day + lead_time
                 target_date = self.workday_calculator.get_date_from_day(target_day)
                 target_date_str = target_date.strftime(self.master_data.DATE_FORMAT)
