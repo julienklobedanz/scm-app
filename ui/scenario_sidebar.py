@@ -4,7 +4,7 @@ Wiederverwendbare Sidebar-Komponente für Szenarien-Management
 """
 
 import streamlit as st
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 from models.scenarios import (
     ScenarioManager,
@@ -18,6 +18,62 @@ from models.scenarios import (
 )
 from simulation.workday_calculator import WorkdayCalculator
 from config.master_data import MasterData
+
+
+def _day_index_to_date(day_idx: int, planning_year: int) -> date:
+    """Konvertiert Tages-Index (relativ zum Planungsjahr/Vorjahr) in Datum."""
+    start_of_year = date(planning_year, 1, 1)
+    if day_idx >= 0:
+        return start_of_year + timedelta(days=day_idx)
+    # Vorjahr (z. B. 2026 bei planning_year 2027)
+    offset_2026 = (date(2026, 1, 1) - start_of_year).days
+    return date(2026, 1, 1) + timedelta(days=day_idx - offset_2026)
+
+
+def _format_scenario_details(scenario, planning_year: int) -> Optional[str]:
+    """
+    Erzeugt eine kompakte Parameter-Zeile für die Anzeige aktiver Szenarien.
+    Returns None wenn keine Zusatzinfos nötig sind.
+    """
+    if isinstance(scenario, MarketingCampaignScenario):
+        total = getattr(scenario, "additional_demand_total", 0)
+        products = getattr(scenario, "affected_products", None)
+        if products and len(products) > 0:
+            product_str = ", ".join(products) if len(products) <= 3 else ", ".join(products[:2]) + f" (+{len(products) - 2} weitere)"
+        else:
+            product_str = "Alle Produkte"
+        return f"Zusatzbedarf: {int(total)} Stück · Produkte: {product_str}"
+
+    if isinstance(scenario, WaterDamageScenario):
+        loss = getattr(scenario, "loss_quantity_absolute", 0)
+        saddles = getattr(scenario, "affected_saddles", None)
+        if saddles and len(saddles) > 0:
+            saddle_str = ", ".join(saddles) if len(saddles) <= 3 else ", ".join(saddles[:2]) + f" (+{len(saddles) - 2} weitere)"
+        else:
+            saddle_str = "Alle Satteltypen"
+        return f"Verlustmenge: {int(loss)} Stück · Satteltypen: {saddle_str}"
+
+    if isinstance(scenario, SupplierBreakdownScenario):
+        comp = getattr(scenario, "component_type", "saddles")
+        comp_label = "Sättel" if comp in ("saddles", "all") else comp
+        return f"Komponente: {comp_label}"
+
+    if isinstance(scenario, DelayScenario):
+        days = getattr(scenario, "delay_days", 0)
+        stage = getattr(scenario, "delay_stage", "")
+        stage_labels = {"truck_china_arrival": "Ankunft LKW China", "ship_arrival": "Ankunft Schiff", "truck_de_arrival": "Ankunft LKW Deutschland"}
+        stage_label = stage_labels.get(stage, stage)
+        return f"Verspätung: {int(days)} Tage · Stufe: {stage_label}"
+
+    if isinstance(scenario, CargoLossScenario):
+        return "Komponente: Sättel (Schiffsankunft)"
+
+    if isinstance(scenario, WarehouseDamageScenario):
+        pct = getattr(scenario, "stock_loss_percentage", 0) * 100
+        comp = getattr(scenario, "affected_component", "saddles")
+        return f"Verlust: {pct:.0f}% · Komponente: {comp}"
+
+    return None
 
 
 def _get_planned_arrival_dates(delay_stage: str, planning_year: int) -> List[date]:
@@ -226,12 +282,21 @@ def render_scenario_sidebar(key_suffix=""):
             st.subheader("Wasserschaden im Materiallager")
             damage_date = st.date_input("Datum", value=date(planning_year, 4, 10), min_value=min_date, max_value=max_date, format="DD.MM.YYYY", key=f"water_damage_date_global{key_suffix}")
             loss_quantity_absolute = st.number_input(
-                "Verlustmenge (absolut, Stück)",
+                "Verlustmenge",
                 min_value=0,
                 value=0,
                 step=1,
                 key=f"water_damage_loss_abs_global{key_suffix}",
-                help="0 = kein Abzug. Sonst: Verlust = min(Eingabe, Bestand abends); bei Eingabe > Bestand abends wird nur auf 0 gesetzt."
+                help="0 = kein Abzug. Sonst: Verlust = min(Eingabe, Bestand abends) pro betroffener Satteltyp; bei Eingabe > Bestand abends wird nur auf 0 gesetzt."
+            )
+            all_saddles = list(MasterData.calculate_saddle_shares().keys())
+            selected_saddles = st.multiselect(
+                "Betroffene Satteltypen",
+                all_saddles,
+                default=all_saddles,
+                placeholder="Optionen wählen",
+                help="Nur für die ausgewählten Satteltypen wird die Verlustmenge abgezogen. Keine Auswahl = alle.",
+                key=f"water_damage_saddles_global{key_suffix}"
             )
             if st.button("➕ Wasserschaden hinzufügen", key=f"add_water_damage_global{key_suffix}"):
                 # Berechne damage_day relativ zum Planungsjahr
@@ -242,13 +307,15 @@ def render_scenario_sidebar(key_suffix=""):
                     damage_day = damage_day + offset
                 else:
                     damage_day = (damage_date - start_of_year).days
+                affected_saddles = None if (not selected_saddles or len(selected_saddles) == len(all_saddles)) else selected_saddles
                 scenario = WaterDamageScenario(
                     name=f"Wasserschaden im Materiallager ({damage_date.strftime(MasterData.DATE_FORMAT)})",
                     start_day=damage_day,
                     end_day=damage_day,  # Exaktes Datum: start_day = end_day
                     damage_date=damage_day,
                     affected_component="saddles",
-                    loss_quantity_absolute=float(loss_quantity_absolute)
+                    loss_quantity_absolute=float(loss_quantity_absolute),
+                    affected_saddles=affected_saddles
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
@@ -431,12 +498,16 @@ def render_scenario_sidebar(key_suffix=""):
         
         if custom_scenarios:
             st.subheader("📋 Aktive Szenarien")
+            planning_year = st.session_state.get('planning_year', 2027)
             for i, scenario in enumerate(custom_scenarios):
                 # Finde Index im ursprünglichen Array
                 original_idx = st.session_state.scenario_manager.scenarios.index(scenario)
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.write(f"• {scenario.name}")
+                    details = _format_scenario_details(scenario, planning_year)
+                    if details:
+                        st.caption(details)
                 with col2:
                     if st.button("🗑️", key=f"remove_{original_idx}_global{key_suffix}"):
                         st.session_state.scenario_manager.scenarios.pop(original_idx)

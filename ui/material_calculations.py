@@ -213,18 +213,13 @@ def calculate_material_inventory():
         # 2. Verbrauch (aus Produktions-Log)
         consumed_today = consumption_map.get(current_date, {})
         
-        # 3. Prüfe Wasserschaden-Szenarien für diesen Tag
-        water_damage_active = False
-        water_damage_loss_absolute = 0.0  # 0 = kein Abzug
+        # 3. Alle Wasserschaden-Szenarien für diesen Tag (mehrere parallel möglich)
+        water_damage_scenarios_for_day = []
         scenario_manager = st.session_state.get('scenario_manager')
         if scenario_manager and 0 <= day < 365:
-            water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
-            if water_damage_scenarios:
-                for scenario in water_damage_scenarios:
-                    if scenario.start_day == scenario.end_day and scenario.start_day == day:
-                        water_damage_active = True
-                        water_damage_loss_absolute = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
-                        break
+            for scenario in scenario_manager.get_water_damage_scenarios(day):
+                if scenario.start_day == scenario.end_day and scenario.start_day == day:
+                    water_damage_scenarios_for_day.append(scenario)
         
         stock_morning = {}
         stock_evening = {}
@@ -240,11 +235,16 @@ def calculate_material_inventory():
             # Bestand abends (vor optionalem Wasserschaden-Abzug)
             stock_evening[s] = max(0.0, stock_morning[s] - actual_issue)
             
-            # WASSERSCHADEN: nur bei Verlustmenge > 0 abziehen (0 = kein Abzug)
+            # WASSERSCHADEN: alle Szenarien für diesen Tag anwenden (Verlust pro Szenario für betroffene Satteltypen)
             loss_qty = 0.0
-            if water_damage_active and water_damage_loss_absolute > 0:
-                loss_qty = min(water_damage_loss_absolute, stock_evening[s])
-                stock_evening[s] = max(0.0, stock_evening[s] - loss_qty)
+            for scenario in water_damage_scenarios_for_day:
+                loss_abs = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
+                affected_saddles = getattr(scenario, 'affected_saddles', None)
+                applies_to_saddle = (not affected_saddles or len(affected_saddles) == 0 or s in affected_saddles)
+                if loss_abs > 0 and applies_to_saddle:
+                    deduct = min(loss_abs, stock_evening[s])
+                    loss_qty += deduct
+                    stock_evening[s] = max(0.0, stock_evening[s] - deduct)
             
             # Übertrag für nächsten Tag
             stock_by_saddle[s] = stock_evening[s]

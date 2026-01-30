@@ -722,6 +722,7 @@ class ChinaTransportManager:
                     WarehouseDamageScenario,
                     SupplierBreakdownScenario,
                     DelayScenario,
+                    WaterDamageScenario,
                 )
                 scenario_items = []
                 for s in getattr(scenario_manager, "scenarios", []):
@@ -756,6 +757,15 @@ class ChinaTransportManager:
                         extra = (
                             getattr(s, "loss_date", None),
                             getattr(s, "component_type", None),
+                        )
+                    elif isinstance(s, WaterDamageScenario):
+                        affected_saddles = getattr(s, "affected_saddles", None)
+                        affected_saddles_tuple = tuple(sorted(affected_saddles)) if affected_saddles else None
+                        extra = (
+                            getattr(s, "damage_date", None),
+                            getattr(s, "affected_component", None),
+                            getattr(s, "loss_quantity_absolute", 0.0),
+                            affected_saddles_tuple,
                         )
                     else:
                         extra = tuple(sorted(vars(s).items()))
@@ -1197,6 +1207,7 @@ class ChinaTransportManager:
                     WarehouseDamageScenario,
                     SupplierBreakdownScenario,
                     DelayScenario,
+                    WaterDamageScenario,
                 )
                 scenario_items = []
                 for s in getattr(scenario_manager, "scenarios", []):
@@ -1231,6 +1242,15 @@ class ChinaTransportManager:
                         extra = (
                             getattr(s, "loss_date", None),
                             getattr(s, "component_type", None),
+                        )
+                    elif isinstance(s, WaterDamageScenario):
+                        affected_saddles = getattr(s, "affected_saddles", None)
+                        affected_saddles_tuple = tuple(sorted(affected_saddles)) if affected_saddles else None
+                        extra = (
+                            getattr(s, "damage_date", None),
+                            getattr(s, "affected_component", None),
+                            getattr(s, "loss_quantity_absolute", 0.0),
+                            affected_saddles_tuple,
                         )
                     else:
                         extra = tuple(sorted(vars(s).items()))

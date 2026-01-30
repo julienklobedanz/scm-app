@@ -105,10 +105,13 @@ def calculate_volume_planning_demand():
                     getattr(s, "component_type", None),
                 )
             elif isinstance(s, WaterDamageScenario):
+                affected_saddles = getattr(s, "affected_saddles", None)
+                affected_saddles_tuple = tuple(sorted(affected_saddles)) if affected_saddles else None
                 extra = (
                     getattr(s, "damage_date", None),
                     getattr(s, "affected_component", None),
                     getattr(s, "loss_quantity_absolute", 0.0),
+                    affected_saddles_tuple,
                 )
             else:
                 # Fallback für zukünftige Szenarien

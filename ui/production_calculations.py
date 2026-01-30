@@ -430,17 +430,19 @@ def calculate_production_logs():
                         planned = todays_demand_map.get(p, 0)
                         df.at[idx, 'geplante PM'] = int(planned)
 
-        # G. Wasserschaden auf Bestand abends (nach Verbrauch); 0 = kein Abzug
+        # G. Wasserschaden auf Bestand abends (nach Verbrauch); alle Szenarien für diesen Tag anwenden
         if scenario_manager:
             water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
             for scenario in water_damage_scenarios:
                 if scenario.affected_component == "saddles" and scenario.start_day == scenario.end_day and day == scenario.start_day:
                     loss_abs = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
+                    affected_saddles = getattr(scenario, 'affected_saddles', None)
                     if loss_abs > 0:
                         for s in saddles:
-                            deduct = min(loss_abs, running_stock[s])
-                            running_stock[s] = max(0.0, running_stock[s] - deduct)
-                    break
+                            applies = (not affected_saddles or len(affected_saddles) == 0 or s in affected_saddles)
+                            if applies:
+                                deduct = min(loss_abs, running_stock[s])
+                                running_stock[s] = max(0.0, running_stock[s] - deduct)
 
     # Fertiggestellte PM (Logic bleibt gleich, nur minimal gesäubert)
     try:

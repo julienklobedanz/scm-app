@@ -48,10 +48,11 @@ class DelayScenario(Scenario):
 
 @dataclass
 class WaterDamageScenario(Scenario):
-    """Wasserschaden im Materiallager: Reduziert Bestand abends (optional absoluter Verlust, sonst Totalverlust)"""
+    """Wasserschaden im Materiallager: Reduziert Bestand abends pro Satteltyp (optional absoluter Verlust)"""
     damage_date: int = -1  # Exaktes Datum (start_day = end_day = damage_date), -1 = nicht gesetzt
     affected_component: str = "saddles"  # Immer Sättel
-    loss_quantity_absolute: float = 0.0  # Absolute Verlustmenge (Stück). 0 = kein Abzug. >0: Verlust = min(Eingabe, Bestand abends), Bestand abends reduziert; bei Eingabe > Bestand → 0
+    loss_quantity_absolute: float = 0.0  # Verlustmenge pro betroffener Satteltyp. 0 = kein Abzug. >0: Verlust = min(Eingabe, Bestand abends)
+    affected_saddles: Optional[List[str]] = None  # None oder leer = alle 4 Satteltypen; sonst nur diese Satteltypen
 
 
 @dataclass
