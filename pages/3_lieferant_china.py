@@ -30,11 +30,11 @@ st.markdown("""
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
         position: sticky !important;
         bottom: 0 !important;
-        background-color: #e0e0e0 !important;
+        background-color: #404040 !important;
         z-index: 100 !important;
     }
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
-        background-color: #e0e0e0 !important;
+        background-color: #404040 !important;
         font-weight: bold !important;
     }
 </style>
@@ -105,8 +105,8 @@ for saddle_type in all_saddle_types:
         with col2:
             st.markdown("""
             <div style="text-align: right; margin-bottom: 10px;">
-                <span style="background-color: #ffebee; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
-                <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
+                <span style="background-color: #4a2525; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
+                <span style="background-color: #1e3d2a; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
             </div>
             """, unsafe_allow_html=True)
         
@@ -116,9 +116,9 @@ for saddle_type in all_saddle_types:
             if idx < len(weekend_flags):
                 # Wochenende hat Priorität (wenn beides, dann Wochenende = rot)
                 if weekend_flags[idx]:
-                    return ['background-color: #ffebee' for _ in row]
+                    return ['background-color: #4a2525' for _ in row]
                 elif holiday_flags[idx]:
-                    return ['background-color: #c8e6c9' for _ in row]
+                    return ['background-color: #1e3d2a' for _ in row]
             return [''] * len(row)
         
         # Summenzeile hinzufügen
@@ -152,7 +152,7 @@ for saddle_type in all_saddle_types:
             if row_idx < len(df_display):
                 return style_row(row)
             else:
-                return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+                return ['background-color: #404040; font-weight: bold' for _ in row]
         
         styled_df = df_with_sum.style.apply(style_row_with_sum, axis=1)
         st.dataframe(styled_df, width='stretch', hide_index=True)

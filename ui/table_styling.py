@@ -1,10 +1,18 @@
 """
 Hilfsfunktionen für Tabellen-Styling
-Markiert Zeilen die durch Szenarien beeinflusst werden
+Markiert Zeilen die durch Szenarien beeinflusst werden.
+Farben für Dark Theme (Standard) – gut lesbar auf dunklem Hintergrund.
 """
 
 import pandas as pd
 from typing import List, Optional
+
+# Dark-Theme-Zeilenfarben (konsistent mit .streamlit/config.toml base = "dark")
+ROW_COLOR_SUM = "#404040"
+ROW_COLOR_WEEKEND = "#4a2525"
+ROW_COLOR_HOLIDAY = "#1e3d2a"
+ROW_COLOR_SCENARIO = "#4a4420"
+ROW_COLOR_NON_WORKDAY = "#4a2525"
 
 
 def get_scenario_affected_rows(df: pd.DataFrame, table_type: str) -> List[bool]:
@@ -134,21 +142,21 @@ def style_row_with_scenarios(row, affected_flags: List[bool], weekend_flags: Opt
     """
     idx = row.name
     
-    # Summenzeile: grauer Hintergrund
+    # Summenzeile: dunkelgrauer Hintergrund
     if idx >= len(affected_flags):
-        return ['background-color: #e0e0e0; font-weight: bold'] * len(row)
+        return [f'background-color: {ROW_COLOR_SUM}; font-weight: bold'] * len(row)
     
     # Wochenende hat höchste Priorität
     if weekend_flags and idx < len(weekend_flags) and weekend_flags[idx]:
-        return ['background-color: #ffebee'] * len(row)
+        return [f'background-color: {ROW_COLOR_WEEKEND}'] * len(row)
     
     # Feiertag hat zweite Priorität
     if holiday_flags and idx < len(holiday_flags) and holiday_flags[idx]:
-        return ['background-color: #c8e6c9'] * len(row)
+        return [f'background-color: {ROW_COLOR_HOLIDAY}'] * len(row)
     
-    # Szenario-beeinflusste Zeile: gelber Hintergrund
+    # Szenario-beeinflusste Zeile: gedämpfter Amber-Hintergrund
     if idx < len(affected_flags) and affected_flags[idx]:
-        return ['background-color: #fff9c4'] * len(row)
+        return [f'background-color: {ROW_COLOR_SCENARIO}'] * len(row)
     
     # Normale Zeile
     return [''] * len(row)
