@@ -30,11 +30,11 @@ st.markdown("""
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
         position: sticky !important;
         bottom: 0 !important;
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         z-index: 100 !important;
     }
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         font-weight: bold !important;
     }
 </style>
@@ -375,7 +375,7 @@ with tab1:
             return [''] * len(row)
         else:
             # Summenzeile: Fett markieren
-            return ['background-color: #404040; font-weight: bold' for _ in row]
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
     
     styled_weekly_df = display_weekly_df_with_sum.style.apply(style_weekly_row, axis=1)
     
@@ -541,10 +541,10 @@ with tab2:
         if row_idx < len(daily_df):
             # Normale Zeile: Prüfe ob Feiertag/Wochenende
             is_non_workday = daily_df.iloc[row_idx]['_is_non_workday']
-            return ['background-color: #4a2525' if is_non_workday else '' for _ in row]
+            return ['background-color: #ffcccc' if is_non_workday else '' for _ in row]
         else:
             # Summenzeile: Fett markieren
-            return ['background-color: #404040; font-weight: bold' for _ in row]
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
     
     styled_df = display_df_with_sum.style.apply(style_row_with_sum, axis=1)
     # Zeige Tabelle (verlängert für bessere Übersicht)

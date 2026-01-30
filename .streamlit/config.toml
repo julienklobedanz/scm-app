@@ -4,12 +4,12 @@ headless = true
 [browser]
 gatherUsageStats = false
 
-# Dark Theme (Standard wie z. B. StockPeers-Demo)
+# Light Theme (Standard)
 [theme]
-base = "dark"
+base = "light"
 primaryColor = "#38bdf8"
-backgroundColor = "#0e1117"
-secondaryBackgroundColor = "#262730"
-textColor = "#fafafa"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
 font = "sans serif"
 

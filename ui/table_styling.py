@@ -1,18 +1,18 @@
 """
 Hilfsfunktionen für Tabellen-Styling
 Markiert Zeilen die durch Szenarien beeinflusst werden.
-Farben für Dark Theme (Standard) – gut lesbar auf dunklem Hintergrund.
+Farben für Light Theme – hellere Grün- und Rottöne auf hellem Hintergrund.
 """
 
 import pandas as pd
 from typing import List, Optional
 
-# Dark-Theme-Zeilenfarben (konsistent mit .streamlit/config.toml base = "dark")
-ROW_COLOR_SUM = "#404040"
-ROW_COLOR_WEEKEND = "#4a2525"
-ROW_COLOR_HOLIDAY = "#1e3d2a"
-ROW_COLOR_SCENARIO = "#4a4420"
-ROW_COLOR_NON_WORKDAY = "#4a2525"
+# Light-Theme-Zeilenfarben (konsistent mit .streamlit/config.toml base = "light")
+ROW_COLOR_SUM = "#e0e0e0"
+ROW_COLOR_WEEKEND = "#ffcccc"
+ROW_COLOR_HOLIDAY = "#c8e6c9"
+ROW_COLOR_SCENARIO = "#fff9c4"
+ROW_COLOR_NON_WORKDAY = "#ffcccc"
 
 
 def get_scenario_affected_rows(df: pd.DataFrame, table_type: str) -> List[bool]:

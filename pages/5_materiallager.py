@@ -28,11 +28,11 @@ st.markdown("""
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
         position: sticky !important;
         bottom: 0 !important;
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         z-index: 100 !important;
     }
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         font-weight: bold !important;
     }
 </style>
@@ -153,9 +153,9 @@ for saddle_type in sorted(saddle_logs.keys()):
     def style_row_safe(row):
         if row.name < len(weekend_flags):
             if weekend_flags[row.name]:
-                return ['background-color: #4a2525'] * len(row)
+                return ['background-color: #ffcccc'] * len(row)
             if holiday_flags[row.name]:
-                return ['background-color: #1e3d2a'] * len(row)
+                return ['background-color: #c8e6c9'] * len(row)
         return [''] * len(row)
 
     cols = ['Wochentag', 'Datum', 'Lagerzugang', 'Bestand morgens', 'Lagerabgang', 'Verlustmenge', 'Bestand abends']
@@ -190,13 +190,13 @@ for saddle_type in sorted(saddle_logs.keys()):
         idx = row.name
         # Summenzeile: grauer Hintergrund, fett
         if idx >= len(weekend_flags):
-            return ['background-color: #404040; font-weight: bold'] * len(row)
+            return ['background-color: #e0e0e0; font-weight: bold'] * len(row)
         # Normale Zeilen
         if idx < len(weekend_flags_extended):
             if weekend_flags_extended[idx]:
-                return ['background-color: #4a2525'] * len(row)
+                return ['background-color: #ffcccc'] * len(row)
             if holiday_flags_extended[idx]:
-                return ['background-color: #1e3d2a'] * len(row)
+                return ['background-color: #c8e6c9'] * len(row)
         return [''] * len(row)
     
     # Farblegende
@@ -204,8 +204,8 @@ for saddle_type in sorted(saddle_logs.keys()):
     with col2:
         st.markdown("""
         <div style="text-align: right; margin-bottom: 10px;">
-            <span style="background-color: #4a2525; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
-            <span style="background-color: #1e3d2a; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
+            <span style="background-color: #ffcccc; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
+            <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
         </div>
         """, unsafe_allow_html=True)
     

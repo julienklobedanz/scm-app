@@ -30,11 +30,11 @@ st.markdown("""
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
         position: sticky !important;
         bottom: 0 !important;
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         z-index: 100 !important;
     }
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         font-weight: bold !important;
     }
 </style>
@@ -111,12 +111,12 @@ if not df.empty:
         if row_idx < len(weekend_flags):
             # Wochenende hat Priorität (wenn beides, dann Wochenende = rot)
             if weekend_flags_extended[row_idx]:
-                return ['background-color: #4a2525' for _ in row]
+                return ['background-color: #ffcccc' for _ in row]
             elif holiday_flags_extended[row_idx]:
-                return ['background-color: #1e3d2a' for _ in row]
+                return ['background-color: #c8e6c9' for _ in row]
         elif row_idx >= len(weekend_flags):
             # Summenzeile
-            return ['background-color: #404040; font-weight: bold' for _ in row]
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
         return [''] * len(row)
     
     styled_df = df_with_sum.style.apply(style_row_with_sum, axis=1)

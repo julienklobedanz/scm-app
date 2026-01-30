@@ -28,11 +28,11 @@ st.markdown("""
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
         position: sticky !important;
         bottom: 0 !important;
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         z-index: 100 !important;
     }
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
-        background-color: #404040 !important;
+        background-color: #e0e0e0 !important;
         font-weight: bold !important;
     }
 </style>
@@ -234,8 +234,8 @@ for product in sorted(fg_logs.keys()):
     with col2:
         st.markdown("""
         <div style="text-align: right; margin-bottom: 10px;">
-            <span style="background-color: #4a2525; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
-            <span style="background-color: #1e3d2a; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
+            <span style="background-color: #ffcccc; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
+            <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
         </div>
         """, unsafe_allow_html=True)
     
@@ -268,14 +268,14 @@ for product in sorted(fg_logs.keys()):
         row_idx = row.name
         # Summenzeile: grauer Hintergrund, fett
         if row_idx >= len(weekend_flags):
-            return ['background-color: #404040; font-weight: bold' for _ in row]
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
         # Normale Zeilen
         if row_idx < len(weekend_flags_extended):
             # Wochenende hat Priorität (wenn beides, dann Wochenende = rot)
             if weekend_flags_extended[row_idx]:
-                return ['background-color: #4a2525' for _ in row]
+                return ['background-color: #ffcccc' for _ in row]
             elif holiday_flags_extended[row_idx]:
-                return ['background-color: #1e3d2a' for _ in row]
+                return ['background-color: #c8e6c9' for _ in row]
         return [''] * len(row)
     
     styled_df = df_display_with_sum.style.apply(style_row, axis=1)
