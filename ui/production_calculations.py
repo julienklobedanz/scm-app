@@ -360,16 +360,7 @@ def calculate_production_logs():
             for saddle_name, qty in inbound_arrivals[day].items():
                 if qty > 0: running_stock[saddle_name] += qty
         
-        # B. Wasserschaden
-        if scenario_manager:
-            water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
-            for scenario in water_damage_scenarios:
-                if scenario.affected_component == "saddles" and scenario.start_day == scenario.end_day:
-                    if day == scenario.start_day:
-                        for s in saddles: running_stock[s] = 0.0
-                        break
-        
-        # Bestand sichern für Anzeige
+        # Bestand sichern für Anzeige (vor Verbrauch = „morgens“)
         daily_start_stock = running_stock.copy()
         
         is_workday = workday_calc.is_workday(day)
@@ -439,6 +430,18 @@ def calculate_production_logs():
                         planned = todays_demand_map.get(p, 0)
                         df.at[idx, 'geplante PM'] = int(planned)
 
+        # G. Wasserschaden auf Bestand abends (nach Verbrauch); 0 = kein Abzug
+        if scenario_manager:
+            water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
+            for scenario in water_damage_scenarios:
+                if scenario.affected_component == "saddles" and scenario.start_day == scenario.end_day and day == scenario.start_day:
+                    loss_abs = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
+                    if loss_abs > 0:
+                        for s in saddles:
+                            deduct = min(loss_abs, running_stock[s])
+                            running_stock[s] = max(0.0, running_stock[s] - deduct)
+                    break
+
     # Fertiggestellte PM (Logic bleibt gleich, nur minimal gesäubert)
     try:
         for product, df in production_logs.items():
@@ -461,11 +464,14 @@ def calculate_production_logs():
                         df_sorted.at[idx, 'fertiggestellte PM'] = 0
                         continue
                         
-                    water_damage_today = False
-                    if scenario_manager and len(scenario_manager.get_water_damage_scenarios(day)) > 0:
-                        water_damage_today = True
-                        
-                    if water_damage_today:
+                    # Nur bei tatsächlichem Verlust (loss_quantity_absolute > 0) fertiggestellte PM auf 0
+                    water_damage_with_loss = False
+                    if scenario_manager:
+                        for wd in scenario_manager.get_water_damage_scenarios(day):
+                            if getattr(wd, 'loss_quantity_absolute', 0.0) > 0:
+                                water_damage_with_loss = True
+                                break
+                    if water_damage_with_loss:
                         df_sorted.at[idx, 'fertiggestellte PM'] = 0
                     else:
                         prev_workday_found = False
@@ -478,11 +484,13 @@ def calculate_production_logs():
                                     p_idx = date_to_idx[p_date]
                                     prev_val = df_sorted.at[p_idx, 'tatsächliche PM']
                                     
-                                    prev_wd = False
-                                    if scenario_manager and len(scenario_manager.get_water_damage_scenarios(prev_day)) > 0:
-                                        prev_wd = True
-                                    
-                                    if prev_wd and prev_val == 0:
+                                    prev_wd_loss = False
+                                    if scenario_manager:
+                                        for wd in scenario_manager.get_water_damage_scenarios(prev_day):
+                                            if getattr(wd, 'loss_quantity_absolute', 0.0) > 0:
+                                                prev_wd_loss = True
+                                                break
+                                    if prev_wd_loss and prev_val == 0:
                                         df_sorted.at[idx, 'fertiggestellte PM'] = 0
                                     else:
                                         df_sorted.at[idx, 'fertiggestellte PM'] = int(round(prev_val)) if prev_val > 0 else 0

@@ -215,14 +215,15 @@ def calculate_material_inventory():
         
         # 3. Prüfe Wasserschaden-Szenarien für diesen Tag
         water_damage_active = False
+        water_damage_loss_absolute = 0.0  # 0 = kein Abzug
         scenario_manager = st.session_state.get('scenario_manager')
         if scenario_manager and 0 <= day < 365:
             water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
             if water_damage_scenarios:
-                # Prüfe ob exaktes Datum (start_day == end_day)
                 for scenario in water_damage_scenarios:
                     if scenario.start_day == scenario.end_day and scenario.start_day == day:
                         water_damage_active = True
+                        water_damage_loss_absolute = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
                         break
         
         stock_morning = {}
@@ -232,35 +233,21 @@ def calculate_material_inventory():
             # Bestand morgens = Bestand gestern abend + Zugang heute
             stock_morning[s] = stock_by_saddle[s] + receipt_by_saddle.get(s, 0.0)
             
-            # WASSERSCHADEN: Speichere Bestand vor dem Schaden für Verlustmenge
-            stock_before_damage = stock_morning[s]
-            
-            # WASSERSCHADEN: Setze Bestand morgens auf 0 wenn Szenario aktiv
-            if water_damage_active:
-                stock_morning[s] = 0.0
-            
             # Abgang = Was die Produktion tatsächlich verbraucht hat
-            # HINWEIS: Wir vertrauen hier blind dem Produktions-Log.
-            # Da der Produktions-Log VORHER lief und geprüft hat "ist genug da?",
-            # sollte stock_morning[s] >= planned_issue sein.
-            # Falls Rundungsdifferenzen auftreten, fangen wir das mit max(0) ab.
             planned_issue = consumed_today.get(s, 0.0)
-            
-            # Zur Sicherheit: Nicht mehr abziehen als da ist (sollte dank Synchro nicht passieren)
             actual_issue = min(planned_issue, stock_morning[s])
             
-            # Bestand abends
+            # Bestand abends (vor optionalem Wasserschaden-Abzug)
             stock_evening[s] = max(0.0, stock_morning[s] - actual_issue)
             
-            # WASSERSCHADEN: Setze auch Abendbestand auf 0
-            if water_damage_active:
-                stock_evening[s] = 0.0
+            # WASSERSCHADEN: nur bei Verlustmenge > 0 abziehen (0 = kein Abzug)
+            loss_qty = 0.0
+            if water_damage_active and water_damage_loss_absolute > 0:
+                loss_qty = min(water_damage_loss_absolute, stock_evening[s])
+                stock_evening[s] = max(0.0, stock_evening[s] - loss_qty)
             
             # Übertrag für nächsten Tag
             stock_by_saddle[s] = stock_evening[s]
-            
-            # Berechne Verlustmenge (nur wenn Wasserschaden aktiv)
-            loss_qty = stock_before_damage if water_damage_active else 0.0
             
             # Log Entry für UI
             saddle_logs[s].append({

@@ -127,10 +127,8 @@ def render_scenario_sidebar(key_suffix=""):
     with st.sidebar:
         # Planungsbeginn wurde in globale Konfiguration (Stammdaten) verschoben
         
-        st.header("🎭 Szenarien")
+        st.header("Szenarien hinzufügen")
         st.caption("Standard-Szenario läuft permanent im Hintergrund. Zusätzliche Szenarien können parallel aktiviert werden.")
-        
-        st.subheader("➕ Szenarien hinzufügen")
         
         # Szenario-Auswahl mit eindeutigem Key
         scenario_type = st.selectbox(
@@ -148,8 +146,8 @@ def render_scenario_sidebar(key_suffix=""):
         
         if scenario_type == "Marketingaktion":
             st.subheader("Marketingaktion")
-            start_date = st.date_input("Start-Datum", value=date(planning_year, 2, 19), min_value=min_date, max_value=max_date, key=f"marketing_start_global{key_suffix}")
-            end_date = st.date_input("End-Datum", value=date(planning_year, 3, 11), min_value=min_date, max_value=max_date, key=f"marketing_end_global{key_suffix}")
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 2, 19), min_value=min_date, max_value=max_date, format="DD.MM.YYYY", key=f"marketing_start_global{key_suffix}")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 3, 11), min_value=min_date, max_value=max_date, format="DD.MM.YYYY", key=f"marketing_end_global{key_suffix}")
             # Anzahl Arbeitstage im gewählten Zeitraum (für Info und Verteilung)
             start_of_year = date(planning_year, 1, 1)
             _start_day = (start_date - start_of_year).days if start_date.year == planning_year else (start_date - date(2026, 1, 1)).days + (date(2026, 1, 1) - start_of_year).days
@@ -158,7 +156,7 @@ def render_scenario_sidebar(key_suffix=""):
             if workdays_in_range > 0:
                 st.caption(f"Im gewählten Zeitraum: **{workdays_in_range}** Arbeitstage. Der Gesamtbedarf wird gleichmäßig auf diese Tage verteilt.")
             additional_demand_total = st.number_input(
-                "Zusätzlicher Bedarf gesamt (Zeitraum, Stück)",
+                "Zusätzlicher Bedarf gesamt",
                 min_value=0,
                 value=5000,
                 step=500,
@@ -172,6 +170,7 @@ def render_scenario_sidebar(key_suffix=""):
                 "Betroffene Produkte",
                 all_products,
                 default=all_products,  # Standard: Alle Produkte (Rückwärtskompatibilität)
+                placeholder="Optionen wählen",
                 help="Wählen Sie die Produkte aus, für die die Marketingaktion gelten soll. Wenn keine Auswahl getroffen wird, wirkt die Aktion auf alle Produkte.",
                 key=f"marketing_products_global{key_suffix}"
             )
@@ -225,9 +224,15 @@ def render_scenario_sidebar(key_suffix=""):
         
         elif scenario_type == "Wasserschaden im Lager":
             st.subheader("Wasserschaden im Materiallager")
-            st.caption("Setzt den Bestand aller Sättel morgens und abends auf 0")
-            damage_date = st.date_input("Datum", value=date(planning_year, 4, 10), min_value=min_date, max_value=max_date, key=f"water_damage_date_global{key_suffix}")
-            
+            damage_date = st.date_input("Datum", value=date(planning_year, 4, 10), min_value=min_date, max_value=max_date, format="DD.MM.YYYY", key=f"water_damage_date_global{key_suffix}")
+            loss_quantity_absolute = st.number_input(
+                "Verlustmenge (absolut, Stück)",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"water_damage_loss_abs_global{key_suffix}",
+                help="0 = kein Abzug. Sonst: Verlust = min(Eingabe, Bestand abends); bei Eingabe > Bestand abends wird nur auf 0 gesetzt."
+            )
             if st.button("➕ Wasserschaden hinzufügen", key=f"add_water_damage_global{key_suffix}"):
                 # Berechne damage_day relativ zum Planungsjahr
                 if damage_date.year == 2026:
@@ -242,7 +247,8 @@ def render_scenario_sidebar(key_suffix=""):
                     start_day=damage_day,
                     end_day=damage_day,  # Exaktes Datum: start_day = end_day
                     damage_date=damage_day,
-                    affected_component="saddles"
+                    affected_component="saddles",
+                    loss_quantity_absolute=float(loss_quantity_absolute)
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
@@ -250,8 +256,8 @@ def render_scenario_sidebar(key_suffix=""):
         
         elif scenario_type == "Maschinenausfall (China)":
             st.subheader("Maschinenausfall (China)")
-            start_date = st.date_input("Start-Datum", value=date(planning_year, 6, 1), min_value=min_date, max_value=max_date, key=f"supplier_breakdown_start_global{key_suffix}")
-            end_date = st.date_input("End-Datum", value=date(planning_year, 6, 10), min_value=min_date, max_value=max_date, key=f"supplier_breakdown_end_global{key_suffix}")
+            start_date = st.date_input("Start-Datum", value=date(planning_year, 6, 1), min_value=min_date, max_value=max_date, format="DD.MM.YYYY", key=f"supplier_breakdown_start_global{key_suffix}")
+            end_date = st.date_input("End-Datum", value=date(planning_year, 6, 10), min_value=min_date, max_value=max_date, format="DD.MM.YYYY", key=f"supplier_breakdown_end_global{key_suffix}")
             
             if st.button("➕ Lieferantenausfall hinzufügen", key=f"add_supplier_breakdown_global{key_suffix}"):
                 # Berechne start_day und end_day relativ zum Planungsjahr
@@ -283,7 +289,7 @@ def render_scenario_sidebar(key_suffix=""):
         elif scenario_type == "Verspätung":
             st.subheader("Verspätung")
             delay_stage = st.selectbox(
-                "Logistik-Zwischenstopp",
+                "Lieferkette",
                 ["truck_china_arrival", "ship_arrival", "truck_de_arrival"],
                 format_func=lambda x: {
                     "truck_china_arrival": "Ankunft LKW China",
@@ -309,7 +315,7 @@ def render_scenario_sidebar(key_suffix=""):
                 default_date_str = planned_dates[0].strftime(MasterData.DATE_FORMAT) if planned_dates else date(planning_year, 7, 19).strftime(MasterData.DATE_FORMAT)
                 
                 selected_date_str = st.selectbox(
-                    f"Geplantes Ankunftsdatum ({stage_name})",
+                    "Geplantes Ankunftsdatum",
                     options=list(date_options.keys()),
                     index=0 if default_date_str in date_options else 0,
                     help=f"Wählen Sie ein geplantes Ankunftsdatum für {stage_name}. Nur Daten mit tatsächlichen Ankünften werden angezeigt.",
@@ -328,6 +334,7 @@ def render_scenario_sidebar(key_suffix=""):
                     value=date(planning_year, 7, 19),
                     min_value=min_date,
                     max_value=max_date,
+                    format="DD.MM.YYYY",
                     help="⚠️ Wichtig: Das Datum muss einem geplanten Ankunftsdatum entsprechen, sonst wird die Verspätung nicht angewendet.",
                     key=f"delay_date_global{key_suffix}"
                 )
@@ -362,8 +369,6 @@ def render_scenario_sidebar(key_suffix=""):
         
         elif scenario_type == "Ladungsverlust auf See":
             st.subheader("Ladungsverlust auf See")
-            st.caption("Verliert die gesamte Ladung einer Lieferung (Mengen werden auf 0 gesetzt)")
-            st.info("💡 **Hinweis:** Datumsauswahl nach geplanter Ankunft des betreffenden Schiffes vornehmen. Zu jedem Zeitpunkt sind mehrere Schiffe gleichzeitig auf See - die Auswahl des Ankunftsdatums identifiziert das betroffene Schiff eindeutig.")
             
             # PERFORMANCE: Hole geplante Ankunftsdaten für Schiffe (verwendet Cache)
             # Ladungsverlust bezieht sich immer auf Schiffe, daher verwenden wir "ship_arrival"
@@ -391,6 +396,7 @@ def render_scenario_sidebar(key_suffix=""):
                     value=date(planning_year, 8, 15),
                     min_value=min_date,
                     max_value=max_date,
+                    format="DD.MM.YYYY",
                     help="⚠️ Wichtig: Das Datum muss einem geplanten Ankunftsdatum eines Schiffes entsprechen, sonst wird der Ladungsverlust nicht angewendet.",
                     key=f"cargo_loss_date_global{key_suffix}"
                 )

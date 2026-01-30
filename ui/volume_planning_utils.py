@@ -108,6 +108,7 @@ def calculate_volume_planning_demand():
                 extra = (
                     getattr(s, "damage_date", None),
                     getattr(s, "affected_component", None),
+                    getattr(s, "loss_quantity_absolute", 0.0),
                 )
             else:
                 # Fallback für zukünftige Szenarien

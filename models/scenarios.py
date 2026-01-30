@@ -48,9 +48,10 @@ class DelayScenario(Scenario):
 
 @dataclass
 class WaterDamageScenario(Scenario):
-    """Wasserschaden im Materiallager: Setzt Bestand aller Sättel morgens und abends auf 0"""
+    """Wasserschaden im Materiallager: Reduziert Bestand abends (optional absoluter Verlust, sonst Totalverlust)"""
     damage_date: int = -1  # Exaktes Datum (start_day = end_day = damage_date), -1 = nicht gesetzt
     affected_component: str = "saddles"  # Immer Sättel
+    loss_quantity_absolute: float = 0.0  # Absolute Verlustmenge (Stück). 0 = kein Abzug. >0: Verlust = min(Eingabe, Bestand abends), Bestand abends reduziert; bei Eingabe > Bestand → 0
 
 
 @dataclass
