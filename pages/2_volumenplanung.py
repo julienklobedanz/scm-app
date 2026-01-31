@@ -18,6 +18,10 @@ from ui.volume_planning_utils import calculate_volume_planning_demand
 
 st.set_page_config(page_title="Volumenplanung", layout="wide", page_icon="📅")
 
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
+
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
@@ -366,12 +370,12 @@ with tab1:
     sum_df = pd.DataFrame([sum_row], columns=multi_index)
     display_weekly_df_with_sum = pd.concat([display_weekly_df, sum_df], ignore_index=True)
     
-    # Styling für Summenzeile
+    # Styling für Summenzeile (wie im origin/main - kein Theme-Styling für normale Zeilen)
     def style_weekly_row(row):
         """Styling-Funktion für wöchentliche Tabelle"""
         row_idx = row.name
         if row_idx < len(display_weekly_df):
-            # Normale Zeile: kein spezielles Styling
+            # Normale Zeile: kein spezielles Styling (Standard Streamlit)
             return [''] * len(row)
         else:
             # Summenzeile: Fett markieren
@@ -534,10 +538,18 @@ with tab2:
     dummy_row['_is_non_workday'] = False
     daily_df_with_sum = pd.concat([daily_df_with_sum, pd.DataFrame([dummy_row])], ignore_index=True)
     
-    # Wende Styling an (rote Markierung für Wochenenden/Feiertage)
+    # Theme-aware Styling verwenden
+    from ui.theme_aware_styling import style_row_with_theme, get_theme_colors
+    
+    # Wende Styling an (theme-aware)
+    # KRITISCH: Import für Header-Styling
+    from ui.theme_aware_styling import apply_theme_to_styled_dataframe
+    
     def style_row_with_sum(row):
         """Styling-Funktion die auch die Summenzeile berücksichtigt"""
         row_idx = row.name
+        colors = get_theme_colors()
+        
         if row_idx < len(daily_df):
             # Normale Zeile: Prüfe ob Feiertag/Wochenende
             is_non_workday = daily_df.iloc[row_idx]['_is_non_workday']
@@ -547,6 +559,11 @@ with tab2:
             return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
     
     styled_df = display_df_with_sum.style.apply(style_row_with_sum, axis=1)
+    # KRITISCH: Wende Theme-Styling auf Header an (mit Fehlerbehandlung)
+    try:
+        styled_df = apply_theme_to_styled_dataframe(styled_df)
+    except Exception:
+        pass  # Bei Fehler: Verwende Styler ohne Header-Styling
     # Zeige Tabelle (verlängert für bessere Übersicht)
     st.dataframe(styled_df, width='stretch', hide_index=True, height=800)
     

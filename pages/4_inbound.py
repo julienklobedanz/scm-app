@@ -18,6 +18,10 @@ from ui.utils import initialize_session_state, run_happy_path_simulation, ensure
 
 st.set_page_config(page_title="Inbound", page_icon="🚢", layout="wide")
 
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
+
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
@@ -59,6 +63,11 @@ run_happy_path_simulation()
 
 # Prüfe ob Simulator verfügbar ist
 ensure_simulator_available()
+
+# KRITISCH: Prüfe ob Simulator wirklich verfügbar ist (könnte None sein bei Fehlern)
+if 'simulator' not in st.session_state or st.session_state.simulator is None:
+    st.error("❌ Simulator ist nicht verfügbar. Bitte starten Sie die Simulation neu.")
+    st.stop()
 
 manager = st.session_state.simulator.china_transport_manager
 workday_calc = manager.workday_calculator
@@ -105,7 +114,10 @@ if not df.empty:
     if 'Is_Holiday' in df.columns:
         df = df.drop(columns=['Is_Holiday'])
     
-    # Styling-Funktion für Summenzeile
+    # Theme-aware Styling verwenden
+    from ui.theme_aware_styling import style_row_with_theme, apply_theme_to_styled_dataframe
+    
+    # Styling-Funktion für Summenzeile (theme-aware)
     def style_row_with_sum(row):
         row_idx = row.name
         if row_idx < len(weekend_flags):
@@ -120,6 +132,11 @@ if not df.empty:
         return [''] * len(row)
     
     styled_df = df_with_sum.style.apply(style_row_with_sum, axis=1)
+    # KRITISCH: Wende Theme-Styling auf Header an (mit Fehlerbehandlung)
+    try:
+        styled_df = apply_theme_to_styled_dataframe(styled_df)
+    except Exception:
+        pass  # Bei Fehler: Verwende Styler ohne Header-Styling
     st.dataframe(styled_df, width='stretch', hide_index=True, height=800)
 else:
     st.info("Keine Inbound-Daten vorhanden.")

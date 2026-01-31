@@ -16,6 +16,10 @@ from ui.scenario_sidebar import render_scenario_sidebar
 
 st.set_page_config(page_title="Materiallager", layout="wide", page_icon="📦")
 
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
+
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
@@ -99,13 +103,14 @@ calculate_volume_planning_demand()  # Stelle sicher, dass daily_demands_actual a
 # Erweitere Cache-Key um Szenarien und volume_planning_cache_key
 volume_planning_cache_key = st.session_state.get('volume_planning_cache_key', None)
 simulation_hash = None
-if 'simulator' in st.session_state and st.session_state.simulator:
+# KRITISCH: Prüfe ob Simulator wirklich verfügbar ist (könnte None sein bei Fehlern)
+if 'simulator' in st.session_state and st.session_state.simulator is not None:
     # Erstelle Hash aus Simulator-Status (für Cache-Invalidierung)
     try:
         import hashlib
         simulator_state = str(id(st.session_state.simulator)) + str(len(st.session_state.simulator.china_transport_manager.transport_status))
         simulation_hash = hashlib.md5(simulator_state.encode()).hexdigest()
-    except:
+    except Exception:
         simulation_hash = None
 
 # Cache-Key erweitert um volume_planning_cache_key (enthält bereits Szenario-Fingerprint)
@@ -185,7 +190,10 @@ for saddle_type in sorted(saddle_logs.keys()):
         weekend_flags_extended = weekend_flags
         holiday_flags_extended = holiday_flags
     
-    # Styling-Funktion mit Summenzeile
+    # Theme-aware Styling verwenden
+    from ui.theme_aware_styling import style_row_with_theme, get_theme_colors, apply_theme_to_styled_dataframe
+    
+    # Styling-Funktion mit Summenzeile (theme-aware)
     def style_row_with_sum(row):
         idx = row.name
         # Summenzeile: grauer Hintergrund, fett
@@ -199,15 +207,22 @@ for saddle_type in sorted(saddle_logs.keys()):
                 return ['background-color: #c8e6c9'] * len(row)
         return [''] * len(row)
     
-    # Farblegende
+    # Theme-aware Farblegende
+    colors = get_theme_colors()
     col1, col2 = st.columns([1, 1])
     with col2:
-        st.markdown("""
+        st.markdown(f"""
         <div style="text-align: right; margin-bottom: 10px;">
             <span style="background-color: #ffcccc; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
             <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
         </div>
         """, unsafe_allow_html=True)
     
-    st.dataframe(df_display_with_sum.style.apply(style_row_with_sum, axis=1), width='stretch', hide_index=True)
+    styled_df = df_display_with_sum.style.apply(style_row_with_sum, axis=1)
+    # KRITISCH: Wende Theme-Styling auf Header an (mit Fehlerbehandlung)
+    try:
+        styled_df = apply_theme_to_styled_dataframe(styled_df)
+    except Exception:
+        pass  # Bei Fehler: Verwende Styler ohne Header-Styling
+    st.dataframe(styled_df, width='stretch', hide_index=True)
     st.divider()

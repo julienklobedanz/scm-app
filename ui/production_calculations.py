@@ -430,7 +430,7 @@ def calculate_production_logs():
                         planned = todays_demand_map.get(p, 0)
                         df.at[idx, 'geplante PM'] = int(planned)
 
-        # G. Wasserschaden auf Bestand abends (nach Verbrauch); alle Szenarien für diesen Tag anwenden
+        # G. Wasserschaden auf Bestand abends (nach Verbrauch)
         if scenario_manager:
             water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
             for scenario in water_damage_scenarios:
@@ -443,6 +443,7 @@ def calculate_production_logs():
                             if applies:
                                 deduct = min(loss_abs, running_stock[s])
                                 running_stock[s] = max(0.0, running_stock[s] - deduct)
+                    break
 
     # Fertiggestellte PM (Logic bleibt gleich, nur minimal gesäubert)
     try:
@@ -466,11 +467,14 @@ def calculate_production_logs():
                         df_sorted.at[idx, 'fertiggestellte PM'] = 0
                         continue
                         
-                    # Nur bei tatsächlichem Verlust (loss_quantity_absolute > 0) fertiggestellte PM auf 0
+                    # Nur bei tatsächlichem Verlust fertiggestellte PM auf 0
                     water_damage_with_loss = False
                     if scenario_manager:
                         for wd in scenario_manager.get_water_damage_scenarios(day):
-                            if getattr(wd, 'loss_quantity_absolute', 0.0) > 0:
+                            complete_loss = getattr(wd, 'complete_loss', False)
+                            loss_by_saddle = getattr(wd, 'loss_by_saddle', None)
+                            loss_quantity_absolute = getattr(wd, 'loss_quantity_absolute', 0.0)
+                            if complete_loss or (loss_by_saddle and any(v > 0 for v in loss_by_saddle.values())) or loss_quantity_absolute > 0:
                                 water_damage_with_loss = True
                                 break
                     if water_damage_with_loss:
@@ -489,7 +493,10 @@ def calculate_production_logs():
                                     prev_wd_loss = False
                                     if scenario_manager:
                                         for wd in scenario_manager.get_water_damage_scenarios(prev_day):
-                                            if getattr(wd, 'loss_quantity_absolute', 0.0) > 0:
+                                            complete_loss = getattr(wd, 'complete_loss', False)
+                                            loss_by_saddle = getattr(wd, 'loss_by_saddle', None)
+                                            loss_quantity_absolute = getattr(wd, 'loss_quantity_absolute', 0.0)
+                                            if complete_loss or (loss_by_saddle and any(v > 0 for v in loss_by_saddle.values())) or loss_quantity_absolute > 0:
                                                 prev_wd_loss = True
                                                 break
                                     if prev_wd_loss and prev_val == 0:

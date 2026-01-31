@@ -16,6 +16,10 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 
 st.set_page_config(page_title="Fertigproduktelager", layout="wide", page_icon="✅")
 
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
+
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
@@ -232,7 +236,10 @@ for product in sorted(fg_logs.keys()):
     # Farblegende oben rechts
     col1, col2 = st.columns([1, 1])
     with col2:
-        st.markdown("""
+        # Theme-aware Legende
+        from ui.theme_aware_styling import get_theme_colors
+        colors = get_theme_colors()
+        st.markdown(f"""
         <div style="text-align: right; margin-bottom: 10px;">
             <span style="background-color: #ffcccc; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
             <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
@@ -263,7 +270,10 @@ for product in sorted(fg_logs.keys()):
         weekend_flags_extended = weekend_flags
         holiday_flags_extended = holiday_flags
     
-    # Zeige Tabelle mit Styling
+    # Theme-aware Styling verwenden
+    from ui.theme_aware_styling import style_row_with_theme, apply_theme_to_styled_dataframe
+    
+    # Zeige Tabelle mit Styling (theme-aware)
     def style_row(row):
         row_idx = row.name
         # Summenzeile: grauer Hintergrund, fett
@@ -279,6 +289,11 @@ for product in sorted(fg_logs.keys()):
         return [''] * len(row)
     
     styled_df = df_display_with_sum.style.apply(style_row, axis=1)
+    # KRITISCH: Wende Theme-Styling auf Header an (mit Fehlerbehandlung)
+    try:
+        styled_df = apply_theme_to_styled_dataframe(styled_df)
+    except Exception:
+        pass  # Bei Fehler: Verwende Styler ohne Header-Styling
     st.dataframe(styled_df, width='stretch', hide_index=True)
     
     st.divider()

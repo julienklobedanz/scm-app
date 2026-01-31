@@ -48,7 +48,8 @@ def _invalidate_all_caches():
             del st.session_state[cache_key]
     
     # Invalidiere auch ChinaTransportManager Caches (wenn Simulator vorhanden)
-    if 'simulator' in st.session_state and st.session_state.simulator:
+    # KRITISCH: Prüfe ob Simulator wirklich verfügbar ist (könnte None sein bei Fehlern)
+    if 'simulator' in st.session_state and st.session_state.simulator is not None:
         if hasattr(st.session_state.simulator, 'china_transport_manager'):
             manager = st.session_state.simulator.china_transport_manager
             manager._supplier_log_cache = {}
@@ -57,8 +58,15 @@ def _invalidate_all_caches():
 
 st.set_page_config(page_title="Stammdaten", layout="wide", page_icon="📋")
 
-# WICHTIG: Initialisiere Berechnungen auch auf dieser Seite
-initialize_all_page_calculations()
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
+
+# PERFORMANCE: Stammdaten-Seite benötigt KEINE Simulation oder schwere Berechnungen
+# Sie zeigt nur statische Daten. initialize_all_page_calculations() würde eine Simulation starten,
+# was sehr langsam ist. Stattdessen initialisieren wir nur die Session State falls nötig.
+from ui.utils import initialize_session_state
+initialize_session_state()
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett)
 st.markdown("""

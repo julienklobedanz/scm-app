@@ -8,6 +8,33 @@ import plotly.graph_objects as go
 from typing import Dict
 
 
+def get_plotly_theme_layout():
+    """
+    Gibt das Plotly Layout für das aktuelle Theme zurück.
+    
+    WICHTIG: Dark Mode wurde entfernt - gibt jetzt immer Light Mode zurück.
+    
+    Returns:
+        dict: Layout-Konfiguration für Plotly Charts (immer Light Mode)
+    """
+    # WICHTIG: Dark Mode wurde entfernt - verwende immer Light Mode
+    return {
+        'plot_bgcolor': '#ffffff',
+        'paper_bgcolor': '#ffffff',
+        'font': {'color': '#262730'},
+        'xaxis': {
+            'gridcolor': '#e5e7eb',
+            'linecolor': '#d1d5db',
+            'zerolinecolor': '#d1d5db'
+        },
+        'yaxis': {
+            'gridcolor': '#e5e7eb',
+            'linecolor': '#d1d5db',
+            'zerolinecolor': '#d1d5db'
+        }
+    }
+
+
 def render_kpis(kpis: Dict[str, float]) -> None:
     """Zeigt die KPIs an"""
     st.header("📊 Key Performance Indicators (KPIs)")

@@ -169,6 +169,17 @@ def _get_planned_arrival_dates(delay_stage: str, planning_year: int) -> List[dat
         return arrival_dates
 
 
+def _safe_rerun():
+    """
+    Führt st.rerun() sicher aus, prüft ob Simulation läuft.
+    Wenn Simulation läuft, zeigt Warnung statt rerun.
+    """
+    if not st.session_state.get('simulation_running', False):
+        st.rerun()
+    else:
+        st.warning("⚠️ Simulation läuft. Die Änderungen werden nach Abschluss der Simulation übernommen.")
+
+
 def render_scenario_sidebar(key_suffix=""):
     """Rendert die Szenarien-Sidebar mit allen Funktionen zum Hinzufügen und Verwalten von Szenarien
     
@@ -276,7 +287,7 @@ def render_scenario_sidebar(key_suffix=""):
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
-                st.rerun()
+                _safe_rerun()
         
         elif scenario_type == "Wasserschaden im Lager":
             st.subheader("Wasserschaden im Materiallager")
@@ -318,8 +329,33 @@ def render_scenario_sidebar(key_suffix=""):
                     affected_saddles=affected_saddles
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
+                
+                # WICHTIG: Invalidiere alle Caches, da Wasserschaden die Berechnungen beeinflusst
+                # 1. Invalidiere volume_planning Cache
+                st.session_state.volume_planning_calculated = False
+                st.session_state.volume_planning_cache_key = None
+                # 2. Invalidiere Materiallager Cache
+                if 'saddle_logs_cache' in st.session_state:
+                    del st.session_state.saddle_logs_cache
+                if 'material_inventory_data' in st.session_state:
+                    del st.session_state.material_inventory_data
+                if 'material_inventory_cache_key' in st.session_state:
+                    del st.session_state.material_inventory_cache_key
+                # 3. Invalidiere Produktionslogs Cache
+                if 'production_logs_cache' in st.session_state:
+                    del st.session_state.production_logs_cache
+                if 'production_logs_cache_key' in st.session_state:
+                    del st.session_state.production_logs_cache_key
+                # 4. Invalidiere Caches in ChinaTransportManager (wenn Simulator vorhanden)
+                if 'simulator' in st.session_state and st.session_state.simulator:
+                    if hasattr(st.session_state.simulator, 'china_transport_manager'):
+                        manager = st.session_state.simulator.china_transport_manager
+                        manager._supplier_log_cache = {}
+                        manager._inbound_df_cache = {}
+                        manager._inbound_df_cache_key = None
+                
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
-                st.rerun()
+                _safe_rerun()
         
         elif scenario_type == "Maschinenausfall (China)":
             st.subheader("Maschinenausfall (China)")
@@ -351,7 +387,7 @@ def render_scenario_sidebar(key_suffix=""):
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
-                st.rerun()
+                _safe_rerun()
         
         elif scenario_type == "Verspätung":
             st.subheader("Verspätung")
@@ -432,7 +468,7 @@ def render_scenario_sidebar(key_suffix=""):
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
-                st.rerun()
+                _safe_rerun()
         
         elif scenario_type == "Ladungsverlust auf See":
             st.subheader("Ladungsverlust auf See")
@@ -486,7 +522,7 @@ def render_scenario_sidebar(key_suffix=""):
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 st.success(f"Szenario hinzugefügt: {scenario.name}")
-                st.rerun()
+                _safe_rerun()
         
         st.divider()
         
@@ -536,27 +572,12 @@ def render_scenario_sidebar(key_suffix=""):
                             cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
                             if cache_key in st.session_state:
                                 del st.session_state[cache_key]
-                        st.rerun()
+                        _safe_rerun()
         else:
             st.caption("Keine zusätzlichen Szenarien aktiv")
         
         st.divider()
         
-        # Simulation starten
-        if st.button("🔄 Simulation neu starten", type="primary", use_container_width=True):
-            st.session_state.run_simulation = True
-            st.session_state.manual_restart = True
-            # PERFORMANCE: Invalidiere Cache für geplante Ankunftsdaten bei Simulation-Neustart
-            planning_year = st.session_state.get('planning_year', 2027)
-            for delay_stage in ["truck_china_arrival", "ship_arrival", "truck_de_arrival"]:
-                cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
-                if cache_key in st.session_state:
-                    del st.session_state[cache_key]
-            # PERFORMANCE: Invalidiere Cache für geplante Ankunftsdaten bei Simulation-Neustart
-            planning_year = st.session_state.get('planning_year', 2027)
-            for delay_stage in ["truck_china_arrival", "ship_arrival", "truck_de_arrival"]:
-                cache_key = f"planned_arrival_dates_{delay_stage}_{planning_year}"
-                if cache_key in st.session_state:
-                    del st.session_state[cache_key]
-            st.rerun()
+        # Hinweis: Simulation kann durch Neustart der Seite neu gestartet werden
+        st.caption("💡 Tipp: Die Simulation kann durch Neustart der Seite neu gestartet werden.")
 

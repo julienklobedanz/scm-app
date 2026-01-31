@@ -128,13 +128,12 @@ def run_happy_path_simulation():
         progress_placeholder.progress(progress, text=f"Simulation läuft... ({int(elapsed)}s)")
         status_placeholder.info("🔄 Die Simulation wird ausgeführt. Bitte warten Sie...")
         
-        # WICHTIG: Aktualisiere die Seite regelmäßig (alle 2 Sekunden), aber nur wenn Simulation noch läuft
-        # Verhindere Endlosschleife durch Prüfung der letzten Aktualisierung
-        last_update = st.session_state.get('last_progress_update', 0)
-        if time.time() - last_update > 2:  # Nur alle 2 Sekunden aktualisieren
-            st.session_state.last_progress_update = time.time()
-            time.sleep(0.1)  # Kurze Pause, damit der Progress sichtbar ist
-            st.rerun()
+        # KRITISCH: KEIN st.rerun() hier - das würde eine Endlosschleife verursachen!
+        # Die Simulation läuft bereits im Hintergrund und wird automatisch die Flags zurücksetzen,
+        # wenn sie fertig ist. Ein st.rerun() würde nur die Seite neu laden, während die Simulation
+        # noch läuft, was zu einer Endlosschleife führt.
+        # Stattdessen: Verwende st.stop() um die Seite zu stoppen, bis die Simulation fertig ist.
+        st.stop()
         return
     
     # Prüfe ob Simulation bereits gestartet wurde (aber noch nicht abgeschlossen)
@@ -233,12 +232,10 @@ def ensure_simulator_available():
         
         # WICHTIG: Kein Timeout mehr - Simulation darf so lange laufen wie nötig
         
-        # Aktualisiere regelmäßig (alle 2 Sekunden), aber nur wenn Simulation noch läuft
-        last_update = st.session_state.get('last_progress_update', 0)
-        if time.time() - last_update > 2:
-            st.session_state.last_progress_update = time.time()
-            time.sleep(0.1)
-            st.rerun()
+        # KRITISCH: KEIN st.rerun() hier - das würde eine Endlosschleife verursachen!
+        # Die Simulation läuft bereits im Hintergrund und wird automatisch die Flags zurücksetzen,
+        # wenn sie fertig ist. Ein st.rerun() würde nur die Seite neu laden, während die Simulation
+        # noch läuft, was zu einer Endlosschleife führt.
         
         st.info(f"🔄 Die Simulation wird gerade ausgeführt. Bitte warten Sie... ({int(elapsed)}s)")
         st.stop()  # Stoppe die Seite, bis Simulation fertig ist

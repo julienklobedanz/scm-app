@@ -18,6 +18,10 @@ from ui.utils import initialize_session_state, run_happy_path_simulation, ensure
 
 st.set_page_config(page_title="Lieferant China", page_icon="🇨🇳", layout="wide")
 
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
+
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
@@ -35,6 +39,18 @@ st.markdown("""
     }
     .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
         background-color: #e0e0e0 !important;
+        font-weight: bold !important;
+    }
+    /* Light Mode: Summenzeile hell */
+    .stApp[data-theme="light"] .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child,
+    body:has([data-testid="stSidebar"]:not([style*="background-color: #0e1117"])) .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child {
+        background-color: #e5e7eb !important;
+        color: #262730 !important;
+    }
+    .stApp[data-theme="light"] .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td,
+    body:has([data-testid="stSidebar"]:not([style*="background-color: #0e1117"])) .stDataFrame [data-testid="stDataFrame"] table tbody tr:last-child td {
+        background-color: #e5e7eb !important;
+        color: #262730 !important;
         font-weight: bold !important;
     }
 </style>
@@ -59,6 +75,11 @@ run_happy_path_simulation()
 
 # Prüfe ob Simulator verfügbar ist
 ensure_simulator_available()
+
+# KRITISCH: Prüfe ob Simulator wirklich verfügbar ist (könnte None sein bei Fehlern)
+if 'simulator' not in st.session_state or st.session_state.simulator is None:
+    st.error("❌ Simulator ist nicht verfügbar. Bitte starten Sie die Simulation neu.")
+    st.stop()
 
 manager = st.session_state.simulator.china_transport_manager
 workday_calc = manager.workday_calculator
@@ -100,10 +121,15 @@ for saddle_type in all_saddle_types:
         
         df_display = df[column_order].copy()
         
+        # Theme-aware Styling verwenden (IMPORT ZUERST!)
+        from ui.theme_aware_styling import style_row_with_theme, get_theme_colors, apply_theme_to_styled_dataframe
+        
         # Farblegende oben rechts
         col1, col2 = st.columns([1, 1])
         with col2:
-            st.markdown("""
+            # Theme-aware Legende
+            colors = get_theme_colors()
+            st.markdown(f"""
             <div style="text-align: right; margin-bottom: 10px;">
                 <span style="background-color: #ffcccc; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
                 <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
@@ -146,7 +172,7 @@ for saddle_type in all_saddle_types:
         }
         df_with_sum = pd.concat([df_display, pd.DataFrame([sum_row])], ignore_index=True)
         
-        # Styling-Funktion für Summenzeile
+        # Styling-Funktion für Summenzeile (theme-aware)
         def style_row_with_sum(row):
             row_idx = row.name
             if row_idx < len(df_display):
@@ -155,6 +181,11 @@ for saddle_type in all_saddle_types:
                 return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
         
         styled_df = df_with_sum.style.apply(style_row_with_sum, axis=1)
+        # KRITISCH: Wende Theme-Styling auf Header an (mit Fehlerbehandlung)
+        try:
+            styled_df = apply_theme_to_styled_dataframe(styled_df)
+        except Exception:
+            pass  # Bei Fehler: Verwende Styler ohne Header-Styling
         st.dataframe(styled_df, width='stretch', hide_index=True)
     else:
         st.info(f"Keine Daten für {saddle_type} vorhanden.")

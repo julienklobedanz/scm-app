@@ -16,6 +16,10 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 
 st.set_page_config(page_title="Produktion", layout="wide", page_icon="🏭")
 
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
+
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
 <style>
@@ -233,7 +237,10 @@ for product in sorted(production_logs.keys()):
         weekend_flags_extended = weekend_flags
         holiday_flags_extended = holiday_flags
     
-    # Styling-Funktion mit Summenzeile
+    # Theme-aware Styling verwenden
+    from ui.theme_aware_styling import style_row_with_theme
+    
+    # Styling-Funktion mit Summenzeile (theme-aware)
     def style_row_with_sum(row):
         idx = row.name
         # Summenzeile: grauer Hintergrund, fett
@@ -248,10 +255,13 @@ for product in sorted(production_logs.keys()):
         return [''] * len(row)
     
     # Zeige Tabelle
-    st.dataframe(
-        df_display_with_sum.style.apply(style_row_with_sum, axis=1),
-        width='stretch',
-        hide_index=True
-    )
+    from ui.theme_aware_styling import apply_theme_to_styled_dataframe
+    styled_df = df_display_with_sum.style.apply(style_row_with_sum, axis=1)
+    # KRITISCH: Wende Theme-Styling auf Header an (mit Fehlerbehandlung)
+    try:
+        styled_df = apply_theme_to_styled_dataframe(styled_df)
+    except Exception:
+        pass  # Bei Fehler: Verwende Styler ohne Header-Styling
+    st.dataframe(styled_df, width='stretch', hide_index=True)
     
     st.divider()

@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import date, timedelta
 import math
+import time
 from config.master_data import MasterData
 from simulation.simulator import Simulator
 from models.scenarios import ScenarioManager
@@ -17,6 +18,10 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 from ui.volume_planning_utils import calculate_volume_planning_demand
 
 st.set_page_config(page_title="Reporting", layout="wide", page_icon="📊")
+
+# Theme Toggle (oben rechts, global)
+from ui.theme_toggle import render_theme_toggle
+render_theme_toggle()
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett)
 st.markdown("""
@@ -39,7 +44,14 @@ st.title("📊 Reporting")
 st.markdown("Übersicht über Lagerbestände und Produktionsleistung")
 
 # Happy Path: Automatische Simulation wenn noch keine Ergebnisse vorhanden
-run_happy_path_simulation()
+# PERFORMANCE: Prüfe ob Simulation läuft bevor run_happy_path_simulation() aufgerufen wird
+if not st.session_state.get('simulation_running', False):
+    run_happy_path_simulation()
+else:
+    # Simulation läuft bereits - zeige Info und warte
+    elapsed = time.time() - st.session_state.get('simulation_start_time', time.time())
+    st.info(f"🔄 Simulation läuft... Bitte warten Sie ({int(elapsed)}s)")
+    st.stop()
 
 if st.session_state.results_df is None:
     st.warning("⚠️ Keine Simulationsergebnisse verfügbar.")
@@ -55,12 +67,21 @@ workday_calc = WorkdayCalculator(year=planning_year)
 
 def get_saddle_inventory_data():
     """Holt Sattel-Bestandsdaten aus dem Materiallager"""
+    # PERFORMANCE: Prüfe Cache zuerst (schnellster Check)
     if 'material_inventory_data' in st.session_state and st.session_state.material_inventory_data:
         return st.session_state.material_inventory_data
     
+    # PERFORMANCE: Wenn saddle_logs_cache vorhanden ist, bedeutet das dass material_inventory_data berechnet wurde
+    # aber möglicherweise gelöscht wurde. Versuche es direkt zu berechnen statt Modul zu importieren.
     if 'saddle_logs_cache' in st.session_state:
+        # Versuche material_inventory_data direkt zu berechnen (schneller als Modul-Import)
+        from ui.material_calculations import calculate_material_inventory
+        material_inventory_data, _ = calculate_material_inventory()
+        if material_inventory_data:
+            return material_inventory_data
         return {}
     
+    # PERFORMANCE: Fallback auf Modul-Import nur wenn wirklich nötig
     if 'simulator' in st.session_state and st.session_state.simulator:
         import importlib.util
         import os
@@ -82,6 +103,11 @@ def get_saddle_inventory_data():
 
 def get_bicycle_inventory_data():
     """Berechnet Fahrrad-Bestandsdaten kumulativ"""
+    # PERFORMANCE: Cache für bicycle_inventory_data
+    cache_key = f"bicycle_inventory_data_{st.session_state.get('production_logs_cache_key', 'none')}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+    
     bicycle_inventory = {}
     stock_by_product = {product: 0.0 for product in MasterData.BOM.keys()}
     
@@ -97,8 +123,13 @@ def get_bicycle_inventory_data():
     # Hole tägliche Nachfrage (für Lagerabgang)
     daily_demands_actual = st.session_state.get('daily_demands_actual', {})
     
+    # PERFORMANCE: Verwende Date-Cache für bessere Performance
+    date_cache = {}
     for day in range(365):
-        current_date = workday_calc.get_date_from_day(day)
+        date_cache[day] = workday_calc.get_date_from_day(day)
+    
+    for day in range(365):
+        current_date = date_cache[day]
         bicycle_inventory[current_date] = {}
         
         # Für jedes Produkt
@@ -136,12 +167,19 @@ def get_bicycle_inventory_data():
             stock_by_product[product] = max(0.0, stock_evening)
             bicycle_inventory[current_date][product] = stock_by_product[product]
     
+    # PERFORMANCE: Cache Ergebnis
+    st.session_state[cache_key] = bicycle_inventory
     return bicycle_inventory
 
 def get_production_logs():
     """Liest Produktionslogs direkt aus dem ProductionPlanner"""
     if 'simulator' not in st.session_state or st.session_state.simulator is None:
         return {}
+    
+    # KRITISCH: Prüfe ob Simulator wirklich verfügbar ist (könnte None sein bei Fehlern)
+    if 'simulator' not in st.session_state or st.session_state.simulator is None:
+        st.error("❌ Simulator ist nicht verfügbar. Bitte starten Sie die Simulation neu.")
+        st.stop()
     
     planner = st.session_state.simulator.production_planner
     
@@ -162,6 +200,7 @@ tab1, tab2, tab3 = st.tabs(["📅 Volumenplanung", "📦 Material", "🏭 Produk
 
 with tab1:
     # Lade Volumenplanungsdaten
+    # PERFORMANCE: calculate_volume_planning_demand() prüft selbst den Cache
     # WICHTIG: Immer aufrufen - Funktion prüft selbst, ob Cache noch gültig ist
     # (durch Vergleich des Cache-Keys mit aktiven Szenarien)
     calculate_volume_planning_demand()
@@ -373,17 +412,23 @@ with tab1:
 with tab2:
     st.header("📦 KPI-Dashboard Materiallager")
     
+    # PERFORMANCE: Prüfe Cache bevor teure Berechnungen ausgeführt werden
     # WICHTIG: Stelle sicher, dass alle abhängigen Daten aktualisiert sind
     # 1. Volumenplanung (Basis für alle anderen Berechnungen)
+    # PERFORMANCE: calculate_volume_planning_demand() prüft selbst den Cache
     calculate_volume_planning_demand()
     
     # 2. Produktionslogs (invalidiert Material-Cache nach Berechnung)
+    # PERFORMANCE: calculate_production_logs() prüft selbst den Cache
     from ui.production_calculations import calculate_production_logs
-    calculate_production_logs()
+    with st.spinner("Berechne Produktionslogs..."):
+        calculate_production_logs()
     
     # 3. Materialinventar (neu berechnet mit aktualisierten Produktionsdaten)
+    # PERFORMANCE: calculate_material_inventory() prüft selbst den Cache
     from ui.material_calculations import calculate_material_inventory
-    calculate_material_inventory()
+    with st.spinner("Berechne Materialinventar..."):
+        calculate_material_inventory()
     
     # Hole Materiallager-Daten
     saddle_inventory_data = get_saddle_inventory_data()
@@ -572,13 +617,17 @@ with tab3:
     # KPI-Dashboard Produktion
     st.header("🏭 KPI-Dashboard Produktion")
     
+    # PERFORMANCE: Prüfe Cache bevor teure Berechnungen ausgeführt werden
     # WICHTIG: Stelle sicher, dass alle abhängigen Daten aktualisiert sind
     # 1. Volumenplanung (Basis für Produktionsberechnung)
+    # PERFORMANCE: calculate_volume_planning_demand() prüft selbst den Cache
     calculate_volume_planning_demand()
     
     # 2. Produktionslogs (dynamisch, berücksichtigt Marketing)
+    # PERFORMANCE: calculate_production_logs() prüft selbst den Cache
     from ui.production_calculations import calculate_production_logs
-    production_logs_cache = calculate_production_logs()
+    with st.spinner("Berechne Produktionslogs..."):
+        production_logs_cache = calculate_production_logs()
     
     # Berechne KPIs aus production_logs_cache (dynamisch, mit Marketing)
     if production_logs_cache:
