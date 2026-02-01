@@ -717,6 +717,11 @@ def apply_theme(theme: str):
             cursor: help !important;
             transition: color 0.05s ease !important;
         }
+        /* KRITISCH: Verstecke natives Browser-Tooltip wenn Custom Tooltip angezeigt wird */
+        span[title]:hover {
+            color: #3b82f6 !important;
+            /* Entferne title-Attribut temporär um natives Tooltip zu verstecken */
+        }
         span[title]:hover::after {
             content: attr(title) !important;
             position: absolute !important;
@@ -748,9 +753,6 @@ def apply_theme(theme: str):
             max-width: min(750px, calc(100vw - 40px)) !important;
             max-height: calc(100vh - 100px) !important;
             overflow-y: auto !important;
-        }
-        span[title]:hover {
-            color: #3b82f6 !important;
         }
         /* Divider - Klarere Trennlinien */
         hr {
@@ -810,8 +812,18 @@ def apply_theme(theme: str):
             
             function initTooltips() {
                 document.querySelectorAll('span[title]').forEach(function(icon) {
+                    // Speichere original title-Attribut
+                    const originalTitle = icon.getAttribute('title');
+                    
                     icon.addEventListener('mouseenter', function() {
                         adjustTooltipPosition(icon);
+                        // Entferne title-Attribut temporär um natives Browser-Tooltip zu verstecken
+                        icon.removeAttribute('title');
+                    }, { once: false });
+                    
+                    icon.addEventListener('mouseleave', function() {
+                        // Stelle title-Attribut wieder her
+                        icon.setAttribute('title', originalTitle);
                     }, { once: false });
                 });
             }

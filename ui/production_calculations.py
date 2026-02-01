@@ -536,3 +536,101 @@ def calculate_production_logs():
             del st.session_state[k]
             
     return production_logs
+
+
+def get_material_consumption_by_date(
+    selected_date: date,
+    production_logs_cache: Dict[str, pd.DataFrame],
+    planning_year: int
+) -> pd.DataFrame:
+    """
+    Aggregiert Materialverbrauch pro Produkt für ein bestimmtes Datum.
+    
+    Diese Funktion analysiert, wie viel welchen Materials an einem bestimmten Tag
+    für welches Fertigprodukt verwendet wurde, basierend auf der tatsächlichen Produktion.
+    
+    Args:
+        selected_date: Datum für die Analyse
+        production_logs_cache: Dictionary mit Produktionslogs pro Produkt
+        planning_year: Planungsjahr
+        
+    Returns:
+        DataFrame mit Spalten:
+        - Produkt: Name des Fertigprodukts
+        - Material-Typ: Sattel-Typ (aus BOM)
+        - Geplante PM: Geplante Produktionsmenge
+        - Tatsächliche PM: Tatsächlich produzierte Menge
+        - Materialverbrauch: Verbrauchtes Material (gleich tatsächliche PM)
+        - Abweichung: Tatsächliche PM - Geplante PM
+        - Materialverfügbarkeit: Verfügbares Material morgens (falls verfügbar)
+    """
+    if not production_logs_cache:
+        return pd.DataFrame()
+    
+    date_str = selected_date.strftime(MasterData.DATE_FORMAT)
+    results = []
+    
+    for product_name, df in production_logs_cache.items():
+        if df.empty or 'Datum' not in df.columns:
+            continue
+        
+        # Finde Zeile für das ausgewählte Datum
+        matching_rows = df[df['Datum'] == date_str]
+        if matching_rows.empty:
+            continue
+        
+        row = matching_rows.iloc[0]
+        
+        # Hole Material-Typ aus BOM
+        required_saddle = MasterData.BOM.get(product_name, {}).get('saddle')
+        if not required_saddle:
+            continue
+        
+        # Extrahiere Werte
+        planned_pm = row.get('geplante PM', 0)
+        actual_pm = row.get('tatsächliche PM', 0)
+        material_consumption = row.get('material_verbrauch', actual_pm)  # Fallback auf tatsächliche PM
+        
+        # Konvertiere zu numerischen Werten
+        try:
+            planned_pm = float(planned_pm) if planned_pm else 0.0
+            actual_pm = float(actual_pm) if actual_pm else 0.0
+            material_consumption = float(material_consumption) if material_consumption else 0.0
+        except (ValueError, TypeError):
+            planned_pm = 0.0
+            actual_pm = 0.0
+            material_consumption = 0.0
+        
+        # Materialverfügbarkeit (falls verfügbar in der Zeile)
+        material_availability = None
+        if required_saddle in df.columns:
+            try:
+                availability_val = row.get(required_saddle, None)
+                if availability_val is not None:
+                    material_availability = float(availability_val) if availability_val else 0.0
+            except (ValueError, TypeError):
+                pass
+        
+        # Berechne Abweichung
+        deviation = actual_pm - planned_pm
+        
+        # Nur hinzufügen wenn tatsächlich produziert wurde oder geplant war
+        if actual_pm > 0 or planned_pm > 0:
+            results.append({
+                'Produkt': product_name,
+                'Material-Typ': required_saddle,
+                'Geplante PM': int(planned_pm),
+                'Tatsächliche PM': int(actual_pm),
+                'Materialverbrauch': int(material_consumption),
+                'Abweichung': int(deviation),
+                'Materialverfügbarkeit': int(material_availability) if material_availability is not None else None
+            })
+    
+    if not results:
+        return pd.DataFrame()
+    
+    # Erstelle DataFrame und sortiere nach Material-Typ und Produkt
+    result_df = pd.DataFrame(results)
+    result_df = result_df.sort_values(['Material-Typ', 'Produkt'])
+    
+    return result_df

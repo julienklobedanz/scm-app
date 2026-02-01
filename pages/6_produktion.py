@@ -125,6 +125,123 @@ if not production_logs:
     st.warning("⚠️ Keine Produktionsdaten verfügbar.")
     st.stop()
 
+# NEU: Materialverbrauch-Analyse pro Datum
+st.markdown("---")
+st.subheader("📊 Materialverbrauch-Analyse")
+st.markdown("<style>div[data-testid='stDataFrame'] { margin-bottom: 0.1rem !important; }</style>", unsafe_allow_html=True)
+
+col_date, col_info = st.columns([2, 3])
+with col_date:
+    selected_date = st.date_input(
+        "📅 Datum auswählen:",
+        value=date(planning_year, 1, 1),
+        min_value=date(planning_year, 1, 1),
+        max_value=date(planning_year, 12, 31),
+        key="material_consumption_date"
+    )
+
+# Prüfe ob Datum ein Arbeitstag ist
+# Berechne Tag-Index: Differenz zwischen selected_date und 1. Januar des Planungsjahres
+start_date = date(planning_year, 1, 1)
+day_index = (selected_date - start_date).days
+is_workday = workday_calc.is_workday(day_index) if 0 <= day_index < 365 else False
+
+if selected_date:
+    from ui.production_calculations import get_material_consumption_by_date
+    
+    try:
+        consumption_df = get_material_consumption_by_date(
+            selected_date, production_logs, planning_year
+        )
+        
+        if not consumption_df.empty:
+            # Gruppiere nach Material-Typ
+            material_types = sorted(consumption_df['Material-Typ'].unique())
+            
+            # CSS für kompakte Tabellen-Abstände
+            st.markdown("""
+            <style>
+            /* Reduziere Abstände zwischen DataFrames drastisch */
+            div[data-testid="stDataFrame"] {
+                margin-top: 0 !important;
+                margin-bottom: 0.1rem !important;
+            }
+            /* Reduziere Abstände nach Überschriften */
+            h3 {
+                margin-top: 0.2rem !important;
+                margin-bottom: 0.1rem !important;
+            }
+            /* Reduziere Abstände nach HR */
+            hr {
+                margin: 0.05rem 0 !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            for idx, saddle_type in enumerate(material_types):
+                saddle_df = consumption_df[consumption_df['Material-Typ'] == saddle_type].copy()
+                
+                # Dünne Trennlinie mit sehr minimalem Abstand (nur zwischen Material-Typen)
+                if idx > 0:
+                    st.markdown("<hr style='margin: 0.05rem 0 !important; border: none; border-top: 1px solid #e0e0e0;'>", unsafe_allow_html=True)
+                
+                # Überschrift mit minimalem Abstand
+                st.markdown(f"<h3 style='margin-top: 0.2rem !important; margin-bottom: 0.1rem !important;'>{saddle_type}</h3>", unsafe_allow_html=True)
+                
+                # Erstelle Anzeige-Tabelle
+                display_cols = ['Produkt', 'Geplante PM', 'Tatsächliche PM', 'Materialverbrauch', 'Abweichung']
+                if 'Materialverfügbarkeit' in saddle_df.columns and saddle_df['Materialverfügbarkeit'].notna().any():
+                    display_cols.append('Materialverfügbarkeit')
+                
+                display_df = saddle_df[display_cols].copy()
+                
+                # Berechne Summen für Summenzeile
+                total_consumption = saddle_df['Materialverbrauch'].sum()
+                total_planned = saddle_df['Geplante PM'].sum()
+                total_actual = saddle_df['Tatsächliche PM'].sum()
+                total_deviation = total_actual - total_planned
+                
+                # Erstelle Summenzeile
+                sum_row = {'Produkt': '**Summe**'}
+                sum_row['Geplante PM'] = int(total_planned)
+                sum_row['Tatsächliche PM'] = int(total_actual)
+                sum_row['Materialverbrauch'] = int(total_consumption)
+                sum_row['Abweichung'] = int(total_deviation)
+                if 'Materialverfügbarkeit' in display_cols:
+                    # Summe der Materialverfügbarkeit (falls verfügbar)
+                    if saddle_df['Materialverfügbarkeit'].notna().any():
+                        sum_row['Materialverfügbarkeit'] = int(saddle_df['Materialverfügbarkeit'].sum())
+                    else:
+                        sum_row['Materialverfügbarkeit'] = None
+                
+                # Füge Summenzeile zum DataFrame hinzu
+                sum_df = pd.DataFrame([sum_row])
+                display_df_with_sum = pd.concat([display_df, sum_df], ignore_index=True)
+                
+                # Zeige kompakte Tabelle mit Styling für Summenzeile
+                styled_df = display_df_with_sum.style.apply(
+                    lambda row: ['font-weight: bold; background-color: #f0f0f0' if row.name == len(display_df_with_sum) - 1 else '' for _ in row],
+                    axis=1
+                )
+                st.dataframe(
+                    styled_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            if is_workday:
+                st.info(f"ℹ️ Am {selected_date.strftime('%d.%m.%Y')} wurde kein Material verbraucht.")
+            else:
+                st.info(f"ℹ️ Am {selected_date.strftime('%d.%m.%Y')} ist kein Arbeitstag - keine Produktion.")
+                
+    except Exception as e:
+        st.error(f"⚠️ Fehler bei Materialverbrauch-Analyse: {str(e)}")
+        # Debug-Info (kann später entfernt werden)
+        if st.session_state.get('debug_mode', False):
+            st.exception(e)
+
+st.markdown("---")
+
 # Zeige Tabelle für jedes Produkt
 for product in sorted(production_logs.keys()):
     st.subheader(f"📋 {product}")
