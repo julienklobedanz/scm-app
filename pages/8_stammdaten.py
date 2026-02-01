@@ -139,6 +139,48 @@ def _reset_to_defaults():
     MasterData.PRODUCT_SALES_SHARES = default_product_sales_shares.copy()
     MasterData.SEASONALITY = default_seasonality.copy()
     
+    # KRITISCH: Setze Beschaffungs-Parameter auf Standardwerte zurück
+    # Lieferanten-Parameter (China)
+    default_supplier_params = {
+        'federal_state': 'Alle',
+        'lead_time': 49,
+        'order_entry_duration': 1,
+        'production_time': 5,
+        'lot_size': 500
+    }
+    MasterData.SUPPLIERS['China'] = default_supplier_params.copy()
+    
+    # CHINA_SUPPLIER Parameter synchronisieren
+    MasterData.CHINA_SUPPLIER['Saddles']['lead_time'] = 49
+    MasterData.CHINA_SUPPLIER['Saddles']['lot_size'] = 500
+    MasterData.CHINA_SUPPLIER['Frames']['lead_time'] = 49
+    MasterData.CHINA_SUPPLIER['Frames']['lot_size'] = 500
+    
+    # Beschaffungs-Routen auf Standardwerte zurücksetzen (duration aus MasterData, nicht standard_duration)
+    # WICHTIG: Verwende die aktuellen duration-Werte aus MasterData.PROCUREMENT_ROUTES als Standard
+    # Diese sind die korrekten Werte für die Berechnung (z.B. 30 KT für Schiff, nicht 22)
+    default_procurement_routes = [
+        {'supplier': 'China', 'component': 'Sattel', 'departure': 'China', 'arrival': 'China', 
+         'transport': 'LKW-Typ2', 'duration': 2, 'type': 'AT', 'standard_duration': 2},
+        {'supplier': 'China', 'component': 'Sattel', 'departure': 'China', 'arrival': 'Deutschland', 
+         'transport': 'Schiff-Typ30', 'duration': 30, 'type': 'KT', 'standard_duration': 22},
+        {'supplier': 'China', 'component': 'Sattel', 'departure': 'Deutschland', 'arrival': 'Deutschland', 
+         'transport': 'LKW-Typ2', 'duration': 2, 'type': 'AT', 'standard_duration': 2},
+        {'supplier': 'Deutschland', 'component': 'Rahmen', 'departure': 'Deutschland', 'arrival': 'Deutschland', 
+         'transport': 'LKW-Typ3', 'duration': 3, 'type': 'AT', 'standard_duration': 3},
+        {'supplier': 'Spanien', 'component': 'Gabel', 'departure': 'Spanien', 'arrival': 'Deutschland', 
+         'transport': 'Bahn-Typ9', 'duration': 9, 'type': 'KT', 'standard_duration': 7}
+    ]
+    
+    # Setze PROCUREMENT_ROUTES auf Standardwerte zurück (duration-Werte, nicht standard_duration)
+    for i, route in enumerate(MasterData.PROCUREMENT_ROUTES):
+        if i < len(default_procurement_routes):
+            default_route = default_procurement_routes[i]
+            # Setze duration auf den Standardwert (30 für Schiff, nicht 22)
+            route['duration'] = default_route['duration']
+            # Behalte standard_duration als Referenzwert
+            if 'standard_duration' in default_route:
+                route['standard_duration'] = default_route['standard_duration']
     
     # Synchronisiere auch yearly_volume
     st.session_state.yearly_volume = default_global_config['total_volume']
@@ -291,6 +333,7 @@ with tab2:
     }
     
     # Feste Reihenfolge: Zeile 1 = Gesamtvolumen, Kapazität, Montagelinien | Zeile 2 = Min. Schichten, Max. Schichten, Arbeitsstunden/Schicht
+    # WICHTIG: batch_size ist nicht in ordered_keys enthalten und wird daher nicht angezeigt
     ordered_keys = [
         'total_volume', 'capacity_per_hour', 'assembly_lines',
         'min_shifts_per_day', 'max_shifts_per_day', 'working_hours_per_shift'
@@ -426,27 +469,17 @@ with tab2:
             
             # Cache-Invalidierung bei Parameteränderungen
             _invalidate_all_caches()
+            
+            # KRITISCH: Setze Simulator zurück, damit neue DAILY_WORKLOAD-Werte verwendet werden
+            # Der WorkdayCalculator im Simulator muss die neuen Werte aus MasterData.DAILY_WORKLOAD lesen
+            st.session_state.happy_path_run = False
+            st.session_state.results_df = None
+            st.session_state.simulator = None
+            st.session_state.simulation_running = False
+            st.session_state.simulation_started = False
         else:
             diff = abs(week_total - 1.0)
             st.error(f"❌ **Wochensumme beträgt {week_total:.1f} (Abweichung: {diff:.1f}). Die Summe muss exakt 1.0 (100%) ergeben!**")
-            
-            # Option zur automatischen Normalisierung
-            if st.button("🔧 Automatisch auf 1.0 normalisieren", key="normalize_workload"):
-                if week_total > 0:
-                    # Normalisiere auf 1.0
-                    for day, workload in workload_values.items():
-                        normalized = workload / week_total
-                        st.session_state.editable_daily_workload[day] = normalized
-                    
-                    # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData
-                    for day, workload in st.session_state.editable_daily_workload.items():
-                        MasterData.DAILY_WORKLOAD[day] = workload
-                    
-                    st.success("✅ Tägliche Arbeitslast automatisch normalisiert!")
-                    _invalidate_all_caches()
-                    st.rerun()
-                else:
-                    st.error("❌ **Wochensumme muss größer als 0 sein!**")
     
     # Verkaufsanteile (editierbar)
     st.subheader("Verkaufsanteile pro Produkt")
@@ -529,21 +562,6 @@ with tab2:
             # Summe ist nicht 100%, aber > 0
             diff = abs(new_total - 100.0)
             st.error(f"❌ **Summe beträgt {new_total:.1f}% (Abweichung: {diff:.1f}%). Die Summe muss exakt 100% ergeben, damit Berechnungen erfolgen können!**")
-            
-            # Option zur automatischen Normalisierung
-            if st.button("🔧 Automatisch auf 100% normalisieren", key="normalize_sales"):
-                # Normalisiere auf 100%
-                for product, percentage in sales_values.items():
-                    normalized = (percentage / new_total) * 100.0
-                    st.session_state.editable_product_sales_shares[product] = normalized / 100.0
-                
-                # KRITISCH: Synchronisiere PRODUCT_SALES_SHARES mit MasterData
-                for product, share in st.session_state.editable_product_sales_shares.items():
-                    MasterData.PRODUCT_SALES_SHARES[product] = share
-                
-                st.success("✅ Verkaufsanteile automatisch normalisiert!")
-                sales_changed = True
-                st.rerun()
         else:
             st.error("❌ **Summe der Verkaufsanteile muss größer als 0 sein!**")
     
@@ -655,21 +673,6 @@ with tab2:
             # Summe ist nicht 100%, aber > 0
             diff = abs(new_total - 100.0)
             st.error(f"❌ **Summe beträgt {new_total:.1f}% (Abweichung: {diff:.1f}%). Die Summe muss exakt 100% ergeben, damit Berechnungen erfolgen können!**")
-            
-            # Option zur automatischen Normalisierung
-            if st.button("🔧 Automatisch auf 100% normalisieren", key="normalize_seasonality"):
-                # Normalisiere auf 100%
-                for month, percentage in seasonality_values.items():
-                    normalized = (percentage / new_total) * 100.0
-                    st.session_state.editable_seasonality[month] = normalized / 100.0
-                
-                # KRITISCH: Synchronisiere SEASONALITY mit MasterData
-                for month, factor in st.session_state.editable_seasonality.items():
-                    MasterData.SEASONALITY[month] = factor
-                
-                st.success("✅ Saisonalität automatisch normalisiert!")
-                seasonality_changed = True
-                st.rerun()
         else:
             st.error("❌ **Summe der Produktionsanteile muss größer als 0 sein!**")
     

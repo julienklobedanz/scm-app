@@ -574,7 +574,8 @@ class ProductionPlanner:
                 '_Anteilige_Produktion': int(round(proportional_pm)),
                 '_zu_produzierende_Mengen': int(round(scheduled_pm)),
                 'Is_Weekend': is_weekend,
-                'Is_Holiday': is_holiday
+                'Is_Holiday': is_holiday,
+                'Is_Workday': is_workday
             }
             
             self.production_logs[product].append(log_entry)

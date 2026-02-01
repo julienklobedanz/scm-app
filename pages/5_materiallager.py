@@ -171,12 +171,20 @@ for saddle_type in sorted(saddle_logs.keys()):
     df_filt.reset_index(drop=True, inplace=True)
     weekend_flags = df_filt['Is_Weekend'].values
     holiday_flags = df_filt['Is_Holiday'].values
+    workday_flags = df_filt['Is_Workday'].values if 'Is_Workday' in df_filt.columns else None
+    # Nicht-Arbeitstage: Tage die nicht Wochenende sind, aber auch kein Arbeitstag (DAILY_WORKLOAD = 0.0)
+    non_workday_flags = None
+    if workday_flags is not None:
+        non_workday_flags = ~workday_flags & ~weekend_flags
     
     def style_row_safe(row):
         if row.name < len(weekend_flags):
             if weekend_flags[row.name]:
                 return ['background-color: #ffcccc'] * len(row)
             if holiday_flags[row.name]:
+                return ['background-color: #c8e6c9'] * len(row)
+            # Nicht-Arbeitstage (DAILY_WORKLOAD = 0.0) - grün wie Feiertage
+            if non_workday_flags is not None and row.name < len(non_workday_flags) and non_workday_flags[row.name]:
                 return ['background-color: #c8e6c9'] * len(row)
         return [''] * len(row)
 
@@ -202,10 +210,12 @@ for saddle_type in sorted(saddle_logs.keys()):
         # Erweitere Flags für Summenzeile
         weekend_flags_extended = list(weekend_flags) + [False]
         holiday_flags_extended = list(holiday_flags) + [False]
+        non_workday_flags_extended = list(non_workday_flags) + [False] if non_workday_flags is not None else None
     else:
         df_display_with_sum = df_display
         weekend_flags_extended = weekend_flags
         holiday_flags_extended = holiday_flags
+        non_workday_flags_extended = non_workday_flags
     
     # Theme-aware Styling verwenden
     from ui.theme_aware_styling import style_row_with_theme, get_theme_colors, apply_theme_to_styled_dataframe
@@ -222,6 +232,9 @@ for saddle_type in sorted(saddle_logs.keys()):
                 return ['background-color: #ffcccc'] * len(row)
             if holiday_flags_extended[idx]:
                 return ['background-color: #c8e6c9'] * len(row)
+            # Nicht-Arbeitstage (DAILY_WORKLOAD = 0.0) - grün wie Feiertage
+            if non_workday_flags_extended is not None and idx < len(non_workday_flags_extended) and non_workday_flags_extended[idx]:
+                return ['background-color: #c8e6c9'] * len(row)
         return [''] * len(row)
     
     # Theme-aware Farblegende
@@ -231,7 +244,7 @@ for saddle_type in sorted(saddle_logs.keys()):
         st.markdown(f"""
         <div style="text-align: right; margin-bottom: 10px;">
             <span style="background-color: #ffcccc; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Wochenende</span>
-            <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag</span>
+            <span style="background-color: #c8e6c9; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Feiertag / Kein Arbeitstag</span>
         </div>
         """, unsafe_allow_html=True)
     

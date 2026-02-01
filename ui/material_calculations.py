@@ -202,10 +202,13 @@ def calculate_material_inventory():
         weekday_abbr = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][weekday]
         is_weekend = weekday >= 5
         is_holiday = False
+        is_workday = False
         
         if 0 <= day < 365:
             if current_date in workday_calc.german_holidays:
                 is_holiday = True
+            # Prüfe ob Arbeitstag (berücksichtigt DAILY_WORKLOAD)
+            is_workday = workday_calc.is_workday(day)
         
         # 1. Zugang (aus transport_status - synchron mit Produktion!)
         receipt_by_saddle = receipts_by_date_and_saddle.get(current_date, {s: 0.0 for s in saddle_types})
@@ -259,7 +262,8 @@ def calculate_material_inventory():
                 'Verlustmenge': int(round(loss_qty)) if loss_qty > 0 else 0,
                 'Bestand abends': int(round(stock_evening[s])),
                 'Is_Weekend': is_weekend,
-                'Is_Holiday': is_holiday
+                'Is_Holiday': is_holiday,
+                'Is_Workday': is_workday
             })
             
         material_inventory_data[current_date] = stock_morning.copy()
