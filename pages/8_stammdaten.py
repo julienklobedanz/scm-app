@@ -87,14 +87,64 @@ render_scenario_sidebar(key_suffix="_stammdaten")
 if 'scenario_manager' not in st.session_state:
     st.session_state.scenario_manager = ScenarioManager()
 
-# OPTIMIERUNG: Initialisiere editierbare Stammdaten in Session State (nur einmal beim ersten Laden)
-# Verwende einen Flag, um zu prüfen, ob alle initialisiert wurden
+# FIX: Initialisiere editierbare Stammdaten in Session State
+# WICHTIG: Bei Browser-Reload (wenn stammdaten_initialized nicht gesetzt ist) werden alle Werte auf Standard zurückgesetzt
+def _reset_to_defaults():
+    """Setzt alle editierbaren Parameter auf Standardwerte zurück"""
+    # Standardwerte aus MasterData-Klassendefinition
+    default_bom = {
+        'MTB Allrounder': {'frame': 'Aluminium 7005DB', 'saddle': 'Spark', 'fork': 'Fox32 F100'},
+        'MTB Competition': {'frame': 'Carbon Monocoque', 'saddle': 'Speed line', 'fork': 'Fox Talas140'},
+        'MTB Downhill': {'frame': 'Aluminium 7005TB', 'saddle': 'Fizik Tundra', 'fork': 'Rock Schox Recon351'},
+        'MTB Extreme': {'frame': 'Carbon Monocoque', 'saddle': 'Spark', 'fork': 'Rock Schox Reba'},
+        'MTB Freeride': {'frame': 'Aluminium 7005TB', 'saddle': 'Fizik Tundra', 'fork': 'Fox32 F80'},
+        'MTB Marathon': {'frame': 'Aluminium 7005DB', 'saddle': 'Race line', 'fork': 'Rock Schox ReconSL'},
+        'MTB Performance': {'frame': 'Aluminium 7005TB', 'saddle': 'Fizik Tundra', 'fork': 'Rock Schox Reba'},
+        'MTB Trail': {'frame': 'Carbon Monocoque', 'saddle': 'Speed line', 'fork': 'SR Suntour Raidon'}
+    }
+    default_global_config = {
+        'total_volume': 370000,
+        'capacity_per_hour': 130,
+        'assembly_lines': 1,
+        'min_shifts_per_day': 1,
+        'max_shifts_per_day': 3,
+        'working_hours_per_shift': 8,
+        'batch_size': 1
+    }
+    default_daily_workload = {
+        'Montag': 0.2, 'Dienstag': 0.2, 'Mittwoch': 0.2, 'Donnerstag': 0.2,
+        'Freitag': 0.2, 'Samstag': 0.0, 'Sonntag': 0.0
+    }
+    default_product_sales_shares = {
+        'MTB Allrounder': 0.30, 'MTB Competition': 0.15, 'MTB Downhill': 0.10,
+        'MTB Extreme': 0.07, 'MTB Freeride': 0.05, 'MTB Marathon': 0.08,
+        'MTB Performance': 0.12, 'MTB Trail': 0.13
+    }
+    default_seasonality = {
+        1: 0.04, 2: 0.06, 3: 0.10, 4: 0.16, 5: 0.14, 6: 0.13,
+        7: 0.12, 8: 0.09, 9: 0.06, 10: 0.03, 11: 0.04, 12: 0.03
+    }
+    
+    # Setze Session State auf Standardwerte
+    st.session_state.editable_bom = default_bom.copy()
+    st.session_state.editable_global_config = default_global_config.copy()
+    st.session_state.editable_daily_workload = default_daily_workload.copy()
+    st.session_state.editable_product_sales_shares = default_product_sales_shares.copy()
+    st.session_state.editable_seasonality = default_seasonality.copy()
+    
+    # KRITISCH: Synchronisiere auch MasterData mit Standardwerten
+    MasterData.BOM = default_bom.copy()
+    MasterData.GLOBAL_CONFIG = default_global_config.copy()
+    MasterData.DAILY_WORKLOAD = default_daily_workload.copy()
+    MasterData.PRODUCT_SALES_SHARES = default_product_sales_shares.copy()
+    MasterData.SEASONALITY = default_seasonality.copy()
+    
+    
+    # Synchronisiere auch yearly_volume
+    st.session_state.yearly_volume = default_global_config['total_volume']
+
 if 'stammdaten_initialized' not in st.session_state:
-    st.session_state.editable_bom = MasterData.BOM.copy()
-    st.session_state.editable_global_config = MasterData.GLOBAL_CONFIG.copy()
-    st.session_state.editable_daily_workload = MasterData.DAILY_WORKLOAD.copy()
-    st.session_state.editable_product_sales_shares = MasterData.PRODUCT_SALES_SHARES.copy()
-    st.session_state.editable_seasonality = MasterData.SEASONALITY.copy()
+    _reset_to_defaults()
     st.session_state.stammdaten_initialized = True
 
 st.title("📋 Stammdaten")
@@ -333,6 +383,8 @@ with tab2:
     col1, col2, col3, col4 = st.columns(4)
     
     weekdays = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
+    workload_values = {}
+    
     for i, day in enumerate(weekdays):
         col_idx = i % 4
         with [col1, col2, col3, col4][col_idx]:
@@ -345,21 +397,53 @@ with tab2:
                 format="%.1f",
                 key=f"workload_{day}"
             )
+            workload_values[day] = new_workload
             if new_workload != st.session_state.editable_daily_workload[day]:
-                st.session_state.editable_daily_workload[day] = new_workload
                 workload_changed = True
     
+    # Berechne Wochensumme
+    week_total = sum(workload_values.values())
+    st.markdown(f"**Wochensumme: {week_total:.1f} (muss exakt 1.0 = 100% sein)**")
+    
+    # Validierung: Wochensumme muss genau 1.0 sein
     if workload_changed:
-        st.success("✅ Tägliche Arbeitslast aktualisiert!")
-        
-        # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData
-        for day, workload in st.session_state.editable_daily_workload.items():
-            MasterData.DAILY_WORKLOAD[day] = workload
-        
-        # Cache-Invalidierung bei Parameteränderungen
-        _invalidate_all_caches()
-        
-        # Kein st.rerun() - Streamlit aktualisiert automatisch
+        if abs(week_total - 1.0) < 0.01:  # Toleranz von 0.01
+            # Summe ist genau 1.0 - speichere Änderungen
+            for day, workload in workload_values.items():
+                st.session_state.editable_daily_workload[day] = workload
+            
+            # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData
+            for day, workload in st.session_state.editable_daily_workload.items():
+                MasterData.DAILY_WORKLOAD[day] = workload
+            
+            st.success("✅ Tägliche Arbeitslast aktualisiert!")
+            
+            # Cache-Invalidierung bei Parameteränderungen
+            _invalidate_all_caches()
+        else:
+            diff = abs(week_total - 1.0)
+            st.error(f"❌ **Wochensumme beträgt {week_total:.1f} (Abweichung: {diff:.1f}). Die Summe muss exakt 1.0 (100%) ergeben!**")
+            
+            # Option zur automatischen Normalisierung
+            if st.button("🔧 Automatisch auf 1.0 normalisieren", key="normalize_workload"):
+                if week_total > 0:
+                    # Normalisiere auf 1.0
+                    for day, workload in workload_values.items():
+                        normalized = workload / week_total
+                        st.session_state.editable_daily_workload[day] = normalized
+                    
+                    # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData
+                    for day, workload in st.session_state.editable_daily_workload.items():
+                        MasterData.DAILY_WORKLOAD[day] = workload
+                    
+                    st.success("✅ Tägliche Arbeitslast automatisch normalisiert!")
+                    _invalidate_all_caches()
+                    st.rerun()
+                else:
+                    st.error("❌ **Wochensumme muss größer als 0 sein!**")
+    
+    # Hinweis: 0.0 bedeutet freier Tag (wird wie Wochenende/Feiertag behandelt)
+    st.info("💡 **Hinweis:** Ein Wert von 0.0 bedeutet, dass dieser Wochentag wie ein freier Tag behandelt wird (kein Arbeitstag). Dies wird in allen abhängigen Berechnungen berücksichtigt.")
     
     # Verkaufsanteile (editierbar)
     st.subheader("Verkaufsanteile pro Produkt")
@@ -631,18 +715,22 @@ with tab4:
     
     # Lieferanten-Parameter
     st.subheader("Lieferanten-Parameter und Standorte")
+    # FIX: Lese aktuelle Werte direkt aus MasterData (wird bei Reiter-Wechsel aktualisiert)
+    # Verwende einen dynamischen Key basierend auf der Vorlaufzeit, damit die Tabelle neu gerendert wird
+    current_lead_time = MasterData.SUPPLIERS['China']['lead_time']
     suppliers_data = []
     for supplier, params in MasterData.SUPPLIERS.items():
         suppliers_data.append({
             'Lieferant': supplier,
             'Bundesland/Region': params['federal_state'],
-            'Vorlaufzeit (Tage)': params['lead_time'],
+            'Vorlaufzeit (Tage)': params['lead_time'],  # Wird dynamisch aus MasterData gelesen
             'Dauer Auftragserfassung (Tage)': params['order_entry_duration'],
             'Produktionszeit (Tage)': params['production_time'],
             'Losgröße': params['lot_size']
         })
     suppliers_df = pd.DataFrame(suppliers_data)
-    st.dataframe(suppliers_df, width='stretch', hide_index=True)
+    # FIX: Verwende einen dynamischen Key, der sich ändert wenn sich die Vorlaufzeit ändert
+    st.dataframe(suppliers_df, width='stretch', hide_index=True, key=f"suppliers_delivery_table_{current_lead_time}")
     
     st.divider()
 
@@ -733,10 +821,18 @@ with tab5:
             MasterData.CHINA_SUPPLIER['Frames']['lead_time'] = new_lead_time
             MasterData.CHINA_SUPPLIER['Frames']['lot_size'] = new_lot_size
             
+            # FIX: Synchronisiere auch die Auslieferung-Tabelle (Tab 4)
+            # Die Auslieferung-Tabelle zeigt SUPPLIERS['China'], daher ist sie bereits synchronisiert
+            # durch die Änderung oben, aber wir stellen sicher, dass beide Tabs konsistent sind
+            
             st.success("✅ Lieferanten-Parameter aktualisiert! Bitte Simulation neu starten.")
             # Cache-Invalidierung bei Parameteränderungen
             _invalidate_all_caches()
             supplier_changed = True
+            
+            # FIX: Rerun um sicherzustellen, dass alle Tabs (insbesondere Auslieferung) aktualisiert werden
+            # Dies stellt sicher, dass die Vorlaufzeit sofort in der Auslieferung-Tabelle sichtbar ist
+            st.rerun()
         
         # Zeige berechnete Vorlaufzeit mit Standard-Referenz
         current_lead_time = MasterData.SUPPLIERS['China']['lead_time']

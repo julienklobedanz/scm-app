@@ -58,13 +58,28 @@ Wenn sich die Beschaffungszeiten ändern (z.B. 4AT statt 2AT für LKW China), ä
 
 ## Empfehlung
 
-**Option 2** ist am besten:
-- Initial orders für `max(lead_time_days, 365)` Tage
+**Option 2** wurde implementiert (Stand: 2026-01-31):
+- Initial orders für das gesamte Jahr (365 Tage)
+- Bestellungen decken auch negative Tage ab (wenn Lead Time größer wird)
 - Stellt sicher, dass immer genug Material vorbestellt ist
 - Gesamtmenge bleibt konstant
 
-## Implementierung
+## Implementierung (Stand: 2026-01-31)
 
-1. Ändere `_place_initial_orders()` um für `max(lead_time_days, 365)` Tage zu bestellen
-2. Stelle sicher, dass tägliche Bestellungen immer die gleiche Gesamtmenge produzieren
-3. Teste mit verschiedenen Beschaffungszeiten (2AT, 4AT, etc.)
+1. ✅ `_place_initial_orders()` wurde geändert:
+   - Bestellt für alle Tage von `-lead_time_days` bis `365 - lead_time_days`
+   - Deckt auch negative Tage ab (wenn Lead Time größer wird)
+   - Stellt sicher, dass alle Bedarfe für das gesamte Jahr abgedeckt sind
+
+2. ✅ Tägliche Bestellungen verwenden dynamische Lead Time:
+   - `procurement_manager.py` verwendet `calculate_lead_time_from_routes()`
+   - Reagiert automatisch auf Änderungen der Beschaffungsrouten-Zeiten
+
+3. ✅ Bei Änderung der Beschaffungsrouten-Zeiten:
+   - Lead Time wird automatisch neu berechnet
+   - Simulation wird zurückgesetzt
+   - Initial orders werden mit der neuen Lead Time neu berechnet
+
+4. ✅ Bei Neustart:
+   - `PROCUREMENT_ROUTES` werden auf Standardwerte zurückgesetzt (`standard_duration`)
+   - Stellt sicher, dass Standardwerte wiederhergestellt werden

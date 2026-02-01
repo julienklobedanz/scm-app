@@ -1058,6 +1058,10 @@ class ChinaTransportManager:
         shipment_results = [0.0] * total_days
         stock_results = [0.0] * total_days
         
+        # KRITISCH: Tracke kumulierte Versandmenge, um Überproduktion am letzten Tag zu verhindern
+        cumulative_shipped_total = 0.0
+        yearly_volume = self.master_data.GLOBAL_CONFIG.get('total_volume', 370000)
+        
         for day_idx in range(total_days):
             # 1. Gesamt-Verfügbarkeit prüfen
             total_accumulated = 0.0
@@ -1071,9 +1075,17 @@ class ChinaTransportManager:
                 total_accumulated += acc
             
             # 2. Losgröße berechnen
-            # Am letzten Tag: Restbestand mitversenden, damit sum(Produktionsmenge) = sum(Warenausgang)
+            # KRITISCH: Am letzten Tag nur versenden wenn Restbestand vorhanden, aber nicht mehr als nötig
+            # Das Problem: Wenn wir am letzten Tag alles versenden, kann das zu Überproduktion führen
+            # Lösung: Versende nur wenn Restbestand vorhanden, aber begrenze auf maximal yearly_volume - bereits_versendet
             if day_idx == total_days - 1 and total_accumulated > 0:
-                current_lot_size = int(round(total_accumulated))
+                # Am letzten Tag: Versende Restbestand, aber nicht mehr als die Gesamtnachfrage
+                # Verwende die bereits getrackte kumulierte Versandmenge
+                max_shipment = max(0, int(round(yearly_volume)) - int(round(cumulative_shipped_total)))
+                current_lot_size = min(int(round(total_accumulated)), max_shipment)
+                # Stelle sicher, dass current_lot_size ein Vielfaches von lot_size ist (außer wenn es der letzte Rest ist)
+                if current_lot_size > lot_size:
+                    current_lot_size = int(current_lot_size / lot_size) * lot_size
             else:
                 current_lot_size = int(total_accumulated / lot_size) * lot_size
             
@@ -1106,6 +1118,9 @@ class ChinaTransportManager:
                         diff -= 1
                 
                 shipments_today = rounded
+            
+            # KRITISCH: Aktualisiere kumulierte Versandmenge
+            cumulative_shipped_total += sum(shipments_today.values())
             
             # 4. Carry-Over aktualisieren & Ergebnisse speichern
             for s in all_saddles:

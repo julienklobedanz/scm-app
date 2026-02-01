@@ -27,23 +27,30 @@
 
 ### Problem 1: Dynamische Vorlaufzeit-Berechnung
 
+**Status (Stand: 2026-01-31):** ✅ **GELÖST**
+
 **Was wurde geändert:**
-- Vorlaufzeit wurde von hardcodiert `49` auf dynamische Berechnung aus `PROCUREMENT_ROUTES` geändert
-- Änderungen in: `simulator.py`, `procurement_manager.py`, `china_transport.py`, `app.py`
+- ✅ Vorlaufzeit wird dynamisch aus `PROCUREMENT_ROUTES` berechnet
+- ✅ Funktion: `MasterData.calculate_lead_time_from_routes()`
+- ✅ Änderungen in: `simulator.py`, `procurement_manager.py`, `china_transport.py`, `pages/8_stammdaten.py`
 
-**Warum das Probleme verursacht:**
-1. **Timing-Problem:** Wenn `PROCUREMENT_ROUTES` geändert werden, ändert sich die Vorlaufzeit
-2. **Initial Orders:** `_place_initial_orders()` verwendet jetzt dynamische Vorlaufzeit
-   - Wenn Vorlaufzeit z.B. 43 statt 49 ist, werden weniger Tage vorbestellt
-   - Dies führt zu Materialmangel am Jahresanfang
-3. **Bestellungen:** Tägliche Bestellungen verwenden jetzt dynamische Vorlaufzeit
-   - Wenn sich die Vorlaufzeit ändert, werden Bestellungen für falsche Tage platziert
-   - Dies führt zu Timing-Fehlern in der gesamten Supply Chain
+**Lösung:**
+1. ✅ **Initial Orders:** `_place_initial_orders()` wurde korrigiert:
+   - Bestellt für alle Tage von `-lead_time_days` bis `365 - lead_time_days`
+   - Deckt auch negative Tage ab (wenn Lead Time größer wird)
+   - Stellt sicher, dass alle Bedarfe für das gesamte Jahr abgedeckt sind
 
-**Kritischer Fehler:**
-- Die dynamische Berechnung wird **jedes Mal** ausgeführt, wenn sie aufgerufen wird
-- Wenn `PROCUREMENT_ROUTES` während der Simulation geändert werden, ändert sich die Vorlaufzeit
-- Dies führt zu Inkonsistenzen zwischen bereits platzierten Bestellungen und neuen Berechnungen
+2. ✅ **Bestellungen:** Tägliche Bestellungen verwenden dynamische Vorlaufzeit:
+   - Reagieren automatisch auf Änderungen der Beschaffungsrouten-Zeiten
+   - Timing wird korrekt berechnet
+
+3. ✅ **Simulation Reset:** Bei Änderung der Beschaffungsrouten-Zeiten:
+   - Lead Time wird automatisch neu berechnet
+   - Simulation wird zurückgesetzt
+   - Initial orders werden mit der neuen Lead Time neu berechnet
+
+4. ✅ **Neustart:** Bei Browser-Reload:
+   - `PROCUREMENT_ROUTES` werden auf Standardwerte zurückgesetzt (`standard_duration`)
 
 ### Problem 2: PROCUREMENT_ROUTES Lookups statt hardcodierte Werte
 

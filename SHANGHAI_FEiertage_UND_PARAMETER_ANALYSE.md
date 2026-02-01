@@ -21,42 +21,48 @@ Wenn Shanghai-spezifische Feiertage benötigt werden, müssten diese manuell zur
 
 ## 2. Vorlaufzeit - Dynamische Berechnung
 
-### Aktuelle Implementierung
-- Vorlaufzeit wird aus `MasterData.SUPPLIERS['China']['lead_time']` gelesen (statisch: 49 Tage)
-- Wird in `app.py` für Source Cycle Time verwendet
-
-### Anforderung
-- Vorlaufzeit soll sich **dynamisch** aus den Beschaffungs-Routen berechnen
-- Summe aller SC-Zeiten (Supply Chain Zeiten):
-  - Dauer Auftragserfassung
-  - Produktionszeit
-  - LKW China (2 AT)
-  - Schiff (30 KT)
-  - LKW Deutschland (2 AT)
+### Aktuelle Implementierung (Stand: 2026-01-31)
+- ✅ **IMPLEMENTIERT:** Vorlaufzeit wird **dynamisch** aus `PROCUREMENT_ROUTES` berechnet
+- Funktion: `MasterData.calculate_lead_time_from_routes()`
+- Berechnet sich aus:
+  - Dauer Auftragserfassung (`order_entry_duration` aus `SUPPLIERS['China']`)
+  - Produktionszeit (`production_time` aus `SUPPLIERS['China']`)
+  - LKW China (aus `PROCUREMENT_ROUTES`, z.B. 2 AT)
+  - Schiff (aus `PROCUREMENT_ROUTES`, z.B. 30 KT)
+  - LKW Deutschland (aus `PROCUREMENT_ROUTES`, z.B. 2 AT)
   - Wareneingang (+1 Tag)
 
-### Lösung
-Vorlaufzeit = Summe aller `duration` Werte aus `PROCUREMENT_ROUTES` für China + Wareneingang (+1 Tag)
+### Verwendung
+- `simulation/simulator.py`: Initial orders verwenden dynamische Lead Time
+- `simulation/procurement_manager.py`: Tägliche Bestellungen verwenden dynamische Lead Time
+- `pages/8_stammdaten.py`: Anzeige und Aktualisierung der Lead Time
+
+### Wichtige Hinweise
+- Bei Änderung der Beschaffungsrouten-Zeiten wird die Lead Time automatisch neu berechnet
+- Die Simulation wird zurückgesetzt, damit initial orders mit der neuen Lead Time neu berechnet werden
+- Initial orders decken auch negative Tage ab (wenn Lead Time größer wird)
+- Bei Neustart werden `PROCUREMENT_ROUTES` auf Standardwerte zurückgesetzt (`standard_duration`)
 
 ---
 
 ## 3. Beschaffungs-Routen Dauer - Editierbar machen
 
-### Aktuelle Implementierung
-- Dauer ist **hardcodiert** in `china_transport.py`:
-  - LKW China: 2 AT (Zeile 126, 230)
-  - Schiff: 30 KT (Zeile 240, 306)
-  - LKW Deutschland: 2 AT (Zeile 265, 334)
+### Aktuelle Implementierung (Stand: 2026-01-31)
+- ✅ **IMPLEMENTIERT:** Dauer wird aus `MasterData.PROCUREMENT_ROUTES` gelesen
+- ✅ **IMPLEMENTIERT:** Routen-Dauer ist **editierbar** in Stammdaten → Beschaffung
+- ✅ **IMPLEMENTIERT:** Änderungen wirken sich sofort auf Berechnungen aus
 
-### Anforderung
-- Dauer soll aus `MasterData.PROCUREMENT_ROUTES` gelesen werden
-- Routen-Dauer soll **editierbar** sein in Stammdaten → Beschaffung
-- Änderungen müssen sich sofort auf Berechnungen auswirken
+### Implementierung
+1. ✅ Hardcodierte Werte wurden durch `PROCUREMENT_ROUTES` Lookup ersetzt (`_get_route_duration()`)
+2. ✅ Routen-Dauer ist editierbar in `pages/8_stammdaten.py` (Tab "Beschaffung")
+3. ✅ Änderungen werden synchronisiert mit `MasterData.PROCUREMENT_ROUTES`
+4. ✅ Bei Änderung wird die Lead Time neu berechnet und die Simulation zurückgesetzt
+5. ✅ Bei Neustart werden `PROCUREMENT_ROUTES` auf Standardwerte zurückgesetzt (`standard_duration`)
 
-### Lösung
-1. Ersetze hardcodierte Werte durch `PROCUREMENT_ROUTES` Lookup
-2. Mache Routen-Dauer editierbar in `pages/8_stammdaten.py`
-3. Synchronisiere Änderungen mit `MasterData.PROCUREMENT_ROUTES`
+### Wichtige Hinweise
+- Änderungen an Routen-Dauer erfordern Neustart der Simulation für korrekte Berechnungen
+- Die Lead Time wird automatisch neu berechnet bei Änderung der Routen-Dauer
+- Initial orders werden mit der neuen Lead Time neu berechnet (inkl. negative Tage)
 
 ---
 

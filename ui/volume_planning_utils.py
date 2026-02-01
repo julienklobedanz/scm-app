@@ -262,6 +262,27 @@ def calculate_volume_planning_demand():
                 if difference != 0:
                     demands_dict[last_workday_of_year][product] = demands_dict[last_workday_of_year].get(product, 0) + difference
                     product_sums[product] = target_sum  # Aktualisiere für Gesamtsummen-Berechnung
+            
+            # KRITISCH: Korrigiere Gesamtsumme auf exakt yearly_volume
+            # Nach der individuellen Korrektur kann die Gesamtsumme durch Rundung != yearly_volume sein
+            total_sum_after_correction = sum(product_sums.values())
+            total_difference = yearly_volume - total_sum_after_correction
+            
+            if abs(total_difference) > 0:
+                # Finde Produkt mit größtem Anteil (für Gesamtsummen-Korrektur)
+                largest_product = max(MasterData.BOM.keys(), 
+                                    key=lambda p: MasterData.PRODUCT_SALES_SHARES.get(p, 0.0))
+                
+                # Korrigiere Gesamtsumme durch Anpassung des größten Produkts
+                if total_difference > 0:
+                    # Positive Differenz: Füge zum größten Produkt hinzu
+                    demands_dict[last_workday_of_year][largest_product] = demands_dict[last_workday_of_year].get(largest_product, 0) + total_difference
+                    product_sums[largest_product] += total_difference
+                else:
+                    # Negative Differenz: Entferne vom größten Produkt (nicht negativ werden)
+                    adjustment = max(-product_sums[largest_product], total_difference)  # Nicht negativ werden
+                    demands_dict[last_workday_of_year][largest_product] = demands_dict[last_workday_of_year].get(largest_product, 0) + adjustment
+                    product_sums[largest_product] += adjustment
         
     
     # Speichere im Session State (mit Cache-Key für Invalidierung)

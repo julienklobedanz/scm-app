@@ -51,7 +51,7 @@ class WorkdayCalculator:
         """
         Prüft ob ein Tag ein Arbeitstag ist
         
-        Arbeitstage: Montag bis Freitag, keine Feiertage
+        Arbeitstage: Montag bis Freitag, keine Feiertage, und DAILY_WORKLOAD > 0.0
         """
         day_date = self.get_date_from_day(day)
         weekday = day_date.weekday()  # 0=Montag, 6=Sonntag
@@ -62,6 +62,12 @@ class WorkdayCalculator:
         
         # Feiertag in Deutschland
         if day_date in self.german_holidays:
+            return False
+        
+        # KRITISCH: Prüfe auch DAILY_WORKLOAD - wenn 0.0, dann kein Arbeitstag
+        weekday_name = self.weekday_names[weekday]
+        workload_factor = self.master_data.DAILY_WORKLOAD.get(weekday_name, 0.0)
+        if workload_factor <= 0.0:
             return False
         
         return True
