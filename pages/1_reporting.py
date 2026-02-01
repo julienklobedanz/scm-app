@@ -296,16 +296,20 @@ with tab1:
                             total_day = sum(day_actual.get(p, 0) for p in MasterData.BOM.keys())
                             daily_demands_for_shifts.append(total_day)
             
-            # Berechne Schichten
-            HOURS_PER_SHIFT = 8
-            CAPACITY_PER_HOUR = MasterData.GLOBAL_CONFIG['capacity_per_hour']
-            CAPACITY_PER_SHIFT = HOURS_PER_SHIFT * CAPACITY_PER_HOUR
+            # Berechne Schichten (aus Stammdaten: Kapazität, Montagelinien, Min/Max Schichten)
+            cfg = MasterData.GLOBAL_CONFIG
+            HOURS_PER_SHIFT = cfg.get('working_hours_per_shift', 8)
+            CAPACITY_PER_HOUR = cfg.get('capacity_per_hour', 130)
+            ASSEMBLY_LINES = cfg.get('assembly_lines', 1)
+            MIN_SHIFTS = cfg.get('min_shifts_per_day', 1)
+            MAX_SHIFTS = cfg.get('max_shifts_per_day', 3)
+            CAPACITY_PER_SHIFT = HOURS_PER_SHIFT * CAPACITY_PER_HOUR * ASSEMBLY_LINES
             
             total_week_demand = sum(week_demand_actual.values())
             if total_week_demand > 0 and daily_demands_for_shifts:
                 required_shifts_float = max(daily_demands_for_shifts) / CAPACITY_PER_SHIFT
                 required_shifts_int = math.ceil(required_shifts_float)
-                shifts = max(1, min(3, required_shifts_int))
+                shifts = max(MIN_SHIFTS, min(MAX_SHIFTS, required_shifts_int))
             else:
                 shifts = 0
             

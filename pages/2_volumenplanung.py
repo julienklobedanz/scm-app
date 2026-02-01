@@ -75,30 +75,23 @@ def get_week_number(d: date) -> int:
 
 def calculate_shifts_from_demand(daily_target: float) -> int:
     """
-    Berechnet benötigte Schichten basierend auf Nachfrage (dynamisch)
-    
-    Returns:
-        Anzahl Schichten (1-3)
+    Berechnet benötigte Schichten basierend auf Nachfrage (dynamisch).
+    Nutzt Produktionsparameter aus Stammdaten (Kapazität, Montagelinien, Min/Max Schichten).
     """
-    # Konstanten aus MasterData
-    MIN_SHIFTS = 1
-    MAX_SHIFTS = 3
-    HOURS_PER_SHIFT = 8
-    CAPACITY_PER_HOUR = MasterData.GLOBAL_CONFIG['capacity_per_hour']  # 130
-    CAPACITY_PER_SHIFT = HOURS_PER_SHIFT * CAPACITY_PER_HOUR  # 1040
+    cfg = MasterData.GLOBAL_CONFIG
+    MIN_SHIFTS = cfg.get('min_shifts_per_day', 1)
+    MAX_SHIFTS = cfg.get('max_shifts_per_day', 3)
+    HOURS_PER_SHIFT = cfg.get('working_hours_per_shift', 8)
+    CAPACITY_PER_HOUR = cfg.get('capacity_per_hour', 130)
+    ASSEMBLY_LINES = cfg.get('assembly_lines', 1)
+    CAPACITY_PER_SHIFT = HOURS_PER_SHIFT * CAPACITY_PER_HOUR * ASSEMBLY_LINES
     
     if daily_target == 0:
         return 0
     
-    # Required_Shifts_Float = Daily_Target / Capacity_Per_Shift
     required_shifts_float = daily_target / CAPACITY_PER_SHIFT
-    
-    # Required_Shifts_Int = ceil(Required_Shifts_Float)
     required_shifts_int = math.ceil(required_shifts_float)
-    
-    # Actual_Shifts = max(Min_Shifts, min(Max_Shifts, Required_Shifts_Int))
     actual_shifts = max(MIN_SHIFTS, min(MAX_SHIFTS, required_shifts_int))
-    
     return actual_shifts
 
 def calculate_product_demand(day: int, product: str, include_marketing: bool = True) -> float:
@@ -184,9 +177,8 @@ with tab1:
             <span title="Berechnung der Schichten: 
 1. Täglicher Bedarf = Gesamtvolumen der Woche / Anzahl Arbeitstage
 2. Benötigte Schichten = AUFRUNDEN(täglicher Bedarf / Kapazität pro Schicht)
-   Kapazität pro Schicht = 8 Stunden × 130 Fahrräder/Stunde × 1 Produktionslinie = 1040 Fahrräder
-3. Tatsächliche Schichten = max(1, min(3, benötigte Schichten))
-   (Minimum 1 Schicht, Maximum 3 Schichten)
+   Kapazität pro Schicht = Arbeitsstunden/Schicht × Kapazität/Stunde × Montagelinien (aus Stammdaten)
+3. Tatsächliche Schichten = max(Min. Schichten, min(Max. Schichten, benötigte Schichten)) (aus Stammdaten)
 Die Nachfrage basiert auf Saisonalität, Verkaufsanteilen und Marketing-Szenarien." 
             style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
         </div>
@@ -279,14 +271,14 @@ Die Nachfrage basiert auf Saisonalität, Verkaufsanteilen und Marketing-Szenarie
                     if workday_calc.is_workday(day_of_year):
                         daily_demands.append(day_total_actual)
         
-        # Berechne Schichten
-        # Konstanten
-        HOURS_PER_SHIFT = 8
-        CAPACITY_PER_HOUR = MasterData.GLOBAL_CONFIG['capacity_per_hour']  # 130
-        PRODUCTION_LINES = 1  # Anzahl Montagelinien (Basisdaten!$E$10)
-        CAPACITY_PER_SHIFT = HOURS_PER_SHIFT * CAPACITY_PER_HOUR * PRODUCTION_LINES  # 1040
-        MIN_SHIFTS = 1
-        MAX_SHIFTS = 3
+        # Berechne Schichten (alle Werte aus Stammdaten)
+        cfg = MasterData.GLOBAL_CONFIG
+        HOURS_PER_SHIFT = cfg.get('working_hours_per_shift', 8)
+        CAPACITY_PER_HOUR = cfg.get('capacity_per_hour', 130)
+        PRODUCTION_LINES = cfg.get('assembly_lines', 1)
+        CAPACITY_PER_SHIFT = HOURS_PER_SHIFT * CAPACITY_PER_HOUR * PRODUCTION_LINES
+        MIN_SHIFTS = cfg.get('min_shifts_per_day', 1)
+        MAX_SHIFTS = cfg.get('max_shifts_per_day', 3)
         
         # Anzahl Arbeitstage in dieser Woche
         num_workdays = len(daily_demands)

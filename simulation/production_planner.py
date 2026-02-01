@@ -144,25 +144,26 @@ class ProductionPlanner:
             backlog = self.backlog.get(product, 0.0)
             production_demand_by_product[product] = planned_demand + backlog
         
-        # 3. Berechne verfügbare Kapazität
+        # 3. Berechne verfügbare Kapazität (aus Stammdaten: Schichten, Montagelinien, Kapazität pro Stunde)
         working_hours = self.master_data.GLOBAL_CONFIG.get('working_hours_per_shift', 8)
         capacity_per_hour = self.master_data.GLOBAL_CONFIG.get('capacity_per_hour', 130)
-        capacity_per_shift = working_hours * capacity_per_hour
+        assembly_lines = self.master_data.GLOBAL_CONFIG.get('assembly_lines', 1)
+        min_shifts = self.master_data.GLOBAL_CONFIG.get('min_shifts_per_day', 1)
+        max_shifts = self.master_data.GLOBAL_CONFIG.get('max_shifts_per_day', 3)
+        capacity_per_shift = working_hours * capacity_per_hour * assembly_lines
         
         # AGGRESSIVE BACKLOG-RECOVERY: Berechne benötigte Schichten basierend auf Gesamtbedarf (inkl. Backlog!)
         total_demand = sum(production_demand_by_product.values())
         total_backlog = sum(self.backlog.values())
         
         if total_demand > 0:
-            # AGGRESSIVE BACKLOG-RECOVERY: Wenn Backlog vorhanden ist, nutze IMMER MAXIMALE Kapazität (3 Schichten)
+            # AGGRESSIVE BACKLOG-RECOVERY: Wenn Backlog vorhanden ist, nutze IMMER MAXIMALE Kapazität
             if total_backlog > 0:
-                # Aggressive Strategie: Fahre IMMER 3 Schichten, wenn Backlog vorhanden ist
-                # Dies stellt sicher, dass der Backlog so schnell wie möglich abgearbeitet wird
-                shifts = 3  # Maximale Kapazität für Backlog-Aufholung
+                shifts = max_shifts  # Maximale Kapazität für Backlog-Aufholung (aus Stammdaten)
             else:
-                # Normal: Berechne Schichten basierend auf Bedarf
+                # Normal: Berechne Schichten basierend auf Bedarf (Min/Max aus Stammdaten)
                 shifts_needed = math.ceil(total_demand / capacity_per_shift)
-                shifts = min(3, max(1, shifts_needed))
+                shifts = min(max_shifts, max(min_shifts, shifts_needed))
         else:
             shifts = 0
         

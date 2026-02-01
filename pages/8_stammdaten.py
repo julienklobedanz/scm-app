@@ -150,27 +150,12 @@ if 'stammdaten_initialized' not in st.session_state:
 st.title("📋 Stammdaten")
 st.markdown("Alle Stammdaten der Supply Chain Simulation")
 
-# DEBUG: Zeige Konvergenz-Info für Test-1.3
-# WICHTIG: Zeige immer an, auch wenn Werte noch nicht gesetzt sind
-if 'convergence_iterations' in st.session_state:
-    convergence_reached = st.session_state.get('convergence_reached', False)
-    iterations = st.session_state.get('convergence_iterations', 0)
-    
-    if convergence_reached:
-        st.success(f"✅ **Konvergenz-Check:** {iterations} Iteration(en) durchgeführt, Konvergenz erreicht!")
-    else:
-        st.info(f"ℹ️ **Konvergenz-Check:** {iterations} Iteration(en) durchgeführt (max. 5)")
-else:
-    # Fallback: Zeige Info wenn Werte noch nicht gesetzt sind
-    st.warning("⚠️ **Konvergenz-Check:** Wird beim nächsten Laden der Seite berechnet...")
-
 # Tabs für verschiedene Stammdaten-Gruppen
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📦 Stückliste", 
     "📊 Planung", 
-    "🌍 Märkte & Kunden", 
-    "🚚 Auslieferung",
-    "📥 Beschaffung",
+    "📥 Beschaffung", 
+    "🌍 Märkte & Kunden",
     "📅 Feiertage"
 ])
 
@@ -288,7 +273,7 @@ with tab2:
     
     st.divider()
     
-    # Weitere globale Konfigurationsparameter (editierbar)
+    # Weitere globale Konfigurationsparameter (editierbar) – 6 Parameter im Raster 3×2
     st.write("**Globale Konfigurationsparameter:**")
     param_translations = {
         'total_volume': 'Gesamtvolumen',
@@ -297,66 +282,83 @@ with tab2:
         'min_shifts_per_day': 'Min. Schichten/Tag',
         'max_shifts_per_day': 'Max. Schichten/Tag',
         'working_hours_per_shift': 'Anzahl Arbeitsstunden/Schicht',
-        'batch_size': 'Losgröße'
     }
     
-    col1, col2 = st.columns(2)
-    config_changed = False
-    
-    # Definiere max_value pro Parameter
+    # Definiere max_value pro Parameter (Losgröße nicht anzeigen)
     max_values = {
         'total_volume': 1000000,
-        'capacity_per_hour': 500,  # Erhöht von 100 auf 500 (aktueller Wert: 130)
+        'capacity_per_hour': 500,
         'assembly_lines': 10,
         'min_shifts_per_day': 5,
         'max_shifts_per_day': 5,
         'working_hours_per_shift': 24,
-        'batch_size': 1000
     }
     
-    with col1:
-        for i, (key, value) in enumerate(list(st.session_state.editable_global_config.items())[:4]):
-            param_name = param_translations.get(key, key.replace('_', ' ').title())
-            max_val = max_values.get(key, 1000)
-            new_value = st.number_input(
-                param_name,
-                min_value=1 if key != 'total_volume' else 1000,
-                max_value=max_val,
-                value=int(value),
-                step=1 if key != 'total_volume' else 1000,
-                key=f"config_{key}"
-            )
-            if new_value != value:
-                st.session_state.editable_global_config[key] = new_value
-                config_changed = True
-                
-                # FIX: Synchronisiere yearly_volume mit total_volume
-                if key == 'total_volume':
-                    st.session_state.yearly_volume = new_value
-                    # Aktualisiere auch MasterData.GLOBAL_CONFIG für Simulator
-                    MasterData.GLOBAL_CONFIG['total_volume'] = new_value
+    # Feste Reihenfolge: Zeile 1 = Gesamtvolumen, Kapazität, Montagelinien | Zeile 2 = Min. Schichten, Max. Schichten, Arbeitsstunden/Schicht
+    ordered_keys = [
+        'total_volume', 'capacity_per_hour', 'assembly_lines',
+        'min_shifts_per_day', 'max_shifts_per_day', 'working_hours_per_shift'
+    ]
+    config_items = [(k, st.session_state.editable_global_config[k]) for k in ordered_keys if k in st.session_state.editable_global_config]
+    config_changed = False
     
-    with col2:
-        for i, (key, value) in enumerate(list(st.session_state.editable_global_config.items())[4:]):
-            param_name = param_translations.get(key, key.replace('_', ' ').title())
-            max_val = max_values.get(key, 1000)
-            new_value = st.number_input(
-                param_name,
-                min_value=1,
-                max_value=max_val,
-                value=int(value),
-                step=1,
-                key=f"config_{key}"
-            )
-            if new_value != value:
-                st.session_state.editable_global_config[key] = new_value
-                config_changed = True
-                
-                # FIX: Synchronisiere yearly_volume mit total_volume
-                if key == 'total_volume':
-                    st.session_state.yearly_volume = new_value
-                    # Aktualisiere auch MasterData.GLOBAL_CONFIG für Simulator
-                    MasterData.GLOBAL_CONFIG['total_volume'] = new_value
+    def _render_config_input(key, value, param_translations, max_values):
+        param_name = param_translations.get(key, key.replace('_', ' ').title())
+        max_val = max_values.get(key, 1000)
+        new_value = st.number_input(
+            param_name,
+            min_value=1 if key != 'total_volume' else 1000,
+            max_value=max_val,
+            value=int(value),
+            step=1 if key != 'total_volume' else 1000,
+            key=f"config_{key}"
+        )
+        return new_value
+    
+    # Zeile 1: 3 Spalten
+    row1_col1, row1_col2, row1_col3 = st.columns(3)
+    with row1_col1:
+        key, value = config_items[0]
+        new_value = _render_config_input(key, value, param_translations, max_values)
+        if new_value != value:
+            st.session_state.editable_global_config[key] = new_value
+            config_changed = True
+            if key == 'total_volume':
+                st.session_state.yearly_volume = new_value
+                MasterData.GLOBAL_CONFIG['total_volume'] = new_value
+    with row1_col2:
+        key, value = config_items[1]
+        new_value = _render_config_input(key, value, param_translations, max_values)
+        if new_value != value:
+            st.session_state.editable_global_config[key] = new_value
+            config_changed = True
+    with row1_col3:
+        key, value = config_items[2]
+        new_value = _render_config_input(key, value, param_translations, max_values)
+        if new_value != value:
+            st.session_state.editable_global_config[key] = new_value
+            config_changed = True
+    
+    # Zeile 2: Min. Schichten, Max. Schichten, Arbeitsstunden/Schicht nebeneinander
+    row2_col1, row2_col2, row2_col3 = st.columns(3)
+    with row2_col1:
+        key, value = config_items[3]
+        new_value = _render_config_input(key, value, param_translations, max_values)
+        if new_value != value:
+            st.session_state.editable_global_config[key] = new_value
+            config_changed = True
+    with row2_col2:
+        key, value = config_items[4]
+        new_value = _render_config_input(key, value, param_translations, max_values)
+        if new_value != value:
+            st.session_state.editable_global_config[key] = new_value
+            config_changed = True
+    with row2_col3:
+        key, value = config_items[5]
+        new_value = _render_config_input(key, value, param_translations, max_values)
+        if new_value != value:
+            st.session_state.editable_global_config[key] = new_value
+            config_changed = True
     
     if config_changed:
         st.success("✅ Globale Konfiguration aktualisiert!")
@@ -375,19 +377,27 @@ with tab2:
         
         # Kein st.rerun() - Streamlit aktualisiert automatisch
     
-    # Tägliche Arbeitslast (editierbar)
-    st.subheader("Tägliche Arbeitslast")
+    # Tägliche Arbeitslast (editierbar) – alle 7 Wochentage nebeneinander
+    col_workload_title, col_workload_help = st.columns([20, 1])
+    with col_workload_title:
+        st.subheader("Tägliche Arbeitslast")
+    with col_workload_help:
+        st.markdown("""
+        <div style="margin-top: 1.5rem;">
+            <span title="Ein Wert von 0.0 bedeutet, dass dieser Wochentag wie ein freier Tag behandelt wird (kein Arbeitstag). Dies wird in allen abhängigen Berechnungen berücksichtigt."
+                style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
+        </div>
+        """, unsafe_allow_html=True)
     st.write("**Arbeitslast pro Wochentag (0.0 = kein Arbeitstag, 0.2 = 20% der Wochenlast):**")
     
     workload_changed = False
-    col1, col2, col3, col4 = st.columns(4)
+    weekday_cols = st.columns(7)
     
     weekdays = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
     workload_values = {}
     
     for i, day in enumerate(weekdays):
-        col_idx = i % 4
-        with [col1, col2, col3, col4][col_idx]:
+        with weekday_cols[i]:
             new_workload = st.number_input(
                 day,
                 min_value=0.0,
@@ -442,9 +452,6 @@ with tab2:
                 else:
                     st.error("❌ **Wochensumme muss größer als 0 sein!**")
     
-    # Hinweis: 0.0 bedeutet freier Tag (wird wie Wochenende/Feiertag behandelt)
-    st.info("💡 **Hinweis:** Ein Wert von 0.0 bedeutet, dass dieser Wochentag wie ein freier Tag behandelt wird (kein Arbeitstag). Dies wird in allen abhängigen Berechnungen berücksichtigt.")
-    
     # Verkaufsanteile (editierbar)
     st.subheader("Verkaufsanteile pro Produkt")
     st.write("**Verkaufsanteile in Prozent (Summe muss exakt 100% ergeben):**")
@@ -457,18 +464,16 @@ with tab2:
         st.error(f"⚠️ **ACHTUNG:** Die Summe der Verkaufsanteile beträgt aktuell {current_total:.1f}%. Berechnungen können erst erfolgen, wenn die Summe exakt 100% beträgt!")
         st.info("💡 **Hinweis:** Bitte passen Sie die Werte unten an, bis die Summe genau 100% ergibt. Sie können auch die automatische Normalisierung verwenden.")
     
-    # Editierbare Parameter mit st.number_input() (wie Planungs-Parameter)
+    # Editierbare Parameter – zwei Reihen à 4 Spalten
     sales_changed = False
     sales_values = {}
     
-    # Erstelle zwei Spalten für bessere Übersicht
-    col1, col2 = st.columns(2)
-    
     products = sorted(st.session_state.editable_product_sales_shares.keys())
-    mid_point = len(products) // 2
     
-    with col1:
-        for product in products[:mid_point]:
+    # Zeile 1: erste 4 Produkte
+    row1_cols = st.columns(4)
+    for i, product in enumerate(products[:4]):
+        with row1_cols[i]:
             current_share = st.session_state.editable_product_sales_shares[product]
             new_share = st.number_input(
                 product,
@@ -481,19 +486,23 @@ with tab2:
             )
             sales_values[product] = new_share
     
-    with col2:
-        for product in products[mid_point:]:
-            current_share = st.session_state.editable_product_sales_shares[product]
-            new_share = st.number_input(
-                product,
-                min_value=0.0,
-                max_value=100.0,
-                value=float(current_share * 100),
-                step=0.1,
-                format="%.1f",
-                key=f"sales_{product}"
-            )
-            sales_values[product] = new_share
+    # Zeile 2: restliche Produkte (bis zu 4)
+    row2_products = products[4:8]
+    if row2_products:
+        row2_cols = st.columns(4)
+        for i, product in enumerate(row2_products):
+            with row2_cols[i]:
+                current_share = st.session_state.editable_product_sales_shares[product]
+                new_share = st.number_input(
+                    product,
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(current_share * 100),
+                    step=0.1,
+                    format="%.1f",
+                    key=f"sales_{product}"
+                )
+                sales_values[product] = new_share
     
     # Berechne neue Summe
     new_total = sum(sales_values.values())
@@ -564,17 +573,16 @@ with tab2:
         st.error(f"⚠️ **ACHTUNG:** Die Summe der Produktionsanteile beträgt aktuell {current_total:.1f}%. Berechnungen können erst erfolgen, wenn die Summe exakt 100% beträgt!")
         st.info("💡 **Hinweis:** Bitte passen Sie die Werte unten an, bis die Summe genau 100% ergibt. Sie können auch die automatische Normalisierung verwenden.")
     
-    # Editierbare Parameter mit st.number_input() (wie Planungs-Parameter)
+    # Editierbare Parameter – drei Reihen à 4 Spalten
     seasonality_changed = False
     seasonality_values = {}
     
-    # Erstelle drei Spalten für bessere Übersicht (4 Monate pro Spalte)
-    col1, col2, col3 = st.columns(3)
-    
     months = sorted(st.session_state.editable_seasonality.keys())
     
-    with col1:
-        for month in months[:4]:
+    # Zeile 1: Januar – April
+    row1_cols = st.columns(4)
+    for i, month in enumerate(months[:4]):
+        with row1_cols[i]:
             month_name = month_names[month]
             current_factor = st.session_state.editable_seasonality[month]
             new_factor = st.number_input(
@@ -588,8 +596,10 @@ with tab2:
             )
             seasonality_values[month] = new_factor
     
-    with col2:
-        for month in months[4:8]:
+    # Zeile 2: Mai – August
+    row2_cols = st.columns(4)
+    for i, month in enumerate(months[4:8]):
+        with row2_cols[i]:
             month_name = month_names[month]
             current_factor = st.session_state.editable_seasonality[month]
             new_factor = st.number_input(
@@ -603,8 +613,10 @@ with tab2:
             )
             seasonality_values[month] = new_factor
     
-    with col3:
-        for month in months[8:]:
+    # Zeile 3: September – Dezember
+    row3_cols = st.columns(4)
+    for i, month in enumerate(months[8:12]):
+        with row3_cols[i]:
             month_name = month_names[month]
             current_factor = st.session_state.editable_seasonality[month]
             new_factor = st.number_input(
@@ -669,7 +681,7 @@ with tab2:
         # Cache-Invalidierung bei Parameteränderungen
         _invalidate_all_caches()
 
-with tab3:
+with tab4:
     st.header("Märkte & Kunden")
     st.markdown("Zielmärkte und Marktverteilung")
     
@@ -709,36 +721,11 @@ with tab3:
         fig_markets.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig_markets, width='stretch')
 
-with tab4:
-    st.header("Auslieferung")
-    st.markdown("Routen und Transportmittel für die Auslieferung")
-    
-    # Lieferanten-Parameter
-    st.subheader("Lieferanten-Parameter und Standorte")
-    # FIX: Lese aktuelle Werte direkt aus MasterData (wird bei Reiter-Wechsel aktualisiert)
-    # Verwende einen dynamischen Key basierend auf der Vorlaufzeit, damit die Tabelle neu gerendert wird
-    current_lead_time = MasterData.SUPPLIERS['China']['lead_time']
-    suppliers_data = []
-    for supplier, params in MasterData.SUPPLIERS.items():
-        suppliers_data.append({
-            'Lieferant': supplier,
-            'Bundesland/Region': params['federal_state'],
-            'Vorlaufzeit (Tage)': params['lead_time'],  # Wird dynamisch aus MasterData gelesen
-            'Dauer Auftragserfassung (Tage)': params['order_entry_duration'],
-            'Produktionszeit (Tage)': params['production_time'],
-            'Losgröße': params['lot_size']
-        })
-    suppliers_df = pd.DataFrame(suppliers_data)
-    # FIX: Verwende einen dynamischen Key, der sich ändert wenn sich die Vorlaufzeit ändert
-    st.dataframe(suppliers_df, width='stretch', hide_index=True, key=f"suppliers_delivery_table_{current_lead_time}")
-    
-    st.divider()
-
-with tab5:
+with tab3:
     st.header("Beschaffung")
     st.markdown("Routen und Transportmittel für die Beschaffung")
     
-    # Lieferanten-Parameter und Standorte (aus Auslieferung hierher verschoben)
+    # Lieferanten-Parameter und Standorte
     st.subheader("Lieferanten-Parameter und Standorte")
     
     # Standard-Vorlaufzeit für Label (49 Tage)
@@ -821,17 +808,10 @@ with tab5:
             MasterData.CHINA_SUPPLIER['Frames']['lead_time'] = new_lead_time
             MasterData.CHINA_SUPPLIER['Frames']['lot_size'] = new_lot_size
             
-            # FIX: Synchronisiere auch die Auslieferung-Tabelle (Tab 4)
-            # Die Auslieferung-Tabelle zeigt SUPPLIERS['China'], daher ist sie bereits synchronisiert
-            # durch die Änderung oben, aber wir stellen sicher, dass beide Tabs konsistent sind
-            
             st.success("✅ Lieferanten-Parameter aktualisiert! Bitte Simulation neu starten.")
             # Cache-Invalidierung bei Parameteränderungen
             _invalidate_all_caches()
             supplier_changed = True
-            
-            # FIX: Rerun um sicherzustellen, dass alle Tabs (insbesondere Auslieferung) aktualisiert werden
-            # Dies stellt sicher, dass die Vorlaufzeit sofort in der Auslieferung-Tabelle sichtbar ist
             st.rerun()
         
         # Zeige berechnete Vorlaufzeit mit Standard-Referenz
@@ -907,7 +887,7 @@ with tab5:
             # Cache-Invalidierung bei Parameteränderungen
             _invalidate_all_caches()
 
-with tab6:
+with tab5:
     st.header("Feiertage")
     st.markdown("Relevante Feiertage für alle betroffenen Länder")
     

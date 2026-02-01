@@ -385,7 +385,11 @@ def calculate_production_logs():
             first_idx = day_row_map[day][first_prod]
             df = production_logs[first_prod]
             shifts = df.at[first_idx, 'Schichtanzahl']
-            daily_capacity = shifts * 8 * 130
+            # Kapazität aus Stammdaten (Schichten × Arbeitsstunden × Kapazität/Stunde × Montagelinien)
+            wh = MasterData.GLOBAL_CONFIG.get('working_hours_per_shift', 8)
+            cph = MasterData.GLOBAL_CONFIG.get('capacity_per_hour', 130)
+            lines = MasterData.GLOBAL_CONFIG.get('assembly_lines', 1)
+            daily_capacity = shifts * wh * cph * lines
         
         # E. Ranking
         if daily_capacity > 0:
