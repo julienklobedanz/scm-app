@@ -263,14 +263,14 @@ Die Metrik reagiert auf Szenarien wie Verspätungen, Ladungsverlust und Maschine
         }}
     
     inbound_metrics = calculate_inbound_metrics_from_table()
-    inbound_df = pd.DataFrame(inbound_metrics).T
+    inbound_metrics_df = pd.DataFrame(inbound_metrics).T
     # Formatierung: Ganze Zahlen für Zählungen, 2 Dezimalstellen für % und Durchschnitt
-    for col in inbound_df.columns:
+    for col in inbound_metrics_df.columns:
         if '%' not in col and 'durchschnittliche' not in col:
-            inbound_df[col] = inbound_df[col].astype(int)
+            inbound_metrics_df[col] = inbound_metrics_df[col].astype(int)
         else:
-            inbound_df[col] = inbound_df[col].round(2)
-    st.dataframe(inbound_df, width='stretch')
+            inbound_metrics_df[col] = inbound_metrics_df[col].round(2)
+    st.dataframe(inbound_metrics_df, width='stretch')
     
     st.divider()
     
@@ -290,9 +290,9 @@ Reagiert auf Verspätungs-Szenarien."
         """, unsafe_allow_html=True)
     
     def calculate_source_cycle_time_from_table():
-        """SCT aus der Inbound-Tabelle: Lieferzeit pro Zeile = Tatsächliche Ankunft − Abfahrt (in Tagen)."""
+        """SCT aus der Inbound-Tabelle: Schnellste/langsamste/durchschnittliche Lieferzeit = Tatsächliche Ankunft LKW DE − Abfahrt LKW China (in Tagen)."""
         from datetime import datetime
-        # PERFORMANCE: Verwende gecachte inbound_df (bereits oben geladen)
+        # WICHTIG: Vollständige Inbound-Log-Tabelle verwenden (nicht die POF-Metriken-Tabelle)
         df = inbound_df
         lead_time = MasterData.SUPPLIERS['China']['lead_time']
         if df.empty:
