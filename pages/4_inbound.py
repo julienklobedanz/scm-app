@@ -84,30 +84,157 @@ if not df.empty:
     weekend_flags = df['Is_Weekend'].values if 'Is_Weekend' in df.columns else [False] * len(df)
     holiday_flags = df['Is_Holiday'].values if 'Is_Holiday' in df.columns else [False] * len(df)
     
-    # Summenzeile hinzufügen
+    # Entferne Flags aus Anzeige (werden nur für Styling verwendet)
+    if 'Is_Weekend' in df.columns:
+        df = df.drop(columns=['Is_Weekend'])
+    if 'Is_Holiday' in df.columns:
+        df = df.drop(columns=['Is_Holiday'])
+    
+    # NEU: Füge Summenzeilen zwischen Verschiffungen ein
+    # Einfacher Ansatz: Iteriere durch DataFrame, füge jede Zeile hinzu, füge Summenzeilen dazwischen ein
     numeric_cols = ['Menge Gesamt'] + [col for col in df.columns if col in saddle_shares.keys()]
-    sum_row = {'Wochentag': 'Summe', 'Datum': ''}
+    rows_with_sums = []
+    weekend_flags_extended = []
+    holiday_flags_extended = []
+    shipment_sum_flags = []  # Flag für Summenzeilen zwischen Verschiffungen
+    
+    # Sammle Zeilen pro Verschiffung für Summenberechnung
+    current_shipment_rows = []  # Liste von Indizes der aktuellen Verschiffung
+    last_ship_arrival = None  # Letztes "Ankunft Schiff 🇩🇪" Datum
+    
+    def create_sum_row_from_indices(indices):
+        """Erstellt eine Summenzeile für eine Verschiffung basierend auf Indizes"""
+        sum_row = {}
+        
+        for col in df.columns:
+            if col in numeric_cols:
+                # Summiere numerische Werte aus den Zeilen dieser Verschiffung
+                # WICHTIG: Berücksichtige Ladungsverlust - wenn eine Zeile "Ladungsverlust: Ja" hat,
+                # dann sind die Mengen bereits auf 0 gesetzt, daher wird automatisch korrekt summiert
+                try:
+                    values = []
+                    for idx in indices:
+                        val = df.iloc[idx][col]
+                        num_val = pd.to_numeric(val, errors='coerce')
+                        if pd.notna(num_val):
+                            values.append(num_val)
+                    sum_row[col] = int(sum(values)) if values else 0
+                except (ValueError, TypeError):
+                    sum_row[col] = 0
+            elif col in ['Verspätung', 'Ladungsverlust', 'Abfahrt LKW 🇨🇳']:
+                # Diese Spalten sollen in Summenzeilen leer sein
+                sum_row[col] = ''
+            elif col in ['Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 
+                         'Abfahrt LKW 🇩🇪', 'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪']:
+                # Übernehme von der letzten Zeile der Verschiffung (zeigt die tatsächlichen Ankunftsdaten)
+                # WICHTIG: Verwende die letzte Zeile, da diese die tatsächlichen (ggf. verspäteten) Daten enthält
+                # Dies berücksichtigt automatisch Verspätungen und andere Szenarien
+                if indices:
+                    sum_row[col] = df.iloc[indices[-1]][col]
+                else:
+                    sum_row[col] = ''
+            elif col in ['Wochentag', 'Datum', 'Ankunft LKW 🇨🇳']:
+                # Diese Spalten sollen in Summenzeilen leer sein
+                sum_row[col] = ''
+            else:
+                # Alle anderen Spalten leer
+                sum_row[col] = ''
+        return sum_row
+    
+    # NEUE STRATEGIE: Gruppiere zuerst alle Zeilen nach Verschiffung, dann füge Summenzeilen ein
+    # Eine Verschiffung ist durch "Abfahrt Schiff 🇨🇳" UND "Ankunft Schiff 🇩🇪" gemeinsam definiert
+    # WICHTIG: Wir müssen die Zeilen in der richtigen Reihenfolge durchgehen und Summenzeilen
+    # NACH der letzten Zeile jeder Verschiffungsgruppe einfügen
+    
+    # Erstelle Liste mit (index, shipment_key) für jede Zeile
+    rows_with_shipment_keys = []
+    for idx, row in df.iterrows():
+        current_ship_departure = row.get('Abfahrt Schiff 🇨🇳', '')
+        current_ship_arrival = row.get('Ankunft Schiff 🇩🇪', '')
+        
+        # Bestimme den Verschiffungsschlüssel für diese Zeile
+        if current_ship_departure and current_ship_departure != '' and current_ship_arrival and current_ship_arrival != '':
+            row_shipment_key = (current_ship_departure, current_ship_arrival)
+        else:
+            row_shipment_key = None
+        
+        rows_with_shipment_keys.append((idx, row_shipment_key))
+    
+    # Iteriere durch alle Zeilen und füge sie hinzu
+    # WICHTIG: Leere Zeilen (Wochenende) beenden die Verschiffung NICHT
+    # Nur wenn eine NEUE Verschiffung beginnt (mit anderen Schiffsdaten), wird die Summenzeile eingefügt
+    prev_shipment_key = None
+    current_shipment_indices = []
+    
+    for idx, row_shipment_key in rows_with_shipment_keys:
+        row = df.iloc[idx]
+        
+        # Prüfe ob sich die Verschiffung geändert hat (VOR dem Hinzufügen dieser Zeile)
+        # WICHTIG: Nur wenn eine NEUE Verschiffung beginnt (nicht bei leeren Zeilen)
+        if (prev_shipment_key is not None and 
+            row_shipment_key is not None and 
+            row_shipment_key != prev_shipment_key):
+            # Verschiffung hat sich geändert - füge Summenzeile für vorherige Verschiffung ein
+            if current_shipment_indices:
+                sum_row = create_sum_row_from_indices(current_shipment_indices)
+                rows_with_sums.append(sum_row)
+                weekend_flags_extended.append(False)
+                holiday_flags_extended.append(False)
+                shipment_sum_flags.append(True)
+                current_shipment_indices = []
+        
+        # Füge die aktuelle Zeile IMMER hinzu (keine Zeile geht verloren)
+        rows_with_sums.append(row.to_dict() if isinstance(row, pd.Series) else row)
+        weekend_flags_extended.append(weekend_flags[idx])
+        holiday_flags_extended.append(holiday_flags[idx])
+        shipment_sum_flags.append(False)
+        
+        # Aktualisiere Tracking
+        if row_shipment_key is not None:
+            # Zeile mit Verschiffung - füge Index zur aktuellen Gruppe hinzu
+            if row_shipment_key == prev_shipment_key:
+                # Weiterhin gleiche Verschiffung
+                current_shipment_indices.append(idx)
+            else:
+                # Neue Verschiffung beginnt (oder erste Verschiffung)
+                prev_shipment_key = row_shipment_key
+                current_shipment_indices = [idx]
+        # WICHTIG: Leere Zeilen (row_shipment_key is None) ändern nichts am Tracking
+        # Die aktuelle Verschiffung bleibt aktiv, auch wenn dazwischen leere Zeilen kommen
+    
+    # Füge Summenzeile für die letzte Verschiffung ein (falls vorhanden)
+    if prev_shipment_key is not None and current_shipment_indices:
+        sum_row = create_sum_row_from_indices(current_shipment_indices)
+        rows_with_sums.append(sum_row)
+        weekend_flags_extended.append(False)
+        holiday_flags_extended.append(False)
+        shipment_sum_flags.append(True)
+    
+    # Erstelle neuen DataFrame mit Summenzeilen
+    df_with_sums = pd.DataFrame(rows_with_sums)
+    
+    # Füge Gesamt-Summenzeile am Ende hinzu
+    total_sum_row = {}
     for col in df.columns:
         if col in numeric_cols:
-            # Nur summieren, wenn die Spalte numerische Werte enthält
             try:
-                # Konvertiere zu numerisch, ignoriere nicht-numerische Werte
                 numeric_values = pd.to_numeric(df[col], errors='coerce')
-                sum_row[col] = int(numeric_values.sum()) if not numeric_values.isna().all() else 0
+                total_sum_row[col] = int(numeric_values.sum()) if not numeric_values.isna().all() else 0
             except (ValueError, TypeError):
-                sum_row[col] = 0
+                total_sum_row[col] = 0
         elif col not in ['Wochentag', 'Datum', 'Verspätung', 'Ladungsverlust', 'Abfahrt LKW 🇨🇳', 'Ankunft LKW 🇨🇳', 
                          'Abfahrt Schiff 🇨🇳', 'Ankunft Schiff 🇩🇪', 'Abfahrt LKW 🇩🇪', 
                          'Geplante Ankunft LKW 🇩🇪', 'Tatsächliche Ankunft LKW 🇩🇪']:
-            sum_row[col] = ''
+            total_sum_row[col] = ''
         else:
-            sum_row[col] = ''
+            total_sum_row[col] = ''
+    total_sum_row['Wochentag'] = 'Summe'
+    total_sum_row['Datum'] = ''
     
-    df_with_sum = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
-    
-    # Erweitere Flags für Summenzeile
-    weekend_flags_extended = list(weekend_flags) + [False]
-    holiday_flags_extended = list(holiday_flags) + [False]
+    df_with_sum = pd.concat([df_with_sums, pd.DataFrame([total_sum_row])], ignore_index=True)
+    weekend_flags_extended.append(False)
+    holiday_flags_extended.append(False)
+    shipment_sum_flags.append(False)  # Gesamt-Summenzeile ist keine Verschiffungs-Summenzeile
     
     # Entferne Flags aus Anzeige (werden nur für Styling verwendet)
     if 'Is_Weekend' in df.columns:
@@ -121,15 +248,22 @@ if not df.empty:
     # Styling-Funktion für Summenzeile (theme-aware)
     def style_row_with_sum(row):
         row_idx = row.name
-        if row_idx < len(weekend_flags):
-            # Wochenende hat Priorität (wenn beides, dann Wochenende = rot)
+        
+        # Gesamt-Summenzeile (letzte Zeile) - dunkelgrau
+        if row_idx >= len(shipment_sum_flags):
+            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+        
+        # Summenzeile zwischen Verschiffungen - leicht grau
+        if row_idx < len(shipment_sum_flags) and shipment_sum_flags[row_idx]:
+            return ['background-color: #f0f0f0; font-weight: bold' for _ in row]
+        
+        # Normale Zeilen mit Wochenende/Feiertag
+        if row_idx < len(weekend_flags_extended):
             if weekend_flags_extended[row_idx]:
                 return ['background-color: #ffcccc' for _ in row]
             elif holiday_flags_extended[row_idx]:
                 return ['background-color: #c8e6c9' for _ in row]
-        elif row_idx >= len(weekend_flags):
-            # Summenzeile
-            return ['background-color: #e0e0e0; font-weight: bold' for _ in row]
+        
         return [''] * len(row)
     
     styled_df = df_with_sum.style.apply(style_row_with_sum, axis=1)
