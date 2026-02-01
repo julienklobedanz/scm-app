@@ -20,8 +20,9 @@ from ui.volume_planning_utils import calculate_volume_planning_demand
 st.set_page_config(page_title="Reporting", layout="wide", page_icon="📊")
 
 # Theme Toggle (oben rechts, global)
-from ui.theme_toggle import render_theme_toggle
-render_theme_toggle()
+# Theme-Toggle entfernt - Light Mode ist Standard
+from ui.theme_toggle import apply_theme
+apply_theme("light")  # Light Mode immer aktiv
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett)
 st.markdown("""
@@ -711,7 +712,11 @@ with tab3:
             label="Service Level",
             value=f"{service_level:.2f}%",
             delta=service_level_delta,
-            delta_color=service_level_color
+            delta_color=service_level_color,
+            help="Berechnung: Service Level = (Gesamtproduktion / Gesamtnachfrage) × 100%. "
+                 "Die Gesamtproduktion umfasst alle fertiggestellten Fahrräder im Zeitraum. "
+                 "Die Gesamtnachfrage ist die Summe aller Tagesnachfragen. "
+                 "Reagiert auf Marketing-Szenarien (erhöhte Nachfrage) und Produktionsstörungen."
         )
     
     with col2:
@@ -908,49 +913,3 @@ with tab3:
                 )
                 st.plotly_chart(fig_product_deviation, width='stretch', key=f'chart_product_deviation_{product}')
             
-            st.divider()
-        
-        # Bestände Fahrräder
-        st.subheader("Bestände Fahrräder")
-        
-        bicycle_inventory_data = get_bicycle_inventory_data()
-        
-        if bicycle_inventory_data:
-            fig_bicycles = go.Figure()
-            
-            bicycle_colors = {
-                'MTB Allrounder': '#2ca02c',
-                'MTB Competition': '#9467bd',
-                'MTB Downhill': '#1f77b4',
-                'MTB Extreme': '#d62728',
-                'MTB Freeride': '#ff7f0e',
-                'MTB Marathon': '#8c564b',
-                'MTB Performance': '#e377c2',
-                'MTB Trail': '#7f7f7f'
-            }
-            
-            for product in sorted(MasterData.BOM.keys()):
-                dates = []
-                stocks = []
-                for date_key in sorted(bicycle_inventory_data.keys()):
-                    dates.append(date_key)
-                    stocks.append(bicycle_inventory_data[date_key].get(product, 0.0))
-                
-                fig_bicycles.add_trace(go.Scatter(
-                    x=dates,
-                    y=stocks,
-                    name=product,
-                    line=dict(color=bicycle_colors.get(product, '#808080'), width=2),
-                    mode='lines'
-                ))
-            
-            fig_bicycles.update_layout(
-                xaxis_title="Datum",
-                yaxis_title="Bestand (Einheiten)",
-                height=400,
-                hovermode='x unified',
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig_bicycles, width='stretch', key='chart_bicycles')
-        else:
-            st.info("Keine Fahrrad-Bestandsdaten verfügbar.")

@@ -17,8 +17,9 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 st.set_page_config(page_title="Produktion", layout="wide", page_icon="🏭")
 
 # Theme Toggle (oben rechts, global)
-from ui.theme_toggle import render_theme_toggle
-render_theme_toggle()
+# Theme-Toggle entfernt - Light Mode ist Standard
+from ui.theme_toggle import apply_theme
+apply_theme("light")  # Light Mode immer aktiv
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
@@ -63,8 +64,26 @@ if 'material_inventory_data' not in st.session_state:
     except Exception:
         pass  # Wird beim Laden der Seite behandelt
 
-st.title("🏭 Produktion")
-st.markdown("Übersicht über Produktionsplanung, tatsächliche Produktion und Materialverfügbarkeit")
+col_title_prod, col_help_prod = st.columns([20, 1])
+with col_title_prod:
+    st.title("🏭 Produktion")
+    st.markdown("Übersicht über Produktionsplanung, tatsächliche Produktion und Materialverfügbarkeit")
+with col_help_prod:
+    st.markdown("""
+    <div style="margin-top: 1.5rem;">
+        <span title="Produktions-Berechnung (Ranking-Logik): 
+1. Bedarf = Tagesnachfrage + Backlog (nicht produzierte Mengen von vorherigen Tagen)
+2. Proportionalität: Jedes Produkt erhält anteilig Kapazität basierend auf Bedarf
+   Anteil = (Bedarf Produkt / Gesamtbedarf) × Tageskapazität
+3. Ranking: Produkte werden nach (Reihenfolge / 1.000.000 + proportionaler Anteil) sortiert
+   Dies entscheidet die Produktionsreihenfolge bei Kapazitätsengpässen
+4. Tatsächliche Produktion = min(geplante Produktion, verfügbares Material)
+   Materialverfügbarkeit begrenzt die Produktion
+5. Backlog = Bedarf - tatsächliche Produktion (wird auf nächsten Tag übertragen)
+Die Produktion reagiert auf Marketing-Szenarien (erhöhte Nachfrage) und Materialverfügbarkeit." 
+        style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Happy Path: Automatische Simulation wenn noch keine Ergebnisse vorhanden
 run_happy_path_simulation()

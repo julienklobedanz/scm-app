@@ -17,8 +17,9 @@ from ui.scenario_sidebar import render_scenario_sidebar
 st.set_page_config(page_title="Materiallager", layout="wide", page_icon="📦")
 
 # Theme Toggle (oben rechts, global)
-from ui.theme_toggle import render_theme_toggle
-render_theme_toggle()
+# Theme-Toggle entfernt - Light Mode ist Standard
+from ui.theme_toggle import apply_theme
+apply_theme("light")  # Light Mode immer aktiv
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
@@ -54,8 +55,24 @@ initialize_session_state()
 # Dies ist notwendig, damit der Materialverbrauch korrekt berechnet wird
 calculate_volume_planning_demand()
 
-st.title("📦 Materiallager")
-st.markdown("Übersicht über Sattelzugänge, Bestände und Verluste")
+col_title_mat, col_help_mat = st.columns([20, 1])
+with col_title_mat:
+    st.title("📦 Materiallager")
+    st.markdown("Übersicht über Sattelzugänge, Bestände und Verluste")
+with col_help_mat:
+    st.markdown("""
+    <div style="margin-top: 1.5rem;">
+        <span title="Berechnung der Materialbestände: 
+1. Bestand morgens = Bestand abends (gestern) + Lagerzugang (heute)
+   Lagerzugang kommt aus Inbound-Lieferungen (China → Deutschland)
+2. Lagerabgang = min(geplante Produktion, verfügbarer Bestand)
+   Der Abgang entspricht dem tatsächlichen Materialverbrauch der Produktion
+3. Bestand abends = Bestand morgens - Lagerabgang - Verlustmenge (Wasserschaden)
+   Wasserschaden-Szenarien reduzieren den Bestand nach dem Lagerabgang
+Die Berechnung erfolgt chronologisch Tag für Tag und reagiert auf Wasserschaden-Szenarien." 
+        style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Happy Path Simulation
 run_happy_path_simulation()

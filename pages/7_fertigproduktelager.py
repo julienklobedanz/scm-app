@@ -17,8 +17,9 @@ from ui.utils import initialize_session_state, run_happy_path_simulation
 st.set_page_config(page_title="Fertigproduktelager", layout="wide", page_icon="✅")
 
 # Theme Toggle (oben rechts, global)
-from ui.theme_toggle import render_theme_toggle
-render_theme_toggle()
+# Theme-Toggle entfernt - Light Mode ist Standard
+from ui.theme_toggle import apply_theme
+apply_theme("light")  # Light Mode immer aktiv
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""

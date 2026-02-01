@@ -93,12 +93,33 @@ def apply_theme(theme: str):
             color: #262730 !important;
         }
         
-        /* Text-Elemente */
+        /* Text-Elemente - Schritt 7: Verbesserte Typografie */
         h1, h2, h3, h4, h5, h6 {
             color: #262730 !important;
+            font-weight: 600 !important;
+            line-height: 1.4 !important;
+        }
+        h1 {
+            font-size: 2.25rem !important;
+            margin-bottom: 1rem !important;
+        }
+        h2 {
+            font-size: 1.75rem !important;
+            margin-top: 1.5rem !important;
+            margin-bottom: 0.75rem !important;
+        }
+        h3 {
+            font-size: 1.5rem !important;
+            margin-top: 1.25rem !important;
+            margin-bottom: 0.5rem !important;
         }
         p, span, div, label {
             color: #262730 !important;
+            line-height: 1.6 !important;
+        }
+        /* Mehr Abstand zwischen Absätzen */
+        p {
+            margin-bottom: 0.75rem !important;
         }
         
         /* ============================================
@@ -124,7 +145,7 @@ def apply_theme(theme: str):
             color: #262730 !important;
         }
         
-        /* Sidebar Input-Felder */
+        /* Sidebar Input-Felder - Schritt 1: Fokus-Indikatoren */
         [data-testid="stSidebar"] input[type="text"],
         [data-testid="stSidebar"] input[type="number"],
         [data-testid="stSidebar"] input[type="date"],
@@ -135,9 +156,21 @@ def apply_theme(theme: str):
             color: #262730 !important;
             background-color: #ffffff !important;
             border-color: #d1d5db !important;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        [data-testid="stSidebar"] input[type="text"]:focus,
+        [data-testid="stSidebar"] input[type="number"]:focus,
+        [data-testid="stSidebar"] input[type="date"]:focus,
+        [data-testid="stSidebar"] .stTextInput > div > div > input:focus,
+        [data-testid="stSidebar"] .stNumberInput > div > div > input:focus,
+        [data-testid="stSidebar"] .stDateInput > div > div > input:focus,
+        [data-testid="stSidebar"] [data-baseweb="input"] input:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+            outline: none !important;
         }
         
-        /* Sidebar Select-Boxen */
+        /* Sidebar Select-Boxen - Schritt 1: Fokus-Indikatoren */
         [data-testid="stSidebar"] select,
         [data-testid="stSidebar"] .stSelectbox > div > div > select,
         [data-testid="stSidebar"] [data-baseweb="select"],
@@ -146,6 +179,15 @@ def apply_theme(theme: str):
             color: #262730 !important;
             background-color: #ffffff !important;
             border-color: #d1d5db !important;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        [data-testid="stSidebar"] select:focus,
+        [data-testid="stSidebar"] .stSelectbox > div > div > select:focus,
+        [data-testid="stSidebar"] [data-baseweb="select"]:focus,
+        [data-testid="stSidebar"] [data-baseweb="select"] input:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+            outline: none !important;
         }
         [data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] {
             background-color: #ffffff !important;
@@ -160,16 +202,16 @@ def apply_theme(theme: str):
             border-color: #d1d5db !important;
         }
         
-        /* Sidebar Multi-Select Tags */
+        /* Sidebar Multi-Select Tags - Helles Pastellblau (heller und blauer) */
         [data-testid="stSidebar"] [data-baseweb="tag"],
         [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"],
         [data-testid="stSidebar"] [data-baseweb="tag"] > span {
-            background-color: #e0e7ff !important;
-            color: #1e40af !important;
+            background-color: #d0e0f0 !important;
+            color: #3d4a5f !important;
         }
         [data-testid="stSidebar"] [data-baseweb="tag"] span,
         [data-testid="stSidebar"] [data-baseweb="tag"] button {
-            color: #1e40af !important;
+            color: #3d4a5f !important;
         }
         
         /* Sidebar Textarea */
@@ -179,7 +221,7 @@ def apply_theme(theme: str):
             border-color: #d1d5db !important;
         }
         
-        /* Sidebar Buttons - Light Mode mit Umrandung */
+        /* Sidebar Buttons - Schritt 2: Hover-Effekte */
         [data-testid="stSidebar"] .stButton > button,
         [data-testid="stSidebar"] button[type="button"],
         [data-testid="stSidebar"] button:not([data-baseweb="button"]),
@@ -188,15 +230,25 @@ def apply_theme(theme: str):
             border: 1px solid #262730 !important;
             background-color: #ffffff !important;
             font-weight: 600 !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer !important;
         }
         [data-testid="stSidebar"] .stButton > button:hover,
         [data-testid="stSidebar"] button[type="button"]:hover,
         [data-testid="stSidebar"] button[kind="secondary"]:hover {
             background-color: #f3f4f6 !important;
             border-color: #1f2937 !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+        }
+        [data-testid="stSidebar"] .stButton > button:active,
+        [data-testid="stSidebar"] button[type="button"]:active,
+        [data-testid="stSidebar"] button[kind="secondary"]:active {
+            transform: translateY(0) !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
         }
         
-        /* Primary Button (Simulation neu starten) - Light Mode mit Umrandung */
+        /* Primary Button - Schritt 2: Hover-Effekte */
         [data-testid="stSidebar"] button[type="submit"],
         [data-testid="stSidebar"] .stButton > button[kind="primary"],
         [data-testid="stSidebar"] button[kind="primary"] {
@@ -204,24 +256,42 @@ def apply_theme(theme: str):
             border: 1px solid #262730 !important;
             background-color: #ffffff !important;
             font-weight: 700 !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer !important;
         }
         [data-testid="stSidebar"] button[type="submit"]:hover,
         [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover,
         [data-testid="stSidebar"] button[kind="primary"]:hover {
             background-color: #f3f4f6 !important;
             border-color: #1f2937 !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 3px 6px rgba(0, 0, 0, 0.15) !important;
+        }
+        [data-testid="stSidebar"] button[type="submit"]:active,
+        [data-testid="stSidebar"] .stButton > button[kind="primary"]:active,
+        [data-testid="stSidebar"] button[kind="primary"]:active {
+            transform: translateY(0) !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
         }
         
-        /* Baseweb Buttons in Sidebar */
+        /* Baseweb Buttons in Sidebar - Schritt 2: Hover-Effekte */
         [data-testid="stSidebar"] [data-baseweb="button"] {
             color: #262730 !important;
             border: 1px solid #262730 !important;
             background-color: #ffffff !important;
             font-weight: 600 !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer !important;
         }
         [data-testid="stSidebar"] [data-baseweb="button"]:hover {
             background-color: #f3f4f6 !important;
             border-color: #1f2937 !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+        }
+        [data-testid="stSidebar"] [data-baseweb="button"]:active {
+            transform: translateY(0) !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
         }
         
         /* Sidebar Checkbox */
@@ -253,13 +323,16 @@ def apply_theme(theme: str):
             color: #262730 !important;
         }
         
-        /* Sidebar Selectbox Labels und Text */
+        /* Sidebar Selectbox Labels und Text - Schritt 8: Verbesserte Lesbarkeit */
         [data-testid="stSidebar"] .stSelectbox label,
         [data-testid="stSidebar"] .stTextInput label,
         [data-testid="stSidebar"] .stNumberInput label,
         [data-testid="stSidebar"] .stDateInput label,
         [data-testid="stSidebar"] .stMultiSelect label {
             color: #262730 !important;
+            font-weight: 500 !important;
+            font-size: 0.95rem !important;
+            margin-bottom: 0.5rem !important;
         }
         
         /* Sidebar Checkbox Labels */
@@ -386,7 +459,7 @@ def apply_theme(theme: str):
             background-color: #f3f4f6 !important;
         }
         
-        /* DataFrame Zellen */
+        /* DataFrame Zellen - Schritt 5: Verbesserte Lesbarkeit */
         [data-testid="stDataFrame"] tbody td,
         .stDataFrame tbody td,
         .dataframe tbody td,
@@ -394,6 +467,18 @@ def apply_theme(theme: str):
             background-color: inherit !important;
             color: #262730 !important;
             border-color: #e5e7eb !important;
+            padding: 0.75rem 1rem !important;
+            font-size: 0.95rem !important;
+            line-height: 1.5 !important;
+        }
+        /* Tabellen-Header - Schritt 5: Größeres Padding */
+        [data-testid="stDataFrame"] thead th,
+        .stDataFrame thead th,
+        .dataframe thead th,
+        table thead th {
+            padding: 0.875rem 1rem !important;
+            font-weight: 600 !important;
+            font-size: 0.95rem !important;
         }
         
         /* Summenzeile */
@@ -480,41 +565,82 @@ def apply_theme(theme: str):
         /* ============================================
            WEITERE UI-ELEMENTE
            ============================================ */
-        /* Buttons - Light Mode mit Umrandung */
+        /* Buttons - Schritt 2: Hover-Effekte */
         .stButton > button {
             color: #262730 !important;
             border: 1px solid #262730 !important;
             background-color: #ffffff !important;
             font-weight: 600 !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer !important;
         }
         .stButton > button:hover {
             background-color: #f3f4f6 !important;
             border-color: #1f2937 !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+        }
+        .stButton > button:active {
+            transform: translateY(0) !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
         }
         
-        /* Input-Felder */
+        /* Input-Felder - Schritt 1: Fokus-Indikatoren */
         .stTextInput > div > div > input {
             background-color: #ffffff !important;
             color: #262730 !important;
             border-color: #d1d5db !important;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        .stTextInput > div > div > input:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+            outline: none !important;
         }
         .stNumberInput > div > div > input {
             background-color: #ffffff !important;
             color: #262730 !important;
             border-color: #d1d5db !important;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        .stNumberInput > div > div > input:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+            outline: none !important;
         }
         .stSelectbox > div > div > select {
             background-color: #ffffff !important;
             color: #262730 !important;
             border-color: #d1d5db !important;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        .stSelectbox > div > div > select:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+            outline: none !important;
         }
         
-        /* Metriken */
+        /* Metriken - Schritt 6: Verbesserte Lesbarkeit */
         [data-testid="stMetricValue"] {
             color: #262730 !important;
+            font-size: 2rem !important;
+            font-weight: 600 !important;
         }
         [data-testid="stMetricLabel"] {
             color: #262730 !important;
+            font-size: 0.95rem !important;
+            font-weight: 500 !important;
+        }
+        /* Metriken-Container mit Hover-Effekt */
+        [data-testid="stMetricContainer"] {
+            transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+            border-radius: 0.5rem !important;
+            padding: 0.5rem !important;
+        }
+        [data-testid="stMetricContainer"]:hover {
+            background-color: #f9fafb !important;
+            transform: translateY(-2px) !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05) !important;
         }
         
         /* Tabs */
@@ -531,13 +657,181 @@ def apply_theme(theme: str):
             color: #262730 !important;
         }
         
-        /* Info/Warning/Error Boxes */
+        /* Info/Warning/Error Boxes - Schritt 3: Verbesserte Darstellung */
         .stAlert {
             background-color: #f0f2f6 !important;
+            padding: 1rem !important;
+            border-radius: 0.5rem !important;
+            border-left: 4px solid #3b82f6 !important;
+            transition: box-shadow 0.2s ease !important;
+        }
+        .stAlert:hover {
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+        }
+        .stAlert p, .stAlert div {
+            line-height: 1.6 !important;
+            margin-bottom: 0.5rem !important;
+        }
+        /* Success Boxes */
+        [data-baseweb="notification"]:has([class*="success"]),
+        .stAlert:has([class*="success"]) {
+            border-left-color: #10b981 !important;
+        }
+        /* Warning Boxes */
+        [data-baseweb="notification"]:has([class*="warning"]),
+        .stAlert:has([class*="warning"]) {
+            border-left-color: #f59e0b !important;
+        }
+        /* Error Boxes */
+        [data-baseweb="notification"]:has([class*="error"]),
+        .stAlert:has([class*="error"]) {
+            border-left-color: #ef4444 !important;
+        }
+        
+        /* Schritt 10: Verbesserte Captions */
+        .stCaption {
+            color: #6b7280 !important;
+            font-size: 0.875rem !important;
+            line-height: 1.5 !important;
+            margin-top: 0.25rem !important;
+        }
+        
+        /* Schritt 4: Verbesserte Tooltips/Help-Icons - Sofortige Tooltips ohne Verzögerung */
+        [data-testid="stTooltipIcon"] {
+            color: #6b7280 !important;
+            cursor: help !important;
+            transition: color 0.05s ease !important;
+        }
+        [data-testid="stTooltipIcon"]:hover {
+            color: #3b82f6 !important;
+        }
+        /* Info-Icons in Headers - Sofortige Tooltips ohne Verzögerung */
+        span[title] {
+            position: relative !important;
+            cursor: help !important;
+            transition: color 0.05s ease !important;
+        }
+        /* Custom Tooltip für sofortige Anzeige - Größerer Text, hellerer Hintergrund, vollständige Einblendung */
+        span[title] {
+            position: relative !important;
+            cursor: help !important;
+            transition: color 0.05s ease !important;
+        }
+        span[title]:hover::after {
+            content: attr(title) !important;
+            position: absolute !important;
+            padding: 14px 18px !important;
+            background-color: #f3f4f6 !important;
+            color: #262730 !important;
+            font-size: 1rem !important;
+            line-height: 1.5 !important;
+            white-space: pre-line !important;
+            border-radius: 6px !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15) !important;
+            border: 1px solid #d1d5db !important;
+            z-index: 10000 !important;
+            pointer-events: none !important;
+            max-width: 750px !important;
+            min-width: 450px !important;
+            word-wrap: break-word !important;
+            opacity: 1 !important;
+            transition: opacity 0s !important;
+            /* Tooltip rechts am Icon ausrichten, wächst nach links */
+            right: var(--tooltip-horizontal-right, 0) !important;
+            left: var(--tooltip-horizontal-left, auto) !important;
+            /* Standard: Unten anzeigen (verhindert Überlauf nach oben) - wird durch JavaScript angepasst wenn oben Platz ist */
+            top: var(--tooltip-position-top, 100%) !important;
+            bottom: var(--tooltip-position-bottom, auto) !important;
+            margin-top: var(--tooltip-margin-top, 8px) !important;
+            margin-bottom: var(--tooltip-margin-bottom, 0) !important;
+            /* Sicherstellen, dass Tooltip nicht über Ränder hinausgeht */
+            max-width: min(750px, calc(100vw - 40px)) !important;
+            max-height: calc(100vh - 100px) !important;
+            overflow-y: auto !important;
+        }
+        span[title]:hover {
+            color: #3b82f6 !important;
+        }
+        /* Divider - Klarere Trennlinien */
+        hr {
+            border: none !important;
+            border-top: 2px solid #e5e7eb !important;
+            margin: 1.5rem 0 !important;
         }
         </style>
         
         <script>
+        // Tooltip-Positionierung: Dynamisch anpassen wenn über Rand hinausgeht
+        (function() {
+            function adjustTooltipPosition(icon) {
+                const iconRect = icon.getBoundingClientRect();
+                const tooltipText = icon.getAttribute('title');
+                
+                // Erstelle temporäres Element um Tooltip-Größe zu messen
+                const tempDiv = document.createElement('div');
+                tempDiv.style.cssText = 'position: absolute; visibility: hidden; white-space: pre-line; font-size: 1rem; line-height: 1.5; padding: 14px 18px; max-width: 750px; min-width: 450px; word-wrap: break-word; font-family: inherit;';
+                tempDiv.textContent = tooltipText;
+                document.body.appendChild(tempDiv);
+                const tooltipHeight = tempDiv.offsetHeight;
+                const tooltipWidth = Math.min(tempDiv.offsetWidth, 750);
+                document.body.removeChild(tempDiv);
+                
+                // Prüfe ob oben genug Platz ist
+                const spaceAbove = iconRect.top;
+                const spaceBelow = window.innerHeight - iconRect.bottom;
+                
+                // Setze Tooltip-Styles dynamisch über CSS-Variablen
+                if (spaceAbove < tooltipHeight + 30 && spaceBelow > tooltipHeight + 30) {
+                    // Nicht genug Platz oben, zeige unten
+                    icon.style.setProperty('--tooltip-position-top', '100%');
+                    icon.style.setProperty('--tooltip-position-bottom', 'auto');
+                    icon.style.setProperty('--tooltip-margin-top', '8px');
+                    icon.style.setProperty('--tooltip-margin-bottom', '0');
+                } else {
+                    // Genug Platz oben, zeige oben
+                    icon.style.setProperty('--tooltip-position-top', 'auto');
+                    icon.style.setProperty('--tooltip-position-bottom', '100%');
+                    icon.style.setProperty('--tooltip-margin-top', '0');
+                    icon.style.setProperty('--tooltip-margin-bottom', '8px');
+                }
+                
+                // Prüfe horizontale Position
+                const spaceRight = window.innerWidth - iconRect.right;
+                if (spaceRight < tooltipWidth + 20 && iconRect.left > tooltipWidth + 20) {
+                    // Nicht genug Platz rechts, zeige links
+                    icon.style.setProperty('--tooltip-horizontal-right', 'auto');
+                    icon.style.setProperty('--tooltip-horizontal-left', '0');
+                } else {
+                    // Genug Platz rechts, zeige rechts
+                    icon.style.setProperty('--tooltip-horizontal-right', '0');
+                    icon.style.setProperty('--tooltip-horizontal-left', 'auto');
+                }
+            }
+            
+            function initTooltips() {
+                document.querySelectorAll('span[title]').forEach(function(icon) {
+                    icon.addEventListener('mouseenter', function() {
+                        adjustTooltipPosition(icon);
+                    }, { once: false });
+                });
+            }
+            
+            // Führe nach DOMContentLoaded aus
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', function() {
+                    setTimeout(initTooltips, 100);
+                });
+            } else {
+                setTimeout(initTooltips, 100);
+            }
+            
+            // Beobachte neue Elemente (vereinfacht)
+            const observer = new MutationObserver(function() {
+                setTimeout(initTooltips, 100);
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        })();
+        
         // KRITISCH: Vereinfachtes JavaScript für Header-Styling - verhindert Blockierung
         (function() {
             let updateCount = 0;

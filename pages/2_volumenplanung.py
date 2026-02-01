@@ -19,8 +19,9 @@ from ui.volume_planning_utils import calculate_volume_planning_demand
 st.set_page_config(page_title="Volumenplanung", layout="wide", page_icon="📅")
 
 # Theme Toggle (oben rechts, global)
-from ui.theme_toggle import render_theme_toggle
-render_theme_toggle()
+# Theme-Toggle entfernt - Light Mode ist Standard
+from ui.theme_toggle import apply_theme
+apply_theme("light")  # Light Mode immer aktiv
 
 # CSS für Menü-Formatierung (Großbuchstaben und Fett) und fixierte Summenzeilen
 st.markdown("""
@@ -174,7 +175,22 @@ def calculate_product_demand(day: int, product: str, include_marketing: bool = T
 tab1, tab2 = st.tabs(["📊 Wöchentliche Planung", "📋 Tägliche Planung"])
 
 with tab1:
-    st.header("Wöchentliche Volumenplanung")
+    col_header_weekly, col_help_weekly = st.columns([20, 1])
+    with col_header_weekly:
+        st.header("Wöchentliche Volumenplanung")
+    with col_help_weekly:
+        st.markdown("""
+        <div style="margin-top: 1.5rem;">
+            <span title="Berechnung der Schichten: 
+1. Täglicher Bedarf = Gesamtvolumen der Woche / Anzahl Arbeitstage
+2. Benötigte Schichten = AUFRUNDEN(täglicher Bedarf / Kapazität pro Schicht)
+   Kapazität pro Schicht = 8 Stunden × 130 Fahrräder/Stunde × 1 Produktionslinie = 1040 Fahrräder
+3. Tatsächliche Schichten = max(1, min(3, benötigte Schichten))
+   (Minimum 1 Schicht, Maximum 3 Schichten)
+Die Nachfrage basiert auf Saisonalität, Verkaufsanteilen und Marketing-Szenarien." 
+            style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Erstelle wöchentliche Planung
     start_date = date(planning_year, 1, 1)
@@ -387,7 +403,21 @@ with tab1:
     st.dataframe(styled_weekly_df, width='stretch', hide_index=True, height=800)
 
 with tab2:
-    st.header("Tägliche Volumenplanung")
+    col_header_daily, col_help_daily = st.columns([20, 1])
+    with col_header_daily:
+        st.header("Tägliche Volumenplanung")
+    with col_help_daily:
+        st.markdown("""
+        <div style="margin-top: 1.5rem;">
+            <span title="Nachfrage-Berechnung pro Tag: 
+1. Basis-Nachfrage = Jahresvolumen × Verkaufsanteil × Saisonalitätsfaktor / Anzahl Arbeitstage
+2. Marketing-Add-on = Zusätzlicher Bedarf aus Marketing-Szenarien (gleichmäßig auf Arbeitstage im Zeitraum verteilt)
+3. Produktanteil = Marketing-Add-on × (Basis-Nachfrage Produkt / Summe Basis-Nachfrage betroffener Produkte)
+4. Gesamtnachfrage = Basis-Nachfrage + Marketing-Add-on
+Die geplante Nachfrage (ohne Marketing) und tatsächliche Nachfrage (mit Marketing) werden separat berechnet." 
+            style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Hinweis: daily_demands_* wurden bereits oben zentral geladen.
     

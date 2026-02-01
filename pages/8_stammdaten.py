@@ -59,8 +59,9 @@ def _invalidate_all_caches():
 st.set_page_config(page_title="Stammdaten", layout="wide", page_icon="📋")
 
 # Theme Toggle (oben rechts, global)
-from ui.theme_toggle import render_theme_toggle
-render_theme_toggle()
+# Theme-Toggle entfernt - Light Mode ist Standard
+from ui.theme_toggle import apply_theme
+apply_theme("light")  # Light Mode immer aktiv
 
 # PERFORMANCE: Stammdaten-Seite benötigt KEINE Simulation oder schwere Berechnungen
 # Sie zeigt nur statische Daten. initialize_all_page_calculations() würde eine Simulation starten,
