@@ -215,10 +215,6 @@ with tab1:
 
 with tab2:
     st.header("Planungs-Parameter")
-    st.markdown("Globale Konfiguration und Saisonalität")
-    
-    # Globale Konfiguration
-    st.subheader("Globale Konfiguration")
     
     # Planungsbeginn (aus Sidebar hierher verschoben)
     if 'planning_year' not in st.session_state:
@@ -723,10 +719,9 @@ with tab4:
 
 with tab3:
     st.header("Beschaffung")
-    st.markdown("Routen und Transportmittel für die Beschaffung")
     
-    # Lieferanten-Parameter und Standorte
-    st.subheader("Lieferanten-Parameter und Standorte")
+    # Lieferanten-Parameter
+    st.subheader("Lieferanten-Parameter")
     
     # Standard-Vorlaufzeit für Label (49 Tage)
     standard_lead_time = MasterData.CHINA_SUPPLIER['Saddles']['lead_time']
@@ -821,8 +816,16 @@ with tab3:
     st.divider()
     
     # Beschaffungs-Routen (nur China - Deutschland und Spanien entfernt)
-    st.subheader("Beschaffungs-Routen")
-    st.warning("⚠️ Änderungen an Routen-Dauer erfordern Neustart der Simulation für korrekte Berechnungen!")
+    col_routes_title, col_routes_help = st.columns([20, 1])
+    with col_routes_title:
+        st.subheader("Beschaffungs-Routen")
+    with col_routes_help:
+        st.markdown("""
+        <div style="margin-top: 1.5rem;">
+            <span title="Änderungen an Routen-Dauer erfordern Neustart der Simulation für korrekte Berechnungen."
+                style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
+        </div>
+        """, unsafe_allow_html=True)
     
     procurement_data = []
     route_keys = []  # Speichere Keys für Synchronisierung
@@ -847,7 +850,6 @@ with tab3:
         procurement_df = pd.DataFrame(procurement_data)
         display_df = procurement_df[['Lieferant', 'Produktkomponente', 'Abfahrt', 'Ankunft', 'Transportmittel', 'Art']].copy()
         st.dataframe(display_df, width='stretch', hide_index=True)
-        st.caption("💡 **Hinweis:** 'Dauer Standard' (z.B. 22 KT für Schiff) ist ein Referenzwert aus den ursprünglichen Stammdaten. Die aktuelle 'Dauer' kann unten geändert werden.")
         
         # Editierbare Dauer-Werte mit st.number_input()
         procurement_changed = False
