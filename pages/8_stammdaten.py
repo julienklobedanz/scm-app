@@ -15,7 +15,7 @@ from ui.page_initialization import initialize_all_page_calculations
 
 def _invalidate_all_caches():
     """
-    Invalidiert alle relevanten Caches bei Parameteränderungen (inkl. Stückliste, Arbeitslast, Planung).
+    Invalidiert alle relevanten Caches bei Parameteränderungen (inkl. Stückliste, Arbeitslast, Planung, Vorlaufzeit).
     Wird aufgerufen wenn Planungsparameter oder BOM-Zusammensetzung geändert werden.
     """
     keys_to_delete = [
@@ -36,15 +36,22 @@ def _invalidate_all_caches():
         'simulator',
         'happy_path_run',
         'simulation_year',
+        # KRITISCH: Lauf-Flags zurücksetzen, damit run_happy_path_simulation() neu startet (nicht "Simulation läuft..." blockiert)
+        'simulation_running',
+        'simulation_started',
+        'simulation_start_time',
+        # Materiallager/Inbound: abgeleitete Caches und erstes Datum
+        'material_inventory_last_cache_key',
+        'material_lager_first_date',
     ]
     
     for k in keys_to_delete:
         if k in st.session_state:
             del st.session_state[k]
     
-    # Lösche auch alle Caches die mit "material_inventory_" beginnen (außer last_cache_key)
+    # Lösche auch alle dynamischen Cache-Keys die mit "material_inventory_" beginnen
     for k in list(st.session_state.keys()):
-        if k.startswith('material_inventory_') and k != 'material_inventory_last_cache_key':
+        if k.startswith('material_inventory_'):
             del st.session_state[k]
     
     # PERFORMANCE: Invalidiere auch Cache für geplante Ankunftsdaten
