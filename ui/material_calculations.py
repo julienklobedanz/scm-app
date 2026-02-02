@@ -131,6 +131,13 @@ def calculate_material_inventory():
                             if qty > 0:
                                 receipts_by_date_and_saddle[avail_date][saddle_name] += qty
     
+    # Erstes Datum im Materiallager = erste tatsächliche Ankunft LKW DE (reagiert auf Vorlaufzeit)
+    if receipts_by_date_and_saddle:
+        first_lkw_de_arrival_date = min(receipts_by_date_and_saddle.keys())
+    else:
+        first_lkw_de_arrival_date = date(planning_year - 1, 11, 1)  # Fallback
+    st.session_state.material_lager_first_date = first_lkw_de_arrival_date
+    
     # -------------------------------------------------------
     # 2. MATERIALVERBRAUCH VORVERARBEITEN (aus Produktions-Log)
     # -------------------------------------------------------
@@ -182,10 +189,9 @@ def calculate_material_inventory():
     # -------------------------------------------------------
     # 3. MATERIALVERBRAUCH & BESTAND BERECHNEN
     # -------------------------------------------------------
-    # Start etwas früher, um Übertrag aus Vorjahr korrekt aufzubauen
-    # KRITISCH: Erweitert bis 10.01.2028, um auch die ersten Tage des neuen Jahres zu erfassen
-    # Dies stellt sicher, dass alle Berechnungen konsistent sind
-    start_date_log = date(planning_year - 1, 11, 1)
+    # Start = erste tatsächliche Ankunft LKW DE aus Inbound (dynamisch auf Vorlaufzeit)
+    # Ende bis 10.01.(Jahr+1) für konsistente Berechnungen
+    start_date_log = first_lkw_de_arrival_date
     end_date_log = date(planning_year + 1, 1, 10)  # Erweitert bis 10.01.2028
     total_days = (end_date_log - start_date_log).days + 1
     

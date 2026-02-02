@@ -93,9 +93,8 @@ if st.session_state.results_df is None:
 
 results_df = st.session_state.results_df
 
-# Zeitraum
+# Zeitraum: Erstes Datum = erste tatsächliche Ankunft LKW DE aus Inbound (dynamisch)
 planning_year = st.session_state.get('planning_year', 2027)
-start_date = date(planning_year - 1, 12, 31)
 end_date = date(planning_year, 12, 31)
 workday_calc = WorkdayCalculator(year=planning_year)
 start_date_simulation = date(planning_year, 1, 1)
@@ -154,6 +153,20 @@ if cache_key not in st.session_state or 'saddle_logs_cache' not in st.session_st
 else:
     # Verwende gecachte Daten
     saddle_logs = st.session_state.saddle_logs_cache
+
+# Erstes Datum = erste tatsächliche Ankunft LKW DE aus Inbound (aus Daten oder Session)
+from config.master_data import MasterData as _MD
+_has_logs = saddle_logs and any(not df.empty for df in saddle_logs.values())
+if _has_logs:
+    try:
+        start_date = min(
+            datetime.strptime(saddle_logs[s].iloc[0]['Datum'], _MD.DATE_FORMAT).date()
+            for s in saddle_logs if not saddle_logs[s].empty and 'Datum' in saddle_logs[s].columns
+        )
+    except (ValueError, KeyError, IndexError):
+        start_date = st.session_state.get('material_lager_first_date') or date(planning_year - 1, 12, 31)
+else:
+    start_date = st.session_state.get('material_lager_first_date') or date(planning_year - 1, 12, 31)
 
 for saddle_type in sorted(saddle_logs.keys()):
     st.subheader(f"📋 {saddle_type}")
