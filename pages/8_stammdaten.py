@@ -15,8 +15,8 @@ from ui.page_initialization import initialize_all_page_calculations
 
 def _invalidate_all_caches():
     """
-    Invalidiert alle relevanten Caches bei Parameteränderungen.
-    Wird aufgerufen wenn Planungsparameter geändert werden.
+    Invalidiert alle relevanten Caches bei Parameteränderungen (inkl. Stückliste, Arbeitslast, Planung).
+    Wird aufgerufen wenn Planungsparameter oder BOM-Zusammensetzung geändert werden.
     """
     keys_to_delete = [
         'production_logs_cache',
@@ -28,7 +28,14 @@ def _invalidate_all_caches():
         'daily_demands_planned',
         'daily_demands_actual',
         'volume_planning_calculated',
-        'volume_planning_cache_key'
+        'volume_planning_cache_key',
+        # Simulation: Bei BOM-/Parameteränderung neu berechnen
+        'simulation_cache',
+        'results_df',
+        'kpis',
+        'simulator',
+        'happy_path_run',
+        'simulation_year',
     ]
     
     for k in keys_to_delete:
@@ -252,7 +259,12 @@ with tab1:
                     st.session_state.editable_bom[product] = new_comp
                     changed = True
         if changed:
-            st.success("✅ Stückliste aktualisiert!")
+            # KRITISCH: Synchronisiere MasterData.BOM, damit die neue Zusammensetzung in der gesamten App wirkt
+            MasterData.BOM = {p: {'frame': c['frame'], 'saddle': c['saddle'], 'fork': c['fork']}
+                             for p, c in st.session_state.editable_bom.items()}
+            # Cache-Invalidierung: Volumenplanung, Simulation, Produktion, Lieferant China, Material
+            _invalidate_all_caches()
+            st.success("✅ Stückliste aktualisiert! Volumenplanung und Simulation werden beim nächsten Aufruf neu berechnet.")
             # Kein st.rerun() - Streamlit aktualisiert automatisch
 
 with tab2:
