@@ -8,8 +8,12 @@ import pandas as pd
 from datetime import date, datetime, timedelta
 from typing import Dict
 from config.master_data import MasterData
+from config.holidays_config import HolidaysConfig
 from simulation.workday_calculator import WorkdayCalculator
 from models.scenarios import WaterDamageScenario
+
+# Wochentags-Namen für DAILY_WORKLOAD (0=Mo, 6=So)
+_WEEKDAY_NAMES = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
 
 
 def calculate_material_inventory():
@@ -203,7 +207,7 @@ def calculate_material_inventory():
         current_date = start_date_log + timedelta(days=day_offset)
         day = (current_date - start_date_simulation).days
         
-        # Wochentag / Feiertag
+        # Wochentag / Feiertag / Arbeitstag
         weekday = current_date.weekday()
         weekday_abbr = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][weekday]
         is_weekend = weekday >= 5
@@ -211,10 +215,16 @@ def calculate_material_inventory():
         is_workday = False
         
         if 0 <= day < 365:
+            # Innerhalb Planungsjahr: WorkdayCalculator nutzen
             if current_date in workday_calc.german_holidays:
                 is_holiday = True
-            # Prüfe ob Arbeitstag (berücksichtigt DAILY_WORKLOAD)
             is_workday = workday_calc.is_workday(day)
+        else:
+            # Außerhalb Planungsjahr (z.B. Vorlaufzeit: Nov/Dez Vorjahr): Feiertag/Arbeitstag aus Datum ableiten
+            holidays_that_year = HolidaysConfig.get_holidays_for_year(current_date.year, 'DE')
+            is_holiday = current_date in holidays_that_year
+            workload = MasterData.DAILY_WORKLOAD.get(_WEEKDAY_NAMES[weekday], 0.0)
+            is_workday = (not is_weekend) and (not is_holiday) and (workload > 0.0)
         
         # 1. Zugang (aus transport_status - synchron mit Produktion!)
         receipt_by_saddle = receipts_by_date_and_saddle.get(current_date, {s: 0.0 for s in saddle_types})
