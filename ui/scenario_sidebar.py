@@ -538,6 +538,11 @@ def render_scenario_sidebar(key_suffix=""):
             for i, scenario in enumerate(custom_scenarios):
                 # Finde Index im ursprünglichen Array
                 original_idx = st.session_state.scenario_manager.scenarios.index(scenario)
+                # WICHTIG: Verwende eindeutige ID (id(scenario)) statt nur Index, um Duplikate zu vermeiden
+                # wenn mehrere Szenarien mit demselben Datum existieren
+                scenario_id = id(scenario)
+                scenario_type_name = scenario.__class__.__name__
+                unique_key = f"remove_{scenario_type_name}_{scenario_id}_global{key_suffix}"
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.write(f"• {scenario.name}")
@@ -545,7 +550,7 @@ def render_scenario_sidebar(key_suffix=""):
                     if details:
                         st.caption(details)
                 with col2:
-                    if st.button("🗑️", key=f"remove_{original_idx}_global{key_suffix}"):
+                    if st.button("🗑️", key=unique_key):
                         st.session_state.scenario_manager.scenarios.pop(original_idx)
                         # WICHTIG: Invalidiere alle Caches, die von Szenarien abhängen
                         # 1. Invalidiere volume_planning Cache
