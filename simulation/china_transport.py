@@ -761,11 +761,14 @@ class ChinaTransportManager:
                     elif isinstance(s, WaterDamageScenario):
                         affected_saddles = getattr(s, "affected_saddles", None)
                         affected_saddles_tuple = tuple(sorted(affected_saddles)) if affected_saddles else None
+                        loss_by_saddle = getattr(s, "loss_by_saddle", None)
+                        loss_by_saddle_tuple = tuple(sorted(loss_by_saddle.items())) if loss_by_saddle else None
                         extra = (
                             getattr(s, "damage_date", None),
                             getattr(s, "affected_component", None),
                             getattr(s, "loss_quantity_absolute", 0.0),
                             affected_saddles_tuple,
+                            loss_by_saddle_tuple,  # Für Cache-Key: loss_by_saddle berücksichtigen
                         )
                     else:
                         extra = tuple(sorted(vars(s).items()))
@@ -1261,11 +1264,14 @@ class ChinaTransportManager:
                     elif isinstance(s, WaterDamageScenario):
                         affected_saddles = getattr(s, "affected_saddles", None)
                         affected_saddles_tuple = tuple(sorted(affected_saddles)) if affected_saddles else None
+                        loss_by_saddle = getattr(s, "loss_by_saddle", None)
+                        loss_by_saddle_tuple = tuple(sorted(loss_by_saddle.items())) if loss_by_saddle else None
                         extra = (
                             getattr(s, "damage_date", None),
                             getattr(s, "affected_component", None),
                             getattr(s, "loss_quantity_absolute", 0.0),
                             affected_saddles_tuple,
+                            loss_by_saddle_tuple,  # Für Cache-Key: loss_by_saddle berücksichtigen
                         )
                     else:
                         extra = tuple(sorted(vars(s).items()))

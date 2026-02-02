@@ -45,13 +45,25 @@ def _format_scenario_details(scenario, planning_year: int) -> Optional[str]:
         return f"Zusatzbedarf: {int(total)} Stück · Produkte: {product_str}"
 
     if isinstance(scenario, WaterDamageScenario):
-        loss = getattr(scenario, "loss_quantity_absolute", 0)
+        loss_by_saddle = getattr(scenario, "loss_by_saddle", None)
         saddles = getattr(scenario, "affected_saddles", None)
+        
         if saddles and len(saddles) > 0:
             saddle_str = ", ".join(saddles) if len(saddles) <= 3 else ", ".join(saddles[:2]) + f" (+{len(saddles) - 2} weitere)"
         else:
             saddle_str = "Alle Satteltypen"
-        return f"Verlustmenge: {int(loss)} Stück · Satteltypen: {saddle_str}"
+        
+        if loss_by_saddle:
+            # Pro-Satteltyp Verlustmengen
+            loss_details = []
+            for s, qty in sorted(loss_by_saddle.items()):
+                loss_details.append(f"{s}: {int(qty)}")
+            loss_str = ", ".join(loss_details) if len(loss_details) <= 3 else ", ".join(loss_details[:2]) + f" (+{len(loss_details) - 2} weitere)"
+            return f"Verlustmengen: {loss_str} · Satteltypen: {saddle_str}"
+        else:
+            # Fallback: loss_quantity_absolute (alte Implementierung)
+            loss = getattr(scenario, "loss_quantity_absolute", 0)
+            return f"Verlustmenge: {int(loss)} Stück · Satteltypen: {saddle_str}"
 
     if isinstance(scenario, SupplierBreakdownScenario):
         comp = getattr(scenario, "component_type", "saddles")
@@ -292,23 +304,34 @@ def render_scenario_sidebar(key_suffix=""):
         elif scenario_type == "Wasserschaden im Lager":
             st.subheader("Wasserschaden im Materiallager")
             damage_date = st.date_input("Datum", value=date(planning_year, 4, 10), min_value=min_date, max_value=max_date, format="DD.MM.YYYY", key=f"water_damage_date_global{key_suffix}")
-            loss_quantity_absolute = st.number_input(
-                "Verlustmenge",
-                min_value=0,
-                value=0,
-                step=1,
-                key=f"water_damage_loss_abs_global{key_suffix}",
-                help="0 = kein Abzug. Sonst: Verlust = min(Eingabe, Bestand abends) pro betroffener Satteltyp; bei Eingabe > Bestand abends wird nur auf 0 gesetzt."
-            )
+            
             all_saddles = list(MasterData.calculate_saddle_shares().keys())
             selected_saddles = st.multiselect(
                 "Betroffene Satteltypen",
                 all_saddles,
                 default=all_saddles,
                 placeholder="Optionen wählen",
-                help="Nur für die ausgewählten Satteltypen wird die Verlustmenge abgezogen. Keine Auswahl = alle.",
+                help="Wählen Sie die betroffenen Satteltypen aus. Für jeden ausgewählten Satteltyp können Sie eine individuelle Verlustmenge eingeben.",
                 key=f"water_damage_saddles_global{key_suffix}"
             )
+            
+            # Pro-Satteltyp Verlustmengen-Eingabe
+            loss_by_saddle = {}
+            if selected_saddles:
+                st.write("**Verlustmengen pro Satteltyp (Stück):**")
+                st.info("💡 Hinweis: Verlustmengen werden automatisch auf den verfügbaren Bestand begrenzt.")
+                for saddle_type in sorted(selected_saddles):
+                    loss_qty = st.number_input(
+                        f"Verlust {saddle_type}",
+                        min_value=0,
+                        value=0,
+                        step=1,
+                        key=f"water_damage_loss_{saddle_type}_global{key_suffix}",
+                        help=f"Verlustmenge für {saddle_type} (Stück). Wird automatisch auf verfügbaren Bestand begrenzt."
+                    )
+                    if loss_qty > 0:
+                        loss_by_saddle[saddle_type] = int(loss_qty)
+            
             if st.button("➕ Wasserschaden hinzufügen", key=f"add_water_damage_global{key_suffix}"):
                 # Berechne damage_day relativ zum Planungsjahr
                 if damage_date.year == 2026:
@@ -319,14 +342,17 @@ def render_scenario_sidebar(key_suffix=""):
                 else:
                     damage_day = (damage_date - start_of_year).days
                 affected_saddles = None if (not selected_saddles or len(selected_saddles) == len(all_saddles)) else selected_saddles
+                
+                # Verwende loss_by_saddle wenn vorhanden, sonst Fallback auf loss_quantity_absolute (für Rückwärtskompatibilität)
                 scenario = WaterDamageScenario(
                     name=f"Wasserschaden im Materiallager ({damage_date.strftime(MasterData.DATE_FORMAT)})",
                     start_day=damage_day,
                     end_day=damage_day,  # Exaktes Datum: start_day = end_day
                     damage_date=damage_day,
                     affected_component="saddles",
-                    loss_quantity_absolute=float(loss_quantity_absolute),
-                    affected_saddles=affected_saddles
+                    loss_quantity_absolute=0.0,  # Wird nicht mehr verwendet, wenn loss_by_saddle gesetzt ist
+                    affected_saddles=affected_saddles,
+                    loss_by_saddle=loss_by_saddle if loss_by_saddle else None
                 )
                 st.session_state.scenario_manager.add_scenario(scenario)
                 

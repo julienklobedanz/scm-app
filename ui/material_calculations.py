@@ -241,13 +241,27 @@ def calculate_material_inventory():
             # WASSERSCHADEN: alle Szenarien für diesen Tag anwenden (Verlust pro Szenario für betroffene Satteltypen)
             loss_qty = 0.0
             for scenario in water_damage_scenarios_for_day:
-                loss_abs = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
                 affected_saddles = getattr(scenario, 'affected_saddles', None)
                 applies_to_saddle = (not affected_saddles or len(affected_saddles) == 0 or s in affected_saddles)
-                if loss_abs > 0 and applies_to_saddle:
-                    deduct = min(loss_abs, stock_evening[s])
+                
+                if not applies_to_saddle:
+                    continue
+                
+                # Verwende loss_by_saddle wenn vorhanden, sonst Fallback auf loss_quantity_absolute (Rückwärtskompatibilität)
+                loss_by_saddle = getattr(scenario, 'loss_by_saddle', None)
+                if loss_by_saddle and s in loss_by_saddle:
+                    # Pro-Satteltyp Verlustmenge
+                    loss_amount = loss_by_saddle[s]
+                    deduct = min(int(loss_amount), int(round(stock_evening[s])))
                     loss_qty += deduct
                     stock_evening[s] = max(0.0, stock_evening[s] - deduct)
+                else:
+                    # Fallback: loss_quantity_absolute (alte Implementierung)
+                    loss_abs = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
+                    if loss_abs > 0:
+                        deduct = min(loss_abs, stock_evening[s])
+                        loss_qty += deduct
+                        stock_evening[s] = max(0.0, stock_evening[s] - deduct)
             
             # Übertrag für nächsten Tag
             stock_by_saddle[s] = stock_evening[s]

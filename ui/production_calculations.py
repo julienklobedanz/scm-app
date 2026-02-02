@@ -439,14 +439,27 @@ def calculate_production_logs():
             water_damage_scenarios = scenario_manager.get_water_damage_scenarios(day)
             for scenario in water_damage_scenarios:
                 if scenario.affected_component == "saddles" and scenario.start_day == scenario.end_day and day == scenario.start_day:
-                    loss_abs = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
                     affected_saddles = getattr(scenario, 'affected_saddles', None)
-                    if loss_abs > 0:
+                    
+                    # Verwende loss_by_saddle wenn vorhanden, sonst Fallback auf loss_quantity_absolute (Rückwärtskompatibilität)
+                    loss_by_saddle = getattr(scenario, 'loss_by_saddle', None)
+                    if loss_by_saddle:
+                        # Pro-Satteltyp Verlustmenge
                         for s in saddles:
                             applies = (not affected_saddles or len(affected_saddles) == 0 or s in affected_saddles)
-                            if applies:
-                                deduct = min(loss_abs, running_stock[s])
+                            if applies and s in loss_by_saddle:
+                                loss_amount = loss_by_saddle[s]
+                                deduct = min(int(loss_amount), int(round(running_stock[s])))
                                 running_stock[s] = max(0.0, running_stock[s] - deduct)
+                    else:
+                        # Fallback: loss_quantity_absolute (alte Implementierung)
+                        loss_abs = max(0.0, getattr(scenario, 'loss_quantity_absolute', 0.0))
+                        if loss_abs > 0:
+                            for s in saddles:
+                                applies = (not affected_saddles or len(affected_saddles) == 0 or s in affected_saddles)
+                                if applies:
+                                    deduct = min(loss_abs, running_stock[s])
+                                    running_stock[s] = max(0.0, running_stock[s] - deduct)
                     break
 
     # Fertiggestellte PM (Logic bleibt gleich, nur minimal gesäubert)

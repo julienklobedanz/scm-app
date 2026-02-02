@@ -51,8 +51,9 @@ class WaterDamageScenario(Scenario):
     """Wasserschaden im Materiallager: Reduziert Bestand abends pro Satteltyp (optional absoluter Verlust)"""
     damage_date: int = -1  # Exaktes Datum (start_day = end_day = damage_date), -1 = nicht gesetzt
     affected_component: str = "saddles"  # Immer Sättel
-    loss_quantity_absolute: float = 0.0  # Verlustmenge pro betroffener Satteltyp. 0 = kein Abzug. >0: Verlust = min(Eingabe, Bestand abends)
+    loss_quantity_absolute: float = 0.0  # Verlustmenge pro betroffener Satteltyp (für Rückwärtskompatibilität). 0 = kein Abzug. >0: Verlust = min(Eingabe, Bestand abends)
     affected_saddles: Optional[List[str]] = None  # None oder leer = alle 4 Satteltypen; sonst nur diese Satteltypen
+    loss_by_saddle: Optional[Dict[str, int]] = None  # Pro-Satteltyp Verlustmengen (Stück, Integer). Wenn gesetzt, wird dies verwendet statt loss_quantity_absolute
 
 
 @dataclass
