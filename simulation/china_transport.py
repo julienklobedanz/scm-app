@@ -1301,8 +1301,9 @@ class ChinaTransportManager:
                     'Menge Gesamt'] + sorted(saddle_shares_dict.keys())
             return pd.DataFrame(columns=cols)
         
-        # Startdatum: Aktuelles Jahr minus 49 Tage (entspricht der Lead Time)
-        start_date = date(self.workday_calculator.year, 1, 1) - timedelta(days=49)
+        # Startdatum: Wie Lieferant China – frühester Bestelltag aus transport_status (reagiert auf Vorlaufzeit)
+        earliest_order = min((k[0] for k in self.transport_status.keys()), default=0)
+        start_date = self.workday_calculator.get_date_from_day(earliest_order)
         end_date = date(self.workday_calculator.year, 12, 31)
         total_days = (end_date - start_date).days + 1
         
