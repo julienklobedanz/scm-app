@@ -209,10 +209,9 @@ Die Metrik reagiert auf Szenarien wie Verspätungen, Ladungsverlust und Maschine
                 'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': 0.0,
                 'Anzahl von Tagen eines Maschinenausfalls': downtime_days
             }}
-        # Totalausfall: Ladungsverlust = 'Ja' (Vollverlust). Mengenverlust nur bei Teilmengen – in der Tabelle nur Vollverlust.
+        # Totalausfall: Ladungsverlust = 'Ja' (Vollverlust). Mengenverlust (Teilmengen) wird aktuell nicht separat erfasst, nur Vollverlust zählt als Totalausfall.
         # PERFORMANCE: Prüfe ob Spalten existieren
         fail_total = 0
-        fail_qty = 0
         fail_time = 0
         if 'Ladungsverlust' in shipments_df.columns:
             loss_str = shipments_df['Ladungsverlust'].astype(str).str.strip().str.lower()
@@ -244,7 +243,7 @@ Die Metrik reagiert auf Szenarien wie Verspätungen, Ladungsverlust und Maschine
                     # Debug: Zeige Fehler bei Parsing
                     pass
         avg_delay = (sum(delay_days_list) / len(delay_days_list)) if delay_days_list else 0.0
-        error_count = min(fail_total + fail_qty + fail_time, total)
+        error_count = min(fail_total + fail_time, total)
         pct_perfect = ((total - error_count) / total * 100) if total > 0 else 100.0
         # Maschinenausfall aus Lieferant-China-Tabelle (Spalte „Störung“), ein Sattel reicht (Störung global)
         # PERFORMANCE: Verwende gecachte supplier_df (bereits oben geladen, als Closure-Variable verfügbar)
@@ -255,7 +254,6 @@ Die Metrik reagiert auf Szenarien wie Verspätungen, Ladungsverlust und Maschine
         return {'China': {
             'Anzahl Lieferungen': total,
             'Anzahl Lieferungen mit Totalausfall': fail_total,
-            'Anzahl Lieferungen mit Mengenverlust': fail_qty,
             'verspätete Lieferungen': fail_time,
             'Perfekte Lieferungen in %': round(pct_perfect, 2),
             'durchschnittliche Anzahl von Tagen der verspäteten Lieferungen': round(avg_delay, 2),
