@@ -435,47 +435,69 @@ with tab2:
     with col_workload_help:
         st.markdown("""
         <div style="margin-top: 1.5rem;">
-            <span title="Ein Wert von 0.0 bedeutet, dass dieser Wochentag wie ein freier Tag behandelt wird (kein Arbeitstag). Dies wird in allen abhängigen Berechnungen berücksichtigt."
+            <span title="Arbeitslast in Prozent pro Wochentag (z. B. 20,0 = 20 %). Summe der Woche = 100 %. Samstag und Sonntag sind fest 0 % (nicht änderbar)."
                 style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
         </div>
         """, unsafe_allow_html=True)
-    st.write("**Arbeitslast pro Wochentag (0.0 = kein Arbeitstag, 0.2 = 20% der Wochenlast):**")
+    st.write("**Arbeitslast pro Wochentag in Prozent (20,0 = 20 % der Wochenlast; Wochenenden sind fest 0 %):**")
     
     workload_changed = False
     weekday_cols = st.columns(7)
     
     weekdays = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
+    weekend_days = ['Samstag', 'Sonntag']
     workload_values = {}
     
     for i, day in enumerate(weekdays):
         with weekday_cols[i]:
-            new_workload = st.number_input(
-                day,
-                min_value=0.0,
-                max_value=1.0,
-                value=float(st.session_state.editable_daily_workload[day]),
-                step=0.1,
-                format="%.1f",
-                key=f"workload_{day}"
-            )
-            workload_values[day] = new_workload
-            if new_workload != st.session_state.editable_daily_workload[day]:
+            current_decimal = float(st.session_state.editable_daily_workload[day])
+            current_percent = current_decimal * 100.0
+            is_weekend = day in weekend_days
+            
+            if is_weekend:
+                # Wochenenden: Read-Only, immer 0 %
+                st.number_input(
+                    day,
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=0.0,
+                    step=0.1,
+                    format="%.1f",
+                    key=f"workload_{day}",
+                    disabled=True
+                )
+                new_workload_percent = 0.0
+            else:
+                # Werktage: Bearbeitbar in Prozent (0–100)
+                new_workload_percent = st.number_input(
+                    day,
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=current_percent,
+                    step=0.1,
+                    format="%.1f",
+                    key=f"workload_{day}"
+                )
+            
+            workload_values[day] = new_workload_percent
+            new_workload_decimal = new_workload_percent / 100.0
+            if new_workload_decimal != st.session_state.editable_daily_workload[day]:
                 workload_changed = True
     
-    # Berechne Wochensumme
-    week_total = sum(workload_values.values())
-    st.markdown(f"**Wochensumme: {week_total:.1f} (muss exakt 1.0 = 100% sein)**")
+    # Berechne Wochensumme (in Prozent)
+    week_total_percent = sum(workload_values.values())
+    st.markdown(f"**Wochensumme: {week_total_percent:.1f} % (muss exakt 100 % sein)**")
     
-    # Validierung: Wochensumme muss genau 1.0 sein
+    # Validierung: Wochensumme muss genau 100 % sein
     if workload_changed:
-        if abs(week_total - 1.0) < 0.01:  # Toleranz von 0.01
-            # Summe ist genau 1.0 - speichere Änderungen
-            for day, workload in workload_values.items():
-                st.session_state.editable_daily_workload[day] = workload
+        if abs(week_total_percent - 100.0) < 0.01:  # Toleranz 0.01 %
+            # Summe ist 100 % – speichere Änderungen (intern weiter als 0.0–1.0)
+            for day, workload_percent in workload_values.items():
+                st.session_state.editable_daily_workload[day] = workload_percent / 100.0
             
-            # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData
-            for day, workload in st.session_state.editable_daily_workload.items():
-                MasterData.DAILY_WORKLOAD[day] = workload
+            # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData (Werte 0.0–1.0)
+            for day, workload_percent in workload_values.items():
+                MasterData.DAILY_WORKLOAD[day] = workload_percent / 100.0
             
             st.success("✅ Tägliche Arbeitslast aktualisiert!")
             
@@ -490,8 +512,8 @@ with tab2:
             st.session_state.simulation_running = False
             st.session_state.simulation_started = False
         else:
-            diff = abs(week_total - 1.0)
-            st.error(f"❌ **Wochensumme beträgt {week_total:.1f} (Abweichung: {diff:.1f}). Die Summe muss exakt 1.0 (100%) ergeben!**")
+            diff = abs(week_total_percent - 100.0)
+            st.error(f"❌ **Wochensumme beträgt {week_total_percent:.1f} % (Abweichung: {diff:.1f} %). Die Summe muss exakt 100 % ergeben!**")
     
     # Verkaufsanteile (editierbar)
     st.subheader("Verkaufsanteile pro Produkt")
