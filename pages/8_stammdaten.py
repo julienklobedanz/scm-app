@@ -459,26 +459,27 @@ with tab2:
         with weekday_cols[i]:
             new_workload_pct = st.number_input(
                 day,
-                min_value=0,
-                max_value=100,
-                value=int(round(float(st.session_state.editable_daily_workload[day]) * 100)),
-                step=1,
+                min_value=0.0,
+                max_value=100.0,
+                value=round(float(st.session_state.editable_daily_workload[day]) * 100, 2),
+                step=0.01,
+                format="%.2f",
                 key=f"workload_{day}"
             )
-            workload_values_pct[day] = int(new_workload_pct)
-            if (new_workload_pct / 100.0) != float(st.session_state.editable_daily_workload[day]):
+            workload_values_pct[day] = float(new_workload_pct)
+            if abs((new_workload_pct / 100.0) - float(st.session_state.editable_daily_workload[day])) > 0.001:
                 workload_changed = True
     
     # Berechne Wochensumme
     week_total_pct = sum(workload_values_pct.values())
-    st.markdown(f"**Wochensumme (Mo–Fr): {week_total_pct:d}% (muss exakt 100% sein)**")
+    st.markdown(f"**Wochensumme (Mo–Fr): {week_total_pct:.2f}% (muss exakt 100% sein)**")
     
-    # Validierung: Wochensumme muss genau 100% sein
+    # Validierung: Wochensumme muss genau 100% sein (Toleranz 0.01)
     if workload_changed:
-        if week_total_pct == 100:
-            # Summe ist genau 100% - speichere Änderungen (als Dezimalwerte 0.0–1.0)
+        if abs(week_total_pct - 100.0) < 0.01:
+            # Summe ist 100% - speichere Änderungen (als Dezimalwerte 0.0–1.0)
             for day, pct in workload_values_pct.items():
-                st.session_state.editable_daily_workload[day] = pct / 100.0
+                st.session_state.editable_daily_workload[day] = round(pct / 100.0, 4)
             # Sa/So nicht editierbar: immer 0.0
             st.session_state.editable_daily_workload['Samstag'] = 0.0
             st.session_state.editable_daily_workload['Sonntag'] = 0.0
@@ -500,8 +501,8 @@ with tab2:
             st.session_state.simulation_running = False
             st.session_state.simulation_started = False
         else:
-            diff = abs(week_total_pct - 100)
-            st.error(f"❌ **Wochensumme (Mo–Fr) beträgt {week_total_pct:d}% (Abweichung: {diff:d}%). Die Summe muss exakt 100% ergeben!**")
+            diff = abs(week_total_pct - 100.0)
+            st.error(f"❌ **Wochensumme (Mo–Fr) beträgt {week_total_pct:.2f}% (Abweichung: {diff:.2f}%). Die Summe muss exakt 100% ergeben!**")
     
     # Verkaufsanteile (editierbar)
     st.subheader("Verkaufsanteile pro Produkt")
