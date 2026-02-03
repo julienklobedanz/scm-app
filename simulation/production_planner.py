@@ -137,7 +137,7 @@ class ProductionPlanner:
                     share = self.master_data.PRODUCT_SALES_SHARES.get(product, 0.0) / total_share if total_share > 0 else 0
                     product_demands[product] = int(estimated_daily_target * share)
         
-        # 2. Addiere Backlog zum Bedarf
+        # 2. Addiere Backlog zum Bedarf (für die Allokation innerhalb der Tageskapazität)
         production_demand_by_product = {}
         for product in self.master_data.BOM.keys():
             planned_demand = product_demands.get(product, 0)
@@ -152,18 +152,11 @@ class ProductionPlanner:
         max_shifts = self.master_data.GLOBAL_CONFIG.get('max_shifts_per_day', 3)
         capacity_per_shift = working_hours * capacity_per_hour * assembly_lines
         
-        # AGGRESSIVE BACKLOG-RECOVERY: Berechne benötigte Schichten basierend auf Gesamtbedarf (inkl. Backlog!)
-        total_demand = sum(production_demand_by_product.values())
-        total_backlog = sum(self.backlog.values())
-        
-        if total_demand > 0:
-            # AGGRESSIVE BACKLOG-RECOVERY: Wenn Backlog vorhanden ist, nutze IMMER MAXIMALE Kapazität
-            if total_backlog > 0:
-                shifts = max_shifts  # Maximale Kapazität für Backlog-Aufholung (aus Stammdaten)
-            else:
-                # Normal: Berechne Schichten basierend auf Bedarf (Min/Max aus Stammdaten)
-                shifts_needed = math.ceil(total_demand / capacity_per_shift)
-                shifts = min(max_shifts, max(min_shifts, shifts_needed))
+        # Schichtplanung: nach Plan (nur geplanter Tagesbedarf, Backlog erhöht NICHT die Schichten)
+        total_planned_demand = sum(product_demands.values())
+        if total_planned_demand > 0:
+            shifts_needed = math.ceil(total_planned_demand / capacity_per_shift)
+            shifts = min(max_shifts, max(min_shifts, shifts_needed))
         else:
             shifts = 0
         
