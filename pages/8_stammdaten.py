@@ -446,39 +446,42 @@ with tab2:
                 style="cursor: help; color: #6b7280; font-size: 1.2rem; display: inline-block;">ℹ️</span>
         </div>
         """, unsafe_allow_html=True)
-    st.write("**Arbeitslast pro Wochentag (0.0 = kein Arbeitstag, 0.2 = 20% der Wochenlast):**")
+    st.write("**Arbeitslast pro Wochentag in Prozent (0% = kein Arbeitstag):**")
     
     workload_changed = False
-    weekday_cols = st.columns(7)
+    weekday_cols = st.columns(5)
     
-    weekdays = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
-    workload_values = {}
+    # Nur Mo–Fr anzeigen (Sa/So werden intern weiterhin als 0% geführt)
+    weekdays = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag']
+    workload_values_pct = {}
     
     for i, day in enumerate(weekdays):
         with weekday_cols[i]:
-            new_workload = st.number_input(
+            new_workload_pct = st.number_input(
                 day,
-                min_value=0.0,
-                max_value=1.0,
-                value=float(st.session_state.editable_daily_workload[day]),
-                step=0.1,
-                format="%.1f",
+                min_value=0,
+                max_value=100,
+                value=int(round(float(st.session_state.editable_daily_workload[day]) * 100)),
+                step=1,
                 key=f"workload_{day}"
             )
-            workload_values[day] = new_workload
-            if new_workload != st.session_state.editable_daily_workload[day]:
+            workload_values_pct[day] = int(new_workload_pct)
+            if (new_workload_pct / 100.0) != float(st.session_state.editable_daily_workload[day]):
                 workload_changed = True
     
     # Berechne Wochensumme
-    week_total = sum(workload_values.values())
-    st.markdown(f"**Wochensumme: {week_total:.1f} (muss exakt 1.0 = 100% sein)**")
+    week_total_pct = sum(workload_values_pct.values())
+    st.markdown(f"**Wochensumme (Mo–Fr): {week_total_pct:d}% (muss exakt 100% sein)**")
     
-    # Validierung: Wochensumme muss genau 1.0 sein
+    # Validierung: Wochensumme muss genau 100% sein
     if workload_changed:
-        if abs(week_total - 1.0) < 0.01:  # Toleranz von 0.01
-            # Summe ist genau 1.0 - speichere Änderungen
-            for day, workload in workload_values.items():
-                st.session_state.editable_daily_workload[day] = workload
+        if week_total_pct == 100:
+            # Summe ist genau 100% - speichere Änderungen (als Dezimalwerte 0.0–1.0)
+            for day, pct in workload_values_pct.items():
+                st.session_state.editable_daily_workload[day] = pct / 100.0
+            # Sa/So nicht editierbar: immer 0.0
+            st.session_state.editable_daily_workload['Samstag'] = 0.0
+            st.session_state.editable_daily_workload['Sonntag'] = 0.0
             
             # KRITISCH: Synchronisiere DAILY_WORKLOAD mit MasterData
             for day, workload in st.session_state.editable_daily_workload.items():
@@ -497,8 +500,8 @@ with tab2:
             st.session_state.simulation_running = False
             st.session_state.simulation_started = False
         else:
-            diff = abs(week_total - 1.0)
-            st.error(f"❌ **Wochensumme beträgt {week_total:.1f} (Abweichung: {diff:.1f}). Die Summe muss exakt 1.0 (100%) ergeben!**")
+            diff = abs(week_total_pct - 100)
+            st.error(f"❌ **Wochensumme (Mo–Fr) beträgt {week_total_pct:d}% (Abweichung: {diff:d}%). Die Summe muss exakt 100% ergeben!**")
     
     # Verkaufsanteile (editierbar)
     st.subheader("Verkaufsanteile pro Produkt")
@@ -923,23 +926,21 @@ with tab5:
         # Länder-Namen und Flaggen (nur relevante Länder - Deutschland und China, da nur Inbound von China)
         country_info = {
             'DE': {'name': 'Deutschland', 'flag': '🇩🇪'},
-            'CN': {'name': 'China (Shanghai)', 'flag': '🇨🇳', 'note': 'Enthält nationale chinesische Feiertage + lokale Shanghai-Feiertage'}
+            'CN': {'name': 'China', 'flag': '🇨🇳', 'note': 'Enthält nationale chinesische Feiertage + lokale Shanghai-Feiertage'}
         }
         
         # Zusammenfassung ZUERST (nach oben verschoben)
-        st.subheader("Zusammenfassung")
         summary_data = []
         for country_code, holidays_list in all_holidays.items():
             if country_code in country_info:
                 info = country_info[country_code]
                 summary_data.append({
                     'Land': f"{info['flag']} {info['name']}",
-                    'Code': country_code,
                     'Anzahl Feiertage': len(holidays_list)
                 })
         if summary_data:
             summary_df = pd.DataFrame(summary_data)
-            st.dataframe(summary_df, width='stretch', hide_index=True)
+            st.dataframe(summary_df[['Land', 'Anzahl Feiertage']], width='stretch', hide_index=True)
         
         st.divider()
         
@@ -947,7 +948,7 @@ with tab5:
         for country_code, holidays_list in all_holidays.items():
             if country_code in country_info:
                 info = country_info[country_code]
-                st.subheader(f"{info['flag']} {info['name']} ({country_code})")
+                st.subheader(f"{info['flag']} {info['name']}")
                 
                 # Zeige Hinweis für Shanghai-Feiertage
                 if country_code == 'CN' and 'note' in info:

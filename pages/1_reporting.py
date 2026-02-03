@@ -808,7 +808,7 @@ with tab3:
             st.plotly_chart(fig_total_backlog, width='stretch', key='chart_total_backlog')
         
         with col2:
-            st.write("**Über-/Unterproduktion (Start)**")
+            st.write("**Über-/Unterproduktion**")
             fig_total_deviation = go.Figure()
             
             deviations = [d['deviation'] for d in total_deviation_data]
