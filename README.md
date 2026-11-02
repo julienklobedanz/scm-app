@@ -45,9 +45,11 @@ config/             Stammdaten und Feiertage
 tests/              Unit- und Regressionstests
 ```
 
-## Entwurfsentscheidung: eigene App statt Excel
+## Umfang der Umsetzung
 
-Excel war laut Aufgabenstellung eine zulässige Umsetzung. Wir haben uns trotzdem für eine eigene Anwendung entschieden. Das hat den Aufwand begrenzt: Nur die Lieferkette des chinesischen Lieferanten, mit Vorlauf, Seefracht, Nachlauf und den Störungsszenarien, ist vollständig und im Detail abgebildet (`simulation/china_transport.py`). Die beiden anderen Lieferanten (Heilbronn und Saragossa) werden vereinfacht über Vorlaufzeit, Losgröße und Transportdauer simuliert, ohne die gesamte Kette im Detail nachzubauen.
+Der Dozent hat den Aufwand bewusst begrenzt: Statt Excel durfte auch eine eigene Anwendung gebaut werden, und es genügte, die Lieferkette des chinesischen Lieferanten vollständig abzubilden. Die beiden anderen Lieferanten (Heilbronn und Saragossa) durften vereinfacht simuliert werden, ohne die gesamte Kette im Detail zu implementieren.
+
+Wir haben uns für die eigene Anwendung entschieden. Die chinesische Lieferkette mit Vorlauf, Seefracht, Nachlauf und den Störungsszenarien ist deshalb im Detail umgesetzt (`simulation/china_transport.py`). Heilbronn und Saragossa laufen über Vorlaufzeit, Losgröße und Transportdauer.
 
 ## Starten
 
