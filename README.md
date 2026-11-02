@@ -45,6 +45,10 @@ config/             Stammdaten und Feiertage
 tests/              Unit- und Regressionstests
 ```
 
+## Entwurfsentscheidung: eigene App statt Excel
+
+Excel war laut Aufgabenstellung eine zulässige Umsetzung. Wir haben uns trotzdem für eine eigene Anwendung entschieden. Das hat den Aufwand begrenzt: Nur die Lieferkette des chinesischen Lieferanten, mit Vorlauf, Seefracht, Nachlauf und den Störungsszenarien, ist vollständig und im Detail abgebildet (`simulation/china_transport.py`). Die beiden anderen Lieferanten (Heilbronn und Saragossa) werden vereinfacht über Vorlaufzeit, Losgröße und Transportdauer simuliert, ohne die gesamte Kette im Detail nachzubauen.
+
 ## Starten
 
 Voraussetzung: Python 3.10 oder neuer.
