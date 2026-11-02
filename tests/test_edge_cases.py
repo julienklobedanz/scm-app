@@ -59,7 +59,7 @@ class TestEdgeCases:
         workday_calc = WorkdayCalculator(year=2027)
         
         # Tag 0 (01.01.2027)
-        assert workday_calc.is_workday(0) == True, "01.01.2027 sollte Arbeitstag sein (Neujahr ist Sonntag)"
+        assert workday_calc.is_workday(0) is False, "01.01.2027 (Freitag) ist Neujahr und damit kein Arbeitstag"
         
         # Tag 364 (31.12.2027)
         is_workday_364 = workday_calc.is_workday(364)
